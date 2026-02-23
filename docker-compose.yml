@@ -99,8 +99,9 @@ services:
     environment:
       - PADDLE_SERVICE_URL=http://paddleocr-vl-api:8080/layout-parsing
     volumes:
-      # 持久化 OCR 提取的图片
-      - ocr_images:/app/static/ocr_images
+      # 开发模式：挂载代码目录，实现热更新
+      - ./static:/app/static
+      - ./server.py:/app/server.py
       # 挂载 Docker Socket 以管理其他容器
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:

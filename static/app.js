@@ -443,7 +443,7 @@ async function downloadAllMarkdown() {
             const url = URL.createObjectURL(content);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `ocr_results_${totalPages}pages_${imageUrls.size}imgs_${new Date().getTime()}.zip`;
+            a.download = `ocr_results_${totalPages}pages_${imageCount}imgs_${new Date().getTime()}.zip`;
             a.click();
             URL.revokeObjectURL(url);
             
@@ -457,11 +457,7 @@ async function downloadAllMarkdown() {
             </svg>
             下载`;
             downloadAllBtn.disabled = false;
-            
-            // Show success message
-            if (failedCount > 0) {
-                alert(`下载完成！\n\n已打包：${totalPages} 页，${downloadedCount} 张图片\n失败：${failedCount} 张图片`);
-            }
+
             
         } catch (error) {
             console.error('打包错误:', error);

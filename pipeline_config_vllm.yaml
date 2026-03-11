@@ -1,4 +1,4 @@
-pipeline_name: PaddleOCR-VL-1.5
+pipeline_name: PaddleOCR-VL
 
 batch_size: 64
 

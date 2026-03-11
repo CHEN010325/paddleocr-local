@@ -9,6 +9,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <!-- Marked for Markdown preview -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
     <!-- Highlight.js for code blocks -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -41,9 +42,9 @@
                                     <line x1="12" y1="3" x2="12" y2="15"></line>
                                 </svg>
                                 <h2>拖放文件到此处</h2>
-                                <p class="sub-text">支持 PDF, PNG, JPG 格式</p>
+                                <p class="sub-text">支持 PNG, JPG, JPEG, BMP, WEBP, TIFF, GIF, PDF, PPT, PPTX, DOC, DOCX 格式</p>
                                 <button id="browse-btn" class="btn primary-btn">选择文件</button>
-                                <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" hidden>
+                                <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.bmp,.webp,.tiff,.tif,.gif,.ppt,.pptx,.doc,.docx" hidden>
                             </div>
                         </div>
                     </section>
@@ -187,4 +188,3 @@
     <script src="/static/app.js?v=2"></script>
 </body>
 </html>
-

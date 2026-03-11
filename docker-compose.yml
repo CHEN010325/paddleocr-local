@@ -19,13 +19,14 @@ services:
     restart: unless-stopped
     environment:
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
+      - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
     volumes:
       # 持久化模型权重（布局检测模型等）
       - ./model_cache:/home/paddleocr/.paddlex
       - ./model_cache_ocr:/home/paddleocr/.paddleocr
       # 挂载自定义配置文件，开启文档预处理器模型加载
       - ./pipeline_config_vllm.yaml:/home/paddleocr/pipeline_config_vllm.yaml
-    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${VLM_BACKEND}.yaml"
+    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_${VLM_BACKEND:-vllm}.yaml"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -57,10 +58,11 @@ services:
   paddleocr-vlm-server:
     image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-offline}
     container_name: paddleocr-vlm-server
-    # 显式指定加载最新的 PaddleOCR-VL-1.5-0.9B 模型
+    # 显式指定加载最新的 PaddleOCR-VL-1.5-0.9B 模型 (Blackwell 架构优化版)
     command: paddleocr genai_server --model_name PaddleOCR-VL-1.5-0.9B --host 0.0.0.0 --port 8080 --backend vllm
     environment:
       - VLLM_GPU_MEMORY_UTILIZATION=0.5
+      - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
     deploy:
       resources:
         reservations:

@@ -1,7 +1,6 @@
 // Configuration
 const API_BASE = '/api';
 let availableModel = 'PaddleOCR-VL-1.5-0.9B'; // Default model name for UI
-const PROMPT_TEXT = ""; // Not used in pipeline mode
 
 // State
 let processQueue = [];
@@ -14,7 +13,6 @@ const fileInput = document.getElementById('file-input');
 const browseBtn = document.getElementById('browse-btn');
 const queueSection = document.getElementById('processing-queue');
 const queueList = document.getElementById('queue-list');
-const resultsSection = document.getElementById('results-section');
 const resultsContainer = document.getElementById('results-container');
 const statusDot = document.getElementById('model-status-dot');
 const statusText = document.getElementById('model-status-text');
@@ -99,13 +97,27 @@ async function handleFiles(files) {
     if (!files || files.length === 0) return;
 
     queueSection.classList.remove('hidden');
+    const unsupportedFiles = [];
     
     for (const file of files) {
-        if (file.type === 'application/pdf') {
-            await processPDF(file);
-        } else if (file.type.startsWith('image/')) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        const allowedImageExts = ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tiff', 'tif', 'gif'];
+        const allowedOfficeExts = ['ppt', 'pptx', 'doc', 'docx'];
+        
+        if (ext === 'pdf' || file.type === 'application/pdf') {
+            await processPDF(file, file.name);
+        } else if (allowedOfficeExts.includes(ext)) {
+            await processOfficeFile(file);
+        } else if (allowedImageExts.includes(ext)) {
             await processImage(file);
+        } else {
+            console.warn(`Unsupported file format: ${file.name}`);
+            unsupportedFiles.push(file.name);
         }
+    }
+
+    if (unsupportedFiles.length > 0) {
+        alert(`以下文件格式不支持：\n${unsupportedFiles.join('\n')}`);
     }
 
     updateQueueProgress();
@@ -140,7 +152,81 @@ async function processImage(file) {
     });
 }
 
-async function processPDF(file) {
+async function processOfficeFile(file) {
+    const tempId = Math.random().toString(36).substr(2, 9);
+    const ext = file.name.split('.').pop().toLowerCase();
+    
+    // Icons
+    const pptIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTkxZTYzIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTE0IDJINmEyIDIgMCAwIDAtMiAydjE2YTIgMiAwIDAgMCAyIDJoMTJhMiAyIDAgMCAwIDItMlY4eiI+PC9wYXRoPjxwb2x5bGluZSBwb2ludHM9IjE0IDIgMTQgOCAyMCA4Ij48L3BvbHlsaW5lPjx0ZXh0IHg9IjEyIiB5PSIxOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSI2IiBmaWxsPSIjZTkxZTYzIiBzdHJva2U9Im5vbmUiPlBQVDwvdGV4dD48L3N2Zz4=';
+    const docIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjE5NmYzIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTE0IDJINmEyIDIgMCAwIDAtMiAydjE2YTIgMiAwIDAgMCAyIDJoMTJhMiAyIDAgMCAwIDItMlY4eiI+PC9wYXRoPjxwb2x5bGluZSBwb2ludHM9IjE0IDIgMTQgOCAyMCA4Ij48L3BvbHlsaW5lPjx0ZXh0IHg9IjEyIiB5PSIxOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSI2IiBmaWxsPSIjMjE5NmYzIiBzdHJva2U9Im5vbmUiPkRPQzwvdGV4dD48L3N2Zz4=';
+    
+    const icon = ['doc', 'docx'].includes(ext) ? docIcon : pptIcon;
+    const statusColor = ['doc', 'docx'].includes(ext) ? '#2196f3' : '#e91e63';
+
+    const item = {
+        id: tempId,
+        file: file,
+        type: 'office_convert',
+        dataUrl: icon,
+        name: file.name,
+        status: 'converting'
+    };
+    
+    addToQueue(item);
+    
+    const el = document.getElementById(`queue-${tempId}`);
+    if (el) {
+        el.querySelector('.file-status').textContent = '转换格式中...';
+        el.querySelector('.file-status').style.color = statusColor;
+        el.querySelector('.progress-bar').style.width = '100%';
+        el.querySelector('.progress-bar').classList.add('loading');
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_BASE}/convert/to-pdf`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            let errorMsg = '转换失败';
+            try {
+                const err = await response.json();
+                errorMsg = err.detail || errorMsg;
+            } catch (e) {
+                errorMsg = await response.text();
+            }
+            throw new Error(errorMsg);
+        }
+
+        const blob = await response.blob();
+        
+        // Remove temp item
+        const idx = processQueue.findIndex(i => i.id === tempId);
+        if (idx !== -1) processQueue.splice(idx, 1);
+        if (el) el.remove();
+        
+        // Process as PDF
+        await processPDF(blob, file.name);
+
+    } catch (error) {
+        console.error(error);
+        if (el) {
+            el.classList.add('error');
+            el.querySelector('.file-status').textContent = '转换失败';
+            el.querySelector('.file-status').style.color = 'var(--error-color)';
+            el.querySelector('.progress-bar').classList.remove('loading');
+            el.querySelector('.progress-bar').style.backgroundColor = 'var(--error-color)';
+            item.status = 'error';
+        }
+        alert(`文件 ${file.name} 转换失败: ${error.message}`);
+    }
+}
+
+async function processPDF(file, fileName) {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
     
@@ -159,7 +245,7 @@ async function processPDF(file) {
             file: file,
             type: 'pdf_page',
             dataUrl: canvas.toDataURL('image/jpeg', 0.9),
-            name: `${file.name} (第 ${i} 页)`,
+            name: `${fileName || file.name} (第 ${i} 页)`,
             pageNum: i,
             status: 'pending'
         });
@@ -195,11 +281,6 @@ function renderQueueItem(item) {
 }
 
 function updateQueueProgress() {
-    const total = processQueue.length + processedResults.length; // Simplified logic
-    const pending = processQueue.filter(i => i.status === 'pending').length;
-    const processing = processQueue.filter(i => i.status === 'processing').length;
-    const done = processQueue.filter(i => i.status === 'completed').length; // We actually remove from queue array but let's keep it simple visually
-    
     progressText.textContent = `已完成 ${processedResults.length} / 剩余 ${processQueue.length}`;
 }
 
@@ -346,7 +427,8 @@ function renderResult(item) {
 
     // Render markdown using marked.js
     const mdHtml = marked.parse(markdown);
-    card.querySelector('.markdown-preview').innerHTML = mdHtml;
+    const safeHtml = window.DOMPurify ? DOMPurify.sanitize(mdHtml) : mdHtml;
+    card.querySelector('.markdown-preview').innerHTML = safeHtml;
     
     // Setup copy button
     const copyBtn = card.querySelector('.copy-btn');
@@ -482,4 +564,3 @@ async function downloadAllMarkdown() {
         URL.revokeObjectURL(url);
     }
 }
-

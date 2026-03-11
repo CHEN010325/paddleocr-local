@@ -5,9 +5,11 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # 1. 安装系统依赖 (关键修改)
+# 1. 安装系统依赖
 # PaddleOCR 和 OpenCV 需要 libgl1, libgomp1, libglib2.0 等库
-# 同时保留 curl 用于健康检查
-RUN apt-get update && apt-get install -y \
+# LibreOffice 用于 PPT/PPTX 转 PDF (需要 default-jre)
+# 中文字体 (fonts-noto-cjk) 用于正确渲染中文文档
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libgl1 \
     libglib2.0-0 \
@@ -15,6 +17,12 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxrender1 \
     libxext6 \
+    libreoffice-core \
+    libreoffice-impress \
+    libreoffice-writer \
+    libreoffice-common \
+    default-jre \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 优先安装适配 Blackwell 架构 (CUDA 12.x) 的 PaddlePaddle (关键修改)

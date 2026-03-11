@@ -1,14 +1,17 @@
 import os
 import base64
 import httpx
-import requests
-import json
 import docker
-from typing import List, Optional, Dict, Any
+import subprocess
+import tempfile
+import shutil
+import io
+from PIL import Image
+from typing import List, Optional
 from pathlib import Path
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -194,6 +197,70 @@ async def manage_service(group: str, action: str):
             
     return {"group": group, "action": action, "results": results}
 
+@app.post("/api/convert/to-pdf")
+async def convert_to_pdf(file: UploadFile = File(...)):
+    """Convert PPT/PPTX to PDF using LibreOffice"""
+    print(f"Received conversion request for: {file.filename}")
+    
+    # Check if soffice is available
+    if not shutil.which("soffice"):
+        raise HTTPException(status_code=500, detail="LibreOffice (soffice) not found on server. Please install it to support PPT/PPTX conversion.")
+    
+    # Validate file extension
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ['.ppt', '.pptx', '.doc', '.docx']:
+        raise HTTPException(status_code=400, detail="Only .ppt, .pptx, .doc, and .docx files are supported.")
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = os.path.join(temp_dir, file.filename)
+            
+            # Save uploaded file
+            with open(input_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Run conversion
+            # soffice --headless --convert-to pdf --outdir <outdir> <input>
+            cmd = [
+                "soffice",
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", temp_dir,
+                input_path
+            ]
+            
+            print(f"Running conversion command: {' '.join(cmd)}")
+            # On Windows, soffice might need full path or shell=True, but in Docker (Linux) it should be in PATH
+            # Use subprocess.run
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            
+            if result.returncode != 0:
+                print(f"Conversion failed: {result.stderr}")
+                # Sometimes soffice returns non-zero but works? No, usually strict.
+                raise HTTPException(status_code=500, detail=f"Conversion failed: {result.stderr}")
+            
+            # Find the output PDF
+            pdfs = [f for f in os.listdir(temp_dir) if f.lower().endswith(".pdf")]
+            
+            if not pdfs:
+                raise HTTPException(status_code=500, detail="PDF file not generated")
+                
+            pdf_path = os.path.join(temp_dir, pdfs[0])
+            print(f"Conversion successful, sending back: {pdf_path}")
+            
+            with open(pdf_path, "rb") as f:
+                pdf_content = f.read()
+                
+            return Response(content=pdf_content, media_type="application/pdf")
+            
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="File conversion timed out")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error during conversion: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 class OCRRequest(BaseModel):
     image: str # Base64 string
     fileType: Optional[int] = None # 0 for PDF, 1 for Image. If None, auto-detect
@@ -226,7 +293,7 @@ async def proxy_ocr(request: OCRRequest):
         base64_data = request.image
         if "base64," in base64_data:
             base64_data = base64_data.split("base64,")[1]
-            
+
         # Determine file type
         file_type = request.fileType
         if file_type is None:
@@ -237,6 +304,21 @@ async def proxy_ocr(request: OCRRequest):
             else:
                 file_type = 1
                 print("Auto-detected Image input")
+        
+        if file_type == 1:
+            try:
+                img_bytes = base64.b64decode(base64_data)
+                img = Image.open(io.BytesIO(img_bytes))
+                if img.format == "GIF":
+                    print("GIF detected, converting to static JPEG for OCR...")
+                    img.seek(0)
+                    rgb_img = img.convert("RGB")
+                    buffer = io.BytesIO()
+                    rgb_img.save(buffer, format="JPEG", quality=95)
+                    base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                    print("GIF conversion successful")
+            except Exception as gif_err:
+                print(f"GIF conversion skipped: {gif_err}")
 
         # Construct Payload for the Official Pipeline API
         payload = {
@@ -288,7 +370,7 @@ async def proxy_ocr(request: OCRRequest):
                 full_markdown = ""
                 all_images = {} # To hold all base64 images from all pages
                 
-                for page_idx, res in enumerate(results):
+                for res in results:
                     if "markdown" in res and "text" in res["markdown"]:
                         md_text = res["markdown"]["text"]
                         md_images = res["markdown"].get("images", {})

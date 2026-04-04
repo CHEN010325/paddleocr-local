@@ -6,11 +6,12 @@ import subprocess
 import tempfile
 import shutil
 import io
+import json
 from PIL import Image
-from typing import List, Optional
+from typing import List, Optional, Union
 from pathlib import Path
 from pypdf import PdfReader, PdfWriter
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -263,7 +264,7 @@ async def convert_to_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 class OCRRequest(BaseModel):
-    image: str # Base64 string
+    image: Optional[str] = None # Base64 string
     fileType: Optional[int] = None # 0 for PDF, 1 for Image. If None, auto-detect
     useLayoutDetection: bool = True
     useDocUnwarping: bool = False
@@ -284,6 +285,149 @@ class OCRRequest(BaseModel):
     minPixels: Optional[int] = None
     maxPixels: Optional[int] = None
     visualize: Optional[bool] = None
+
+RawOCRInput = Union[bytes, str]
+
+def parse_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+def parse_optional_float(value) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    return float(value)
+
+def parse_optional_int(value) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+def parse_optional_string(value) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+def parse_markdown_ignore_labels(value) -> List[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+    except Exception:
+        pass
+    return [text]
+
+async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file")
+        if not upload or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="缺少文件字段 file")
+
+        file_bytes = await upload.read()
+        ocr_request = OCRRequest(
+            fileType=parse_optional_int(form.get("fileType")),
+            useLayoutDetection=parse_bool(form.get("useLayoutDetection"), True),
+            useDocUnwarping=parse_bool(form.get("useDocUnwarping"), False),
+            useDocOrientationClassify=parse_bool(form.get("useDocOrientationClassify"), False),
+            useChartRecognition=parse_bool(form.get("useChartRecognition"), False),
+            useSealRecognition=parse_bool(form.get("useSealRecognition"), True),
+            formatBlockContent=parse_bool(form.get("formatBlockContent"), False),
+            showFormulaNumber=parse_bool(form.get("showFormulaNumber"), True),
+            markdownIgnoreLabels=parse_markdown_ignore_labels(form.get("markdownIgnoreLabels")),
+            layoutThreshold=parse_optional_float(form.get("layoutThreshold")),
+            layoutNms=parse_bool(form.get("layoutNms")) if form.get("layoutNms") is not None else None,
+            layoutUnclipRatio=parse_optional_float(form.get("layoutUnclipRatio")),
+            layoutMergeBboxesMode=parse_optional_string(form.get("layoutMergeBboxesMode")),
+            repetitionPenalty=parse_optional_float(form.get("repetitionPenalty")),
+            temperature=parse_optional_float(form.get("temperature")),
+            topP=parse_optional_float(form.get("topP")),
+            minPixels=parse_optional_int(form.get("minPixels")),
+            maxPixels=parse_optional_int(form.get("maxPixels")),
+            visualize=parse_bool(form.get("visualize")) if form.get("visualize") is not None else None,
+        )
+        return ocr_request, file_bytes
+
+    payload = await request.json()
+    ocr_request = OCRRequest(**payload)
+    if not ocr_request.image:
+        raise HTTPException(status_code=400, detail="缺少 image 字段")
+    return ocr_request, ocr_request.image
+
+def normalize_raw_input_to_base64(raw_input: RawOCRInput) -> str:
+    if isinstance(raw_input, bytes):
+        return base64.b64encode(raw_input).decode("utf-8")
+    if "base64," in raw_input:
+        return raw_input.split("base64,")[1]
+    return raw_input
+
+def raw_input_to_bytes(raw_input: RawOCRInput) -> bytes:
+    if isinstance(raw_input, bytes):
+        return raw_input
+    normalized = raw_input.split("base64,")[1] if "base64," in raw_input else raw_input
+    return base64.b64decode(normalized)
+
+async def run_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
+    base64_data = normalize_raw_input_to_base64(raw_input)
+    file_type = ocr_request.fileType
+    if file_type is None:
+        if isinstance(raw_input, bytes):
+            if raw_input.startswith(b"%PDF-"):
+                file_type = 0
+                print("Auto-detected PDF input")
+            else:
+                file_type = 1
+                print("Auto-detected Image input")
+        elif base64_data.startswith("JVBERi0"):
+            file_type = 0
+            print("Auto-detected PDF input")
+        else:
+            file_type = 1
+            print("Auto-detected Image input")
+
+    if file_type == 1:
+        try:
+            img_bytes = raw_input_to_bytes(raw_input)
+            img = Image.open(io.BytesIO(img_bytes))
+            if img.format == "GIF":
+                print("GIF detected, converting to static JPEG for OCR...")
+                img.seek(0)
+                rgb_img = img.convert("RGB")
+                buffer = io.BytesIO()
+                rgb_img.save(buffer, format="JPEG", quality=95)
+                base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                print("GIF conversion successful")
+        except Exception as gif_err:
+            print(f"GIF conversion skipped: {gif_err}")
+
+    payload = build_pipeline_payload(ocr_request, base64_data, file_type)
+
+    print(f"Sending request to Pipeline Service at {PADDLE_SERVICE_URL}...")
+    async with httpx.AsyncClient(timeout=None) as client:
+        resp = await client.post(
+            PADDLE_SERVICE_URL,
+            json=payload,
+            headers={"Content-Type": "application/json"}
+        )
+
+        if resp.status_code != 200:
+            print(f"Service Error (HTTP {resp.status_code}): {resp.text}")
+            if resp.status_code == 422:
+                print(f"Validation Error Details: {resp.json()}")
+            raise HTTPException(status_code=resp.status_code, detail=f"Upstream error: {resp.text}")
+
+        data = resp.json()
+        return parse_pipeline_response(data)
 
 def build_pipeline_payload(request: OCRRequest, base64_data: str, file_type: int) -> dict:
     payload = {
@@ -331,80 +475,33 @@ def parse_pipeline_response(data: dict, image_prefix: str = "") -> dict:
     return {"markdown": full_markdown, "images": all_images}
 
 @app.post("/api/paddleocr-vl-1.5")
-async def proxy_ocr(request: OCRRequest):
+async def proxy_ocr(request: Request):
     """Proxy request to PaddleOCR-VL Pipeline Service"""
-    print(f"Received OCR Request. Image size: {len(request.image)} bytes")
     try:
-        # Clean Base64 String
-        base64_data = request.image
-        if "base64," in base64_data:
-            base64_data = base64_data.split("base64,")[1]
-
-        # Determine file type
-        file_type = request.fileType
-        if file_type is None:
-            # Auto-detect PDF by header (JVBERi0 is Base64 for %PDF-)
-            if base64_data.startswith("JVBERi0"):
-                file_type = 0
-                print("Auto-detected PDF input")
-            else:
-                file_type = 1
-                print("Auto-detected Image input")
-        
-        if file_type == 1:
-            try:
-                img_bytes = base64.b64decode(base64_data)
-                img = Image.open(io.BytesIO(img_bytes))
-                if img.format == "GIF":
-                    print("GIF detected, converting to static JPEG for OCR...")
-                    img.seek(0)
-                    rgb_img = img.convert("RGB")
-                    buffer = io.BytesIO()
-                    rgb_img.save(buffer, format="JPEG", quality=95)
-                    base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                    print("GIF conversion successful")
-            except Exception as gif_err:
-                print(f"GIF conversion skipped: {gif_err}")
-
-        payload = build_pipeline_payload(request, base64_data, file_type)
-        
-        print(f"Sending request to Pipeline Service at {PADDLE_SERVICE_URL}...")
-        # print(f"Payload keys: {list(payload.keys())}") # For debugging
-        
-        async with httpx.AsyncClient(timeout=None) as client:
-            resp = await client.post(
-                PADDLE_SERVICE_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if resp.status_code != 200:
-                print(f"Service Error (HTTP {resp.status_code}): {resp.text}")
-                # Provide a more helpful error if it's the specific OpenCV error
-                if resp.status_code == 422:
-                    print(f"Validation Error Details: {resp.json()}")
-                raise HTTPException(status_code=resp.status_code, detail=f"Upstream error: {resp.text}")
-            
-            data = resp.json()
-            return parse_pipeline_response(data)
+        ocr_request, raw_image = await parse_ocr_input(request)
+        base64_data = normalize_raw_input_to_base64(raw_image)
+        print(f"Received OCR Request. Image size: {len(base64_data)} bytes")
+        return await run_ocr_request(ocr_request, raw_image)
             
     except Exception as e:
         print(f"Proxy Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/paddleocr-vl-1.5/pagewise")
-async def proxy_ocr_pagewise(request: OCRRequest):
-    print(f"Received Pagewise OCR Request. Image size: {len(request.image)} bytes")
+async def proxy_ocr_pagewise(request: Request):
     try:
-        base64_data = request.image
-        if "base64," in base64_data:
-            base64_data = base64_data.split("base64,")[1]
-        file_type = request.fileType
+        ocr_request, raw_image = await parse_ocr_input(request)
+        base64_data = normalize_raw_input_to_base64(raw_image)
+        print(f"Received Pagewise OCR Request. Image size: {len(base64_data)} bytes")
+        file_type = ocr_request.fileType
         if file_type is None:
-            file_type = 0 if base64_data.startswith("JVBERi0") else 1
+            if isinstance(raw_image, bytes):
+                file_type = 0 if raw_image.startswith(b"%PDF-") else 1
+            else:
+                file_type = 0 if base64_data.startswith("JVBERi0") else 1
         if file_type != 0:
-            return await proxy_ocr(request)
-        pdf_bytes = base64.b64decode(base64_data)
+            return await run_ocr_request(ocr_request, raw_image)
+        pdf_bytes = raw_input_to_bytes(raw_image)
         reader = PdfReader(io.BytesIO(pdf_bytes))
         total_pages = len(reader.pages)
         if total_pages <= 0:
@@ -419,7 +516,7 @@ async def proxy_ocr_pagewise(request: OCRRequest):
                 page_buffer = io.BytesIO()
                 writer.write(page_buffer)
                 page_base64 = base64.b64encode(page_buffer.getvalue()).decode("utf-8")
-                payload = build_pipeline_payload(request, page_base64, 0)
+                payload = build_pipeline_payload(ocr_request, page_base64, 0)
                 resp = await client.post(
                     PADDLE_SERVICE_URL,
                     json=payload,

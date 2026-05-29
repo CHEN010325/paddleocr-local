@@ -217,12 +217,28 @@ async function deleteTaskById(taskId) {
 async function handleFiles(files) {
     if (!files || files.length === 0) return;
 
-    for (const file of files) {
-        const task = await createTaskFromFile(file);
-        tasks.unshift(task);
-        await saveTask(task);
-        renderTaskList();
-        await selectTask(task.id);
+    const fileList = Array.from(files);
+    const results = await Promise.allSettled(fileList.map((file) => createTaskFromFile(file)));
+    const newTasks = results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value);
+    const failed = results.filter((result) => result.status === 'rejected');
+
+    if (failed.length > 0) {
+        console.warn('Some files could not be added', failed.map((result) => result.reason));
+    }
+    if (newTasks.length === 0) return;
+
+    tasks = [...newTasks, ...tasks];
+    renderTaskList();
+    await selectTask(newTasks[0].id);
+    const saveResults = await Promise.allSettled(newTasks.map((task) => saveTask(task)));
+    const saveFailures = saveResults.filter((result) => result.status === 'rejected');
+    if (saveFailures.length > 0) {
+        console.warn('Some tasks could not be saved before processing', saveFailures.map((result) => result.reason));
+    }
+
+    for (const task of newTasks) {
         await processTask(task, { confirmCompleted: false });
     }
 }
@@ -547,27 +563,24 @@ async function processTask(task, { confirmCompleted = true } = {}) {
     if (!task || isProcessing) return;
     if (confirmCompleted && task.status === 'completed' && !confirm('这个任务已经解析完成，要重新解析吗？')) return;
 
-    task.status = 'processing';
-    task.markdown = '';
-    task.images = {};
-    task.ocrResults = [];
-    task.batches.forEach((batch) => {
-        batch.status = 'pending';
-        batch.markdown = '';
-    });
-    task.updatedAt = Date.now();
-    await saveTask(task);
-    renderTaskList();
-    renderResultPane(task);
-    updateActionState(task);
-
     isProcessing = true;
     try {
+        task.status = 'processing';
+        task.markdown = '';
+        task.images = {};
+        task.ocrResults = [];
+        task.batches.forEach((batch) => {
+            batch.status = 'pending';
+            batch.markdown = '';
+        });
+        task.updatedAt = Date.now();
+        await saveTask(task);
+        refreshTaskUi(task);
+
         for (const batch of task.batches) {
             batch.status = 'processing';
             task.updatedAt = Date.now();
-            renderTaskList();
-            renderResultPane(task);
+            refreshTaskUi(task);
 
             const result = await callVLLM(batch);
             const prepared = prepareBatchResult(result, batch.id);
@@ -578,8 +591,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
             task.ocrResults.push(...normalizeOCRJsonResults(result));
             task.updatedAt = Date.now();
             await saveTask(task);
-            renderTaskList();
-            renderResultPane(task);
+            refreshTaskUi(task);
         }
         task.status = 'completed';
     } catch (error) {
@@ -590,10 +602,17 @@ async function processTask(task, { confirmCompleted = true } = {}) {
         isProcessing = false;
         task.updatedAt = Date.now();
         await saveTask(task);
-        renderTaskList();
-        renderResultPane(task);
-        updateActionState(task);
+        refreshTaskUi(task);
     }
+}
+
+function refreshTaskUi(task) {
+    renderTaskList();
+    const activeTask = getActiveTask();
+    if (task?.id === activeTaskId) {
+        renderResultPane(task);
+    }
+    updateActionState(activeTask);
 }
 
 async function callVLLM(batch) {

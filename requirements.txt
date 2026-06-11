@@ -4,3 +4,4 @@ httpx==0.28.1
 pydantic==2.11.10
 python-multipart==0.0.27
 Pillow==11.3.0
+pypdf==6.9.2

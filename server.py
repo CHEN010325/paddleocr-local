@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from PIL import Image
 from typing import List, Optional, Union
-from fastapi import FastAPI, HTTPException, File, UploadFile, Request
+from fastapi import FastAPI, HTTPException, File, UploadFile, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, JSONResponse
@@ -90,6 +90,42 @@ def task_file_path(task_id: str) -> Path:
     return TASK_DATA_DIR / safe_task_id(task_id) / "task.json"
 
 
+def task_dir_path(task_id: str) -> Path:
+    return TASK_DATA_DIR / safe_task_id(task_id)
+
+
+def task_source_path(task_id: str) -> Path:
+    return task_dir_path(task_id) / "source.bin"
+
+
+def task_source_url(task_id: str) -> str:
+    return f"/api/tasks/{safe_task_id(task_id)}/source"
+
+
+def sanitize_task_for_storage(task: dict) -> dict:
+    """Keep task JSON metadata lightweight even if an older client sends heavy fields."""
+    task_id = task.get("id")
+    source_url = task.get("sourceUrl")
+    has_external_source = bool(source_url) or (isinstance(task_id, str) and task_source_path(task_id).exists())
+
+    stored = dict(task)
+    stored.pop("detailLoaded", None)
+    if has_external_source:
+        stored["sourceUrl"] = source_url or task_source_url(task_id)
+        stored.pop("sourceDataUrl", None)
+
+    batches = stored.get("batches") if isinstance(stored.get("batches"), list) else []
+    compact_batches = []
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        compact = dict(batch)
+        compact.pop("payloadDataUrl", None)
+        compact_batches.append(compact)
+    stored["batches"] = compact_batches
+    return stored
+
+
 def task_summary(task: dict) -> dict:
     batches = task.get("batches") if isinstance(task.get("batches"), list) else []
     completed_pages = sum(
@@ -109,6 +145,7 @@ def task_summary(task: dict) -> dict:
         "status": task.get("status"),
         "pageCount": task.get("pageCount"),
         "pdfBatchSize": task.get("pdfBatchSize"),
+        "sourceUrl": task.get("sourceUrl"),
         "error": task.get("error"),
         "completedPages": completed_pages,
         "batchCount": len(batches),
@@ -151,6 +188,89 @@ def remove_path(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def extract_pdf_pages(source_path: Path, start_page: int, end_page: int) -> bytes:
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(str(source_path))
+    total_pages = len(reader.pages)
+    if total_pages <= 0:
+        raise ValueError("Source PDF has no pages")
+    if start_page < 1 or end_page < start_page or start_page > total_pages:
+        raise ValueError(f"Invalid page range {start_page}-{end_page} for {total_pages} pages")
+
+    end_page = min(end_page, total_pages)
+    writer = PdfWriter()
+    for page_index in range(start_page - 1, end_page):
+        writer.add_page(reader.pages[page_index])
+
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@app.post("/api/tasks/{task_id}/source")
+async def upload_task_source(task_id: str, file: UploadFile = File(...)):
+    """Persist the original uploaded source outside task.json."""
+    source_path = task_source_path(task_id)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = source_path.with_suffix(".tmp")
+    with temp_path.open("wb") as buffer:
+        await run_in_threadpool(shutil.copyfileobj, file.file, buffer)
+    temp_path.replace(source_path)
+    return {
+        "ok": True,
+        "url": task_source_url(task_id),
+        "size": source_path.stat().st_size,
+        "filename": Path(file.filename or "source").name,
+        "contentType": file.content_type or "application/octet-stream",
+    }
+
+
+@app.get("/api/tasks/{task_id}/source")
+async def get_task_source(task_id: str):
+    """Return the original uploaded source file for previewing or resumable parsing."""
+    source_path = task_source_path(task_id)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Task source not found")
+
+    media_type = "application/octet-stream"
+    filename = "source"
+    task_path = task_file_path(task_id)
+    if task_path.exists():
+        try:
+            task = await run_in_threadpool(read_task_file, task_path)
+            media_type = task.get("mimeType") or media_type
+            filename = task.get("originalName") or task.get("name") or filename
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+    return FileResponse(source_path, media_type=media_type, filename=filename)
+
+
+@app.get("/api/tasks/{task_id}/source/pages")
+async def get_task_source_pages(
+    task_id: str,
+    start_page: int = Query(..., ge=1),
+    end_page: int = Query(..., ge=1),
+):
+    """Return a compact PDF containing only a page range from the source PDF."""
+    source_path = task_source_path(task_id)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Task source not found")
+    if end_page < start_page:
+        raise HTTPException(status_code=400, detail="end_page must be greater than or equal to start_page")
+
+    try:
+        pdf_content = await run_in_threadpool(extract_pdf_pages, source_path, start_page, end_page)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        logger.exception("Failed to extract PDF pages")
+        raise HTTPException(status_code=500, detail=f"Failed to extract PDF pages: {err}") from err
+
+    return Response(content=pdf_content, media_type="application/pdf")
+
+
 @app.get("/api/tasks")
 async def list_tasks():
     """List locally persisted document parsing task summaries."""
@@ -169,6 +289,8 @@ async def get_task(task_id: str):
     except (OSError, ValueError, json.JSONDecodeError) as err:
         logger.warning("Failed to read task file %s: %s", path, err)
         raise HTTPException(status_code=500, detail="Failed to read task")
+    if task_source_path(task_id).exists() and not task.get("sourceUrl"):
+        task["sourceUrl"] = task_source_url(task_id)
     task["detailLoaded"] = True
     return task
 
@@ -182,9 +304,10 @@ async def save_task(task_id: str, request: Request):
     if task.get("id") != task_id:
         raise HTTPException(status_code=400, detail="Task id mismatch")
 
+    stored_task = sanitize_task_for_storage(task)
     path = task_file_path(task_id)
-    await run_in_threadpool(write_task_file, path, task)
-    return {"ok": True, "task": task_summary(task)}
+    await run_in_threadpool(write_task_file, path, stored_task)
+    return {"ok": True, "task": task_summary(stored_task)}
 
 
 @app.delete("/api/tasks/{task_id}")

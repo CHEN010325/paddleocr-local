@@ -1,6 +1,6 @@
 const API_BASE = '/api';
 const DEFAULT_PDF_BATCH_SIZE = 1;
-const MAX_PDF_BATCH_SIZE = 600;
+const MAX_PDF_BATCH_SIZE = 400;
 const PDF_BATCH_SIZE_STORAGE_KEY = 'pandocr.pdfBatchSize';
 
 let availableModel = 'PaddleOCR-VL-1.6-0.9B';
@@ -20,6 +20,8 @@ let renderedJsonKey = '';
 let cachedJsonLines = [];
 let cachedJsonMaxLineLength = 0;
 let jsonRenderToken = 0;
+const sourcePdfCache = new Map();
+const sourceBytesCache = new Map();
 const JSON_LINE_HEIGHT = 21;
 const JSON_PADDING_TOP = 34;
 const JSON_PADDING_RIGHT = 40;
@@ -122,6 +124,7 @@ function setupEventListeners() {
     els.zoomOutBtn.addEventListener('click', () => changeZoom(-0.15));
     els.sourceViewer.addEventListener('scroll', updateCurrentPageFromScroll);
     els.jsonView.addEventListener('scroll', renderVisibleJsonLines);
+    els.pdfBatchSizeInput?.addEventListener('input', handlePdfBatchSizeInput);
     ['change', 'blur'].forEach((eventName) => {
         els.pdfBatchSizeInput?.addEventListener(eventName, syncPdfBatchSizeSetting);
     });
@@ -166,7 +169,7 @@ async function saveTaskToServer(task) {
     const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(task.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(task)
+        body: JSON.stringify(taskForPersistence(task))
     });
     if (!response.ok) {
         throw new Error(`保存本地任务失败：${await response.text()}`);
@@ -179,29 +182,31 @@ async function loadTasks() {
 }
 
 function reconcileTaskStatus(task) {
-    if (!isTaskDetailLoaded(task)) {
-        return task;
-    }
+    if (task?.status !== 'processing') return task;
+
     const batches = Array.isArray(task.batches) ? task.batches : [];
     const allBatchesCompleted = batches.length > 0 && batches.every((batch) => batch.status === 'completed');
     const hasAllOcrResults = Array.isArray(task.ocrResults) && task.ocrResults.length >= batches.length;
     if (task.status === 'processing' && allBatchesCompleted && hasAllOcrResults) {
         return { ...task, status: 'completed', updatedAt: task.updatedAt || Date.now() };
     }
-    if (task.status === 'processing') {
-        return {
-            ...task,
-            status: 'pending',
-            error: task.error || '上次解析中断，可继续解析。',
-            batches: batches.map((batch) => (
-                batch.status === 'processing'
-                    ? { ...batch, status: 'pending' }
-                    : batch
-            )),
-            updatedAt: task.updatedAt || Date.now()
-        };
+    if (!isTaskDetailLoaded(task) && Number(task.completedPages || 0) >= Number(task.pageCount || Infinity)) {
+        return { ...task, status: 'completed', updatedAt: task.updatedAt || Date.now() };
     }
-    return task;
+    const reconciled = {
+        ...task,
+        status: 'pending',
+        error: task.error || '上次解析中断，可继续解析。',
+        updatedAt: task.updatedAt || Date.now()
+    };
+    if (isTaskDetailLoaded(task)) {
+        reconciled.batches = batches.map((batch) => (
+            batch.status === 'processing'
+                ? { ...batch, status: 'pending' }
+                : batch
+        ));
+    }
+    return reconciled;
 }
 
 function dedupeTasks(taskItems) {
@@ -243,7 +248,7 @@ async function loadTaskFromServer(taskId) {
 }
 
 function isTaskDetailLoaded(task) {
-    return Boolean(task?.sourceDataUrl && Array.isArray(task?.batches));
+    return Boolean((task?.sourceDataUrl || task?.sourceUrl) && Array.isArray(task?.batches));
 }
 
 function replaceTask(task) {
@@ -289,7 +294,9 @@ async function deleteTaskById(taskId) {
 async function handleFiles(files) {
     if (!files || files.length === 0) return;
 
+    const previousActiveTaskId = activeTaskId;
     const fileList = Array.from(files);
+    showIncomingFileState(fileList);
     const results = await Promise.allSettled(fileList.map((file) => createTaskFromFile(file)));
     const newTasks = results
         .filter((result) => result.status === 'fulfilled')
@@ -299,7 +306,14 @@ async function handleFiles(files) {
     if (failed.length > 0) {
         console.warn('Some files could not be added', failed.map((result) => result.reason));
     }
-    if (newTasks.length === 0) return;
+    if (newTasks.length === 0) {
+        if (previousActiveTaskId && tasks.some((task) => task.id === previousActiveTaskId)) {
+            await selectTask(previousActiveTaskId);
+        } else {
+            resetWorkbench();
+        }
+        return;
+    }
 
     tasks = [...newTasks, ...tasks];
     renderTaskList();
@@ -313,6 +327,37 @@ async function handleFiles(files) {
     for (const task of newTasks) {
         await processTask(task, { confirmCompleted: false });
     }
+}
+
+function showIncomingFileState(fileList) {
+    const filesToAdd = Array.from(fileList || []);
+    const primaryFile = filesToAdd[0];
+    const fileCount = filesToAdd.length;
+
+    activeTaskId = null;
+    sourceRenderToken += 1;
+    currentPdf = null;
+    currentPage = 1;
+    renderTaskList();
+    resetResultRenderCache();
+    resetResultScrollPositions();
+    activeResultView = 'markdown';
+    document.querySelectorAll('.view-tab').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.view === 'markdown');
+    });
+    showResultView('markdown');
+    updateActionState(null);
+
+    els.sourceTitle.textContent = primaryFile?.name || '正在读取新文件';
+    els.sourceMeta.textContent = fileCount > 1
+        ? `正在读取 ${fileCount} 个文件...`
+        : '正在读取文件...';
+    els.pdfControls.classList.add('hidden');
+    els.sourceViewer.innerHTML = '<div class="empty-result">正在读取文件，请稍候...</div>';
+    els.sourceViewer.scrollTop = 0;
+    els.resultTitle.textContent = '准备解析';
+    els.markdownView.innerHTML = '<div class="empty-result">正在读取新文件，解析结果会显示在这里。</div>';
+    els.jsonView.textContent = '';
 }
 
 async function createTaskFromFile(file) {
@@ -341,10 +386,12 @@ async function createTaskFromFile(file) {
 }
 
 async function createImageTask(file) {
+    const id = createId();
     const dataUrl = await readAsDataUrl(file);
+    const sourceUrl = await uploadTaskSource(id, file, file.name, file.type || 'application/octet-stream');
     const now = Date.now();
     return {
-        id: createId(),
+        id,
         name: file.name,
         sourceKind: 'image',
         mimeType: file.type || 'image/*',
@@ -353,6 +400,7 @@ async function createImageTask(file) {
         updatedAt: now,
         status: 'pending',
         pageCount: 1,
+        sourceUrl,
         sourceDataUrl: dataUrl,
         thumbnail: dataUrl,
         batches: [{
@@ -370,39 +418,18 @@ async function createImageTask(file) {
 }
 
 async function createPdfTask(fileOrBlob, name, extra = {}) {
+    const id = createId();
     const arrayBuffer = await fileOrBlob.arrayBuffer();
-    const sourceDataUrl = arrayBufferToDataUrl(arrayBuffer, 'application/pdf');
+    const sourceUrl = await uploadTaskSource(id, fileOrBlob, name, 'application/pdf');
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
     const pageCount = pdf.numPages;
     const thumbnail = await renderPDFPageDataUrl(pdf, 1, 0.35);
-    const sourcePdf = pageCount > 1
-        ? await PDFLib.PDFDocument.load(arrayBuffer.slice(0))
-        : null;
-    const batches = [];
-
     const pdfBatchSize = getConfiguredPdfBatchSize();
-
-    for (let startPage = 1; startPage <= pageCount; startPage += pdfBatchSize) {
-        const endPage = Math.min(startPage + pdfBatchSize - 1, pageCount);
-        const batchPageCount = endPage - startPage + 1;
-        const payloadDataUrl = pageCount === 1
-            ? sourceDataUrl
-            : await createPDFBatchDataUrl(sourcePdf, startPage, endPage);
-        batches.push({
-            id: createId(),
-            label: formatPageLabel(startPage, endPage),
-            fileType: 0,
-            startPage,
-            endPage,
-            pageCount: batchPageCount,
-            payloadDataUrl,
-            status: 'pending'
-        });
-    }
+    const batches = createPdfBatchDescriptors(pageCount, pdfBatchSize);
 
     const now = Date.now();
     return {
-        id: createId(),
+        id,
         name,
         sourceKind: extra.sourceKind || 'pdf',
         originalName: extra.originalName || name,
@@ -413,13 +440,30 @@ async function createPdfTask(fileOrBlob, name, extra = {}) {
         status: 'pending',
         pageCount,
         pdfBatchSize,
-        sourceDataUrl,
+        sourceUrl,
         thumbnail,
         batches,
         markdown: '',
         images: {},
         ocrResults: []
     };
+}
+
+async function uploadTaskSource(taskId, fileOrBlob, filename, mimeType) {
+    const formData = new FormData();
+    const source = fileOrBlob instanceof File
+        ? fileOrBlob
+        : new File([fileOrBlob], filename, { type: mimeType || fileOrBlob.type || 'application/octet-stream' });
+    formData.append('file', source, filename);
+    const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/source`, {
+        method: 'POST',
+        body: formData
+    });
+    if (!response.ok) {
+        throw new Error(`保存源文件失败：${await response.text()}`);
+    }
+    const data = await response.json();
+    return data.url;
 }
 
 async function convertOfficeToPdf(file) {
@@ -531,7 +575,10 @@ async function selectTask(taskId) {
     els.sourceTitle.textContent = task.name;
     els.sourceMeta.textContent = `${sourceLabel(task)} · ${formatSize(task.size)} · ${task.pageCount || 1} 页`;
     els.resultTitle.textContent = resultPaneTitle(task);
+    renderResultPane(task);
+    updateActionState(task);
     await renderSource(task);
+    if (activeTaskId !== taskId) return;
     renderResultPane(task);
     updateActionState(task);
 }
@@ -550,15 +597,16 @@ async function renderSource(task) {
     if (task.sourceKind === 'image') {
         const img = document.createElement('img');
         img.className = 'source-image';
-        img.src = task.sourceDataUrl;
+        img.src = task.sourceDataUrl || task.sourceUrl;
         els.sourceViewer.appendChild(img);
         return;
     }
 
     currentPage = Math.min(Math.max(currentPage, 1), task.pageCount || 1);
     els.pdfControls.classList.remove('hidden');
-    const bytes = dataUrlToUint8Array(task.sourceDataUrl);
-    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+    const pdf = task.sourceDataUrl
+        ? await pdfjsLib.getDocument({ data: dataUrlToUint8Array(task.sourceDataUrl) }).promise
+        : await pdfjsLib.getDocument(task.sourceUrl).promise;
     if (renderToken !== sourceRenderToken) return;
     currentPdf = pdf;
     await renderPdfDocument(renderToken);
@@ -847,6 +895,9 @@ async function processTask(task, { confirmCompleted = true } = {}) {
 
     isProcessing = true;
     try {
+        if (shouldRebuildPdfBatchPlan(task)) {
+            rebuildPdfBatchPlan(task);
+        }
         const resumeExistingResults = shouldResumeTask(task);
         if (resumeExistingResults) {
             task.batches.forEach((batch) => {
@@ -875,13 +926,19 @@ async function processTask(task, { confirmCompleted = true } = {}) {
             await saveTask(task);
             refreshTaskUi(task);
 
-            const result = await callVLLM(batch);
+            let result;
+            try {
+                await ensureBatchPayload(task, batch);
+                result = await callVLLM(batch);
+            } finally {
+                releaseBatchPayload(batch);
+            }
             const prepared = prepareBatchResult(result, batch.id);
             batch.status = 'completed';
             batch.markdown = prepared.markdown;
             appendTaskMarkdown(task, prepared.markdown);
             Object.assign(task.images, prepared.images);
-            task.ocrResults.push(...normalizeOCRJsonResults(result));
+            task.ocrResults.push(...normalizeOCRJsonResults(result).map((pageResult) => compactOCRJsonResult(pageResult, batch.id)));
             task.updatedAt = Date.now();
             await saveTask(task);
             refreshTaskUi(task);
@@ -900,7 +957,8 @@ async function processTask(task, { confirmCompleted = true } = {}) {
 }
 
 function shouldResumeTask(task) {
-    const canResumeStatus = task?.status === 'pending' || task?.status === 'processing';
+    if (isTaskActivelyProcessing(task)) return false;
+    const canResumeStatus = task?.status === 'pending';
     if (!canResumeStatus) return false;
 
     if (Array.isArray(task?.batches)) {
@@ -914,7 +972,37 @@ function shouldResumeTask(task) {
     return completedPages > 0 && (!pageCount || completedPages < pageCount);
 }
 
+function isTaskActivelyProcessing(task) {
+    return task?.status === 'processing'
+        || Boolean(task?.batches?.some((batch) => batch.status === 'processing'));
+}
+
+function shouldRebuildPdfBatchPlan(task) {
+    if (!task || !(task.sourceDataUrl || task.sourceUrl) || !['pdf', 'office'].includes(task.sourceKind)) return false;
+    const pageCount = Number(task.pageCount || 0);
+    if (pageCount <= 0) return false;
+    const batches = Array.isArray(task.batches) ? task.batches : [];
+    const completedCount = batches.filter((batch) => batch.status === 'completed').length;
+    if (completedCount > 0) return false;
+    const configuredBatchSize = getConfiguredPdfBatchSize();
+    if (batches.length === 0) return true;
+    if (Number(task.pdfBatchSize || 0) !== configuredBatchSize) return true;
+    return Number(task.pdfBatchSize || 0) > MAX_PDF_BATCH_SIZE
+        || batches.some((batch) => Number(batch.pageCount || 0) > MAX_PDF_BATCH_SIZE);
+}
+
+function rebuildPdfBatchPlan(task) {
+    const pageCount = Number(task.pageCount || 1);
+    const batchSize = getConfiguredPdfBatchSize();
+    task.pdfBatchSize = batchSize;
+    task.batches = createPdfBatchDescriptors(pageCount, batchSize, task.sourceDataUrl);
+    task.markdown = '';
+    task.images = {};
+    task.ocrResults = [];
+}
+
 function taskVisualStatus(task) {
+    if (isTaskActivelyProcessing(task)) return 'processing';
     return shouldResumeTask(task) ? 'pending' : (task?.status || 'pending');
 }
 
@@ -965,28 +1053,81 @@ async function callVLLM(batch) {
     if (els.ignoreFooterSwitch.checked) ignoreLabels.push('footer', 'footer_image');
     ignoreLabels.push('aside_text');
 
-    const payload = {
-        image: batch.payloadDataUrl,
-        fileType: batch.fileType,
-        useLayoutDetection: true,
-        useChartRecognition: els.chartRecognitionSwitch.checked,
-        useDocUnwarping: els.docUnwarpingSwitch.checked,
-        useDocOrientationClassify: els.docOrientationSwitch.checked,
-        useSealRecognition: els.sealRecognitionSwitch.checked,
-        formatBlockContent: true,
-        showFormulaNumber: els.formulaNumberSwitch.checked,
-        markdownIgnoreLabels: ignoreLabels
-    };
+    const formData = new FormData();
+    if (batch.payloadBlob) {
+        const filename = batch.fileType === 0 ? `${batch.id}.pdf` : `${batch.id}.image`;
+        formData.append('file', batch.payloadBlob, filename);
+    } else {
+        formData.append('image', batch.payloadDataUrl);
+    }
+    formData.append('fileType', String(batch.fileType));
+    formData.append('useLayoutDetection', 'true');
+    formData.append('useChartRecognition', String(els.chartRecognitionSwitch.checked));
+    formData.append('useDocUnwarping', String(els.docUnwarpingSwitch.checked));
+    formData.append('useDocOrientationClassify', String(els.docOrientationSwitch.checked));
+    formData.append('useSealRecognition', String(els.sealRecognitionSwitch.checked));
+    formData.append('formatBlockContent', 'true');
+    formData.append('showFormulaNumber', String(els.formulaNumberSwitch.checked));
+    formData.append('markdownIgnoreLabels', JSON.stringify(ignoreLabels));
 
     const response = await fetch(`${API_BASE}/paddleocr-vl-1.6`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: formData
     });
     if (!response.ok) {
         throw new Error(await response.text());
     }
-    return response.json();
+    const text = await response.text();
+    if (!text.trim()) {
+        throw new Error(`OCR 服务返回了空响应，请降低每批页数后重试：${batch.label || ''}`);
+    }
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        const preview = text.slice(0, 500);
+        throw new Error(
+            `OCR 服务返回的 JSON 不完整或格式异常，请降低每批页数后重试：${batch.label || ''}。` +
+            `响应长度 ${text.length} 字符，片段：${preview}`
+        );
+    }
+}
+
+function createPdfBatchDescriptors(pageCount, pdfBatchSize, sourceDataUrl = '') {
+    const batches = [];
+    for (let startPage = 1; startPage <= pageCount; startPage += pdfBatchSize) {
+        const endPage = Math.min(startPage + pdfBatchSize - 1, pageCount);
+        const batch = {
+            id: createId(),
+            label: formatPageLabel(startPage, endPage),
+            fileType: 0,
+            startPage,
+            endPage,
+            pageCount: endPage - startPage + 1,
+            status: 'pending'
+        };
+        if (pageCount === 1 && sourceDataUrl) {
+            batch.payloadDataUrl = sourceDataUrl;
+        }
+        batches.push(batch);
+    }
+    return batches;
+}
+
+function taskForPersistence(task) {
+    const persisted = { ...task };
+    delete persisted.detailLoaded;
+    if (persisted.sourceUrl) {
+        delete persisted.sourceDataUrl;
+    }
+    persisted.batches = Array.isArray(task.batches)
+        ? task.batches.map((batch) => {
+            const copy = { ...batch };
+            delete copy.payloadBlob;
+            delete copy.payloadDataUrl;
+            return copy;
+        })
+        : [];
+    return persisted;
 }
 
 function updateActionState(task) {
@@ -1141,7 +1282,11 @@ async function renderPDFPageDataUrl(pdf, pageNumber, scale) {
     return canvas.toDataURL('image/jpeg', 0.78);
 }
 
-async function createPDFBatchDataUrl(sourcePdf, startPage, endPage) {
+async function createPDFBatchBlob(sourcePdf, startPage, endPage) {
+    return new Blob([await createPDFBatchBytes(sourcePdf, startPage, endPage)], { type: 'application/pdf' });
+}
+
+async function createPDFBatchBytes(sourcePdf, startPage, endPage) {
     const batchPdf = await PDFLib.PDFDocument.create();
     const pageIndices = [];
     for (let i = startPage - 1; i <= endPage - 1; i++) {
@@ -1149,8 +1294,91 @@ async function createPDFBatchDataUrl(sourcePdf, startPage, endPage) {
     }
     const copiedPages = await batchPdf.copyPages(sourcePdf, pageIndices);
     copiedPages.forEach((page) => batchPdf.addPage(page));
-    const bytes = await batchPdf.save();
-    return uint8ArrayToDataUrl(bytes, 'application/pdf');
+    return batchPdf.save();
+}
+
+async function ensureBatchPayload(task, batch) {
+    if (batch.payloadBlob || batch.payloadDataUrl) return;
+    if (batch.fileType === 1) {
+        batch.payloadBlob = await getTaskSourceBlob(task, task.mimeType || 'image/jpeg');
+        return;
+    }
+
+    if (batch.fileType !== 0) {
+        throw new Error('无法重建当前批次的解析 payload');
+    }
+    if (!(task.sourceDataUrl || task.sourceUrl)) {
+        throw new Error('缺少源 PDF，无法继续解析');
+    }
+    if ((task.pageCount || 1) === 1) {
+        batch.payloadBlob = await getTaskSourceBlob(task, 'application/pdf');
+        return;
+    }
+
+    if (task.sourceUrl && !task.sourceDataUrl) {
+        batch.payloadBlob = await fetchPdfBatchBlob(task, batch.startPage, batch.endPage);
+        return;
+    }
+
+    let sourcePdf = sourcePdfCache.get(task.id);
+    if (!sourcePdf) {
+        sourcePdf = await PDFLib.PDFDocument.load(await getTaskSourceBytes(task));
+        sourcePdfCache.set(task.id, sourcePdf);
+    }
+    batch.payloadBlob = await createPDFBatchBlob(sourcePdf, batch.startPage, batch.endPage);
+}
+
+function releaseBatchPayload(batch) {
+    delete batch.payloadBlob;
+    delete batch.payloadDataUrl;
+}
+
+async function fetchPdfBatchBlob(task, startPage, endPage) {
+    const url = `${API_BASE}/tasks/${encodeURIComponent(task.id)}/source/pages?start_page=${startPage}&end_page=${endPage}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`读取 PDF 分页失败：${await response.text()}`);
+    }
+    return response.blob();
+}
+
+async function getTaskSourceBytes(task) {
+    if (sourceBytesCache.has(task.id)) {
+        return sourceBytesCache.get(task.id);
+    }
+    if (task.sourceDataUrl) {
+        const bytes = dataUrlToUint8Array(task.sourceDataUrl);
+        sourceBytesCache.set(task.id, bytes);
+        return bytes;
+    }
+    if (!task.sourceUrl) {
+        throw new Error('缺少源文件，无法继续解析');
+    }
+    const response = await fetch(task.sourceUrl);
+    if (!response.ok) {
+        throw new Error(`读取源文件失败：${await response.text()}`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    sourceBytesCache.set(task.id, bytes);
+    return bytes;
+}
+
+async function getTaskSourceBlob(task, mimeType) {
+    if (task.sourceDataUrl) {
+        return dataUrlToBlob(task.sourceDataUrl);
+    }
+    if (!task.sourceUrl) {
+        throw new Error('缺少源文件，无法继续解析');
+    }
+    const response = await fetch(task.sourceUrl);
+    if (!response.ok) {
+        throw new Error(`读取源文件失败：${await response.text()}`);
+    }
+    const blob = await response.blob();
+    if (mimeType && blob.type !== mimeType) {
+        return new Blob([blob], { type: mimeType });
+    }
+    return blob;
 }
 
 function normalizeOCRMarkdown(markdown) {
@@ -1392,6 +1620,7 @@ function rewriteBlockImageSources(content, pageResult, task) {
 function imageValueToSrc(value) {
     const text = String(value || '');
     if (/^(https?:|data:|blob:)/i.test(text)) return text;
+    if (/^ocr_images\//i.test(text)) return text;
     return `data:image/jpeg;base64,${text}`;
 }
 
@@ -1697,12 +1926,48 @@ function prepareBatchResult(result, batchId) {
     let markdown = normalizeOCRMarkdown(result.markdown || '');
     const images = {};
     Object.entries(result.images || {}).forEach(([path, base64]) => {
-        const filename = path.split('/').pop();
-        const safePath = `ocr_images/${batchId}_${filename}`;
+        const safePath = safeImagePath(batchId, path);
         markdown = markdown.split(path).join(safePath);
         images[safePath] = base64;
     });
     return { markdown, images };
+}
+
+function safeImagePath(batchId, path) {
+    const filename = String(path || '').split('/').pop() || 'image';
+    return `ocr_images/${batchId}_${filename}`;
+}
+
+function compactOCRJsonResult(pageResult, batchId) {
+    const compact = stripLargeOCRFields(pageResult);
+    rewriteMarkdownImageMaps(compact, batchId);
+    return compact;
+}
+
+function stripLargeOCRFields(value) {
+    if (Array.isArray(value)) {
+        return value.map(stripLargeOCRFields);
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+
+    const output = {};
+    Object.entries(value).forEach(([key, nestedValue]) => {
+        if (key === 'inputImage' || key === 'outputImages') return;
+        output[key] = stripLargeOCRFields(nestedValue);
+    });
+    return output;
+}
+
+function rewriteMarkdownImageMaps(value, batchId) {
+    if (!value || typeof value !== 'object') return;
+    if (value.images && typeof value.images === 'object' && typeof value.text === 'string') {
+        value.images = Object.fromEntries(
+            Object.keys(value.images).map((path) => [path, safeImagePath(batchId, path)])
+        );
+    }
+    Object.values(value).forEach((nestedValue) => rewriteMarkdownImageMaps(nestedValue, batchId));
 }
 
 function normalizeOCRJsonResults(result) {
@@ -1740,19 +2005,6 @@ function readAsDataUrl(file) {
     });
 }
 
-function arrayBufferToDataUrl(buffer, mimeType) {
-    return uint8ArrayToDataUrl(new Uint8Array(buffer), mimeType);
-}
-
-function uint8ArrayToDataUrl(bytes, mimeType) {
-    let binary = '';
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-    }
-    return `data:${mimeType};base64,${btoa(binary)}`;
-}
-
 function dataUrlToUint8Array(dataUrl) {
     const base64 = dataUrl.split('base64,')[1];
     const binary = atob(base64);
@@ -1761,6 +2013,13 @@ function dataUrlToUint8Array(dataUrl) {
         bytes[i] = binary.charCodeAt(i);
     }
     return bytes;
+}
+
+function dataUrlToBlob(dataUrl) {
+    const mimeMatch = String(dataUrl).match(/^data:([^;,]+)[;,]/i);
+    return new Blob([dataUrlToUint8Array(dataUrl)], {
+        type: mimeMatch?.[1] || 'application/octet-stream'
+    });
 }
 
 function base64ToBytes(base64) {
@@ -1800,23 +2059,23 @@ function taskIcon(task) {
 function statusText(task) {
     const donePages = task.batches?.filter((batch) => batch.status === 'completed').reduce((sum, batch) => sum + batch.pageCount, 0) || task.completedPages || 0;
     if (task.status === 'completed') return '完成';
+    if (isTaskActivelyProcessing(task)) return `${donePages}/${task.pageCount || 1} 解析中`;
     if (shouldResumeTask(task)) return `${donePages}/${task.pageCount || 1} 可继续`;
-    if (task.status === 'processing') return `${donePages}/${task.pageCount || 1}`;
     if (task.status === 'error') return '失败';
     return '待解析';
 }
 
 function resultPaneTitle(task) {
     if (task.status === 'completed') return '解析结果';
-    if (shouldResumeTask(task)) return '解析中断';
     if (task.status === 'processing') return '解析中';
+    if (shouldResumeTask(task)) return '解析中断';
     if (task.status === 'error') return '解析失败';
     return '待解析';
 }
 
 function emptyResultText(task) {
-    if (shouldResumeTask(task)) return '上次解析中断，点击“继续解析”从未完成页面恢复。';
     if (task.status === 'processing') return '正在解析，结果会实时追加到这里。';
+    if (shouldResumeTask(task)) return '上次解析中断，点击“继续解析”从未完成页面恢复。';
     if (task.status === 'error') return `解析失败：${task.error || '未知错误'}`;
     return '点击“开始解析”生成 Markdown 或 JSON 结果。';
 }
@@ -1842,6 +2101,19 @@ function syncPdfBatchSizeSetting() {
     els.pdfBatchSizeInput.value = String(batchSize);
     localStorage.setItem(PDF_BATCH_SIZE_STORAGE_KEY, String(batchSize));
     return batchSize;
+}
+
+function handlePdfBatchSizeInput() {
+    if (!els.pdfBatchSizeInput) return;
+    const rawValue = els.pdfBatchSizeInput.value;
+    if (rawValue === '') return;
+    const parsed = Number.parseInt(rawValue, 10);
+    if (!Number.isFinite(parsed)) return;
+    const batchSize = clampPdfBatchSize(parsed);
+    if (String(parsed) !== String(batchSize)) {
+        els.pdfBatchSizeInput.value = String(batchSize);
+    }
+    localStorage.setItem(PDF_BATCH_SIZE_STORAGE_KEY, String(batchSize));
 }
 
 function getConfiguredPdfBatchSize() {

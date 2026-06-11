@@ -4,7 +4,19 @@
 
 ## macOS Apple Silicon
 
-Apple M1/M2/M3/M4 使用本地部署：
+Apple M1/M2/M3/M4 一键部署：
+
+```bash
+./macos-one-click.command
+```
+
+或：
+
+```bash
+make mac-one-click
+```
+
+手动 native 模式：
 
 ```bash
 make mac-setup

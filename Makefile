@@ -1,4 +1,4 @@
-.PHONY: help build deploy up down restart logs test clean mac-setup mac-setup-mlx mac-up mac-up-mlx mac-down mac-test mac-test-mlx mac-logs
+.PHONY: help build deploy up down restart logs test clean mac-one-click mac-setup mac-setup-mlx mac-up mac-up-mlx mac-down mac-test mac-test-mlx mac-logs
 
 # 默认目标
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "  make logs       - 查看 NVIDIA Docker 实时日志"
 	@echo "  make test       - 测试 NVIDIA Docker 服务连接"
 	@echo "  make clean      - 清理 Docker 资源"
+	@echo "  make mac-one-click - Apple Silicon 一键部署并打开 WebUI"
 	@echo "  make mac-setup  - 安装 Apple Silicon 本地环境"
 	@echo "  make mac-setup-mlx - 安装 Apple Silicon MLX-VLM 提速环境"
 	@echo "  make mac-up     - 启动 Apple Silicon 本地服务"
@@ -87,6 +88,9 @@ shell-api:
 	docker compose exec paddleocr-vl-api /bin/bash
 
 # Apple Silicon 本地部署
+mac-one-click:
+	bash scripts/macos-one-click.sh
+
 mac-setup:
 	bash scripts/setup-macos.sh
 

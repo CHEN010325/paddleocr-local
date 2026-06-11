@@ -118,14 +118,30 @@ PaddleOCR-VL-1.6
 
 不要使用裸 `PaddleOCR-VL` 作为 Mac 默认产线名；在当前 PaddleX 3.6.x 中，裸名对应旧版 v1 配置。`PaddleOCR-VL-1.6` 会使用 `PP-DocLayoutV3`、`PaddleOCR-VL-1.6-0.9B` 和 native PaddlePaddle 后端。
 
-快速启动：
+一键部署（推荐）：
+
+```bash
+./macos-one-click.command
+```
+
+也可以使用等价的 Make 命令：
+
+```bash
+make mac-one-click
+```
+
+这条一键命令会自动检查 Apple Silicon 环境、安装 macOS 依赖、默认启用 MLX-VLM 提速模式、启动 `mlx_vlm.server` / PaddleX API / PandOCR WebUI、执行健康检查，并自动打开 http://127.0.0.1:8000。
+
+首次启动会下载 `PP-DocLayoutV3`、`PaddleOCR-VL-1.6-0.9B` 和 MLX 模型权重，耗时取决于网络和磁盘速度。模型缓存完成后，后续再次运行同一条命令会复用已安装环境和已启动服务。
+
+高级手动启动：
 
 ```bash
 make mac-setup
 make mac-up
 ```
 
-首次启动会下载 `PP-DocLayoutV3` 和 `PaddleOCR-VL-1.6-0.9B` 模型，耗时取决于网络和磁盘速度。完成后访问：
+完成后访问：
 
 - WebUI: http://127.0.0.1:8000
 - PaddleOCR-VL API health: http://127.0.0.1:8081/health
@@ -153,7 +169,7 @@ MLX 模式会启动三个本地服务：
 - PaddleX 完整解析 API: `127.0.0.1:8081`
 - PandOCR WebUI: `127.0.0.1:8000`
 
-首次使用 MLX 时会从 Hugging Face 下载模型。若下载较慢，可以设置 `HF_TOKEN` 提高 Hugging Face 的限流额度；模型缓存完成后后续启动会快很多。如果要改 MLX 端口，直接设置 `MLX_PORT` 即可；启动脚本会从模板生成 PaddleX 使用的配置。
+若 Hugging Face 下载较慢，可以设置 `HF_TOKEN` 提高 Hugging Face 的限流额度；模型缓存完成后后续启动会快很多。如果要改 MLX 端口，直接设置 `MLX_PORT` 即可；启动脚本会从模板生成 PaddleX 使用的配置。
 
 常用环境变量：
 
@@ -163,7 +179,7 @@ PANDOCR_PORT=8000
 PADDLEX_HOST=127.0.0.1
 PADDLEX_PORT=8081
 PADDLEX_PIPELINE=PaddleOCR-VL-1.6
-PANDOCR_MACOS_BACKEND=native
+PANDOCR_MACOS_BACKEND=mlx
 MLX_HOST=127.0.0.1
 MLX_PORT=8111
 MLX_MODEL=PaddlePaddle/PaddleOCR-VL-1.6
@@ -211,6 +227,7 @@ PANDOCR_PORT=18000 make mac-up
 ├── requirements.txt
 ├── requirements-macos.txt
 ├── requirements-macos-mlx.txt
+├── macos-one-click.command
 ├── Dockerfile
 ├── docker-compose.yml
 ├── data/                  # 本地任务数据目录，默认不提交

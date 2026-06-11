@@ -34,6 +34,8 @@ PADDLEOCR_VL_MODEL_NAME = os.getenv("PADDLEOCR_VL_MODEL_NAME", "PaddleOCR-VL-1.6
 PADDLE_REQUEST_TIMEOUT = float(os.getenv("PADDLE_REQUEST_TIMEOUT", "3600"))
 TASK_DATA_DIR = Path(os.getenv("PANDOCR_TASK_DATA_DIR", "data/tasks")).resolve()
 MAX_REQUEST_BYTES = int(float(os.getenv("PANDOCR_MAX_UPLOAD_MB", "512")) * 1024 * 1024)
+PANDOCR_HOST = os.getenv("PANDOCR_HOST", "0.0.0.0")
+PANDOCR_PORT = int(os.getenv("PANDOCR_PORT", "8000"))
 CORS_ORIGINS = parse_csv_env(
     "PANDOCR_CORS_ORIGINS",
     "http://localhost:8000,http://127.0.0.1:8000",
@@ -529,4 +531,4 @@ if __name__ == "__main__":
     import uvicorn
 
     logger.info("Starting server. Target Pipeline: %s", PADDLE_SERVICE_URL)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=PANDOCR_HOST, port=PANDOCR_PORT)

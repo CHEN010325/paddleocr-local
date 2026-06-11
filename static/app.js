@@ -15,6 +15,7 @@ let currentZoom = 1.15;
 let sourceRenderToken = 0;
 let renderedResultTaskId = null;
 let renderedMarkdownKey = '';
+let renderedOfficialLayoutContext = '';
 let renderedJsonKey = '';
 let cachedJsonLines = [];
 let cachedJsonMaxLineLength = 0;
@@ -186,6 +187,19 @@ function reconcileTaskStatus(task) {
     const hasAllOcrResults = Array.isArray(task.ocrResults) && task.ocrResults.length >= batches.length;
     if (task.status === 'processing' && allBatchesCompleted && hasAllOcrResults) {
         return { ...task, status: 'completed', updatedAt: task.updatedAt || Date.now() };
+    }
+    if (task.status === 'processing') {
+        return {
+            ...task,
+            status: 'pending',
+            error: task.error || '上次解析中断，可继续解析。',
+            batches: batches.map((batch) => (
+                batch.status === 'processing'
+                    ? { ...batch, status: 'pending' }
+                    : batch
+            )),
+            updatedAt: task.updatedAt || Date.now()
+        };
     }
     return task;
 }
@@ -440,7 +454,7 @@ function renderTaskList() {
         const item = clone.querySelector('.task-item');
         item.dataset.taskId = task.id;
         item.classList.toggle('active', task.id === activeTaskId);
-        item.classList.add(`status-${task.status}`);
+        item.classList.add(`status-${taskVisualStatus(task)}`);
         item.querySelector('.task-icon').innerHTML = taskIcon(task);
         item.querySelector('.task-name').textContent = task.name;
         item.querySelector('.task-meta').textContent = `${formatDate(task.updatedAt)} · ${task.pageCount || 1} 页`;
@@ -463,7 +477,11 @@ function renderTaskList() {
 async function deleteTask(taskId) {
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
-    if (task.status === 'processing') {
+    if (isProcessing && task.id === activeTaskId) {
+        alert('当前文件正在解析中，完成后再删除。');
+        return;
+    }
+    if (task.status === 'processing' && !shouldResumeTask(task)) {
         alert('当前文件正在解析中，完成后再删除。');
         return;
     }
@@ -509,9 +527,10 @@ async function selectTask(taskId) {
     }
     if (activeTaskId !== taskId) return;
     if (!task) return;
+    renderTaskList();
     els.sourceTitle.textContent = task.name;
     els.sourceMeta.textContent = `${sourceLabel(task)} · ${formatSize(task.size)} · ${task.pageCount || 1} 页`;
-    els.resultTitle.textContent = task.status === 'completed' ? '解析结果' : statusText(task);
+    els.resultTitle.textContent = resultPaneTitle(task);
     await renderSource(task);
     renderResultPane(task);
     updateActionState(task);
@@ -611,10 +630,42 @@ function markdownRenderKey(task) {
 function resetResultRenderCache(taskId = null) {
     renderedResultTaskId = taskId;
     renderedMarkdownKey = '';
+    renderedOfficialLayoutContext = '';
     renderedJsonKey = '';
     cachedJsonLines = [];
     cachedJsonMaxLineLength = 0;
     jsonRenderToken += 1;
+}
+
+function resetResultScrollPositions() {
+    els.markdownView.scrollTop = 0;
+    els.jsonView.scrollTop = 0;
+}
+
+function captureResultScrollState() {
+    const element = activeResultView === 'json' ? els.jsonView : els.markdownView;
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    const bottomOffset = maxScrollTop - element.scrollTop;
+    return {
+        element,
+        scrollTop: element.scrollTop,
+        stickToBottom: bottomOffset <= 32
+    };
+}
+
+function restoreResultScrollState(state) {
+    if (!state?.element) return;
+
+    const restore = () => {
+        const maxScrollTop = Math.max(0, state.element.scrollHeight - state.element.clientHeight);
+        state.element.scrollTop = state.stickToBottom
+            ? maxScrollTop
+            : Math.min(state.scrollTop, maxScrollTop);
+    };
+
+    restore();
+    requestAnimationFrame(restore);
+    setTimeout(restore, 80);
 }
 
 function showResultView(view) {
@@ -623,9 +674,10 @@ function showResultView(view) {
     els.jsonView.classList.toggle('hidden', !showJson);
 }
 
-function renderResultPane(task, { deferJson = false } = {}) {
+function renderResultPane(task, { deferJson = false, preserveScroll = true } = {}) {
     if (!task) {
         resetResultRenderCache();
+        resetResultScrollPositions();
         showResultView('markdown');
         els.resultTitle.textContent = '解析结果';
         els.markdownView.innerHTML = '<div class="empty-result">选择左侧任务，或上传一个新文件开始解析。</div>';
@@ -633,15 +685,21 @@ function renderResultPane(task, { deferJson = false } = {}) {
         return;
     }
 
-    if (renderedResultTaskId !== task.id) {
+    const isSameRenderedTask = renderedResultTaskId === task.id;
+    const scrollState = preserveScroll && isSameRenderedTask
+        ? captureResultScrollState()
+        : null;
+
+    if (!isSameRenderedTask) {
         resetResultRenderCache(task.id);
+        resetResultScrollPositions();
     }
 
     els.resultTitle.textContent = resultPaneTitle(task);
 
     if (activeResultView === 'json') {
         showResultView('json');
-        renderJsonResult(task, { defer: deferJson });
+        renderJsonResult(task, { defer: deferJson, scrollState });
         return;
     }
 
@@ -649,27 +707,35 @@ function renderResultPane(task, { deferJson = false } = {}) {
     const markdownKey = markdownRenderKey(task);
     if (renderedMarkdownKey === markdownKey) {
         warmJsonResultCache(task);
+        restoreResultScrollState(scrollState);
         return;
     }
 
-    if (renderOfficialLayoutResult(task)) {
+    const officialRender = renderOfficialLayoutResult(task);
+    if (officialRender.rendered) {
         renderedMarkdownKey = markdownKey;
-        renderMathWhenReady(els.markdownView);
+        if (officialRender.changed) {
+            officialRender.mathRoots.forEach((root) => renderMathWhenReady(root));
+        }
         warmJsonResultCache(task);
+        restoreResultScrollState(scrollState);
         return;
     }
 
     const markdown = prepareMarkdownForRender(task.markdown || '');
     if (!markdown) {
+        renderedOfficialLayoutContext = '';
         clearSourceHighlight();
         clearSourceHotspots();
         els.markdownView.innerHTML = `<div class="empty-result">${escapeHtml(emptyResultText(task))}</div>`;
         renderedMarkdownKey = markdownKey;
         warmJsonResultCache(task);
+        restoreResultScrollState(scrollState);
         return;
     }
 
     let renderMarkdown = markdown;
+    renderedOfficialLayoutContext = '';
     Object.entries(task.images || {}).forEach(([path, base64]) => {
         renderMarkdown = renderMarkdown.split(path).join(`data:image/jpeg;base64,${base64}`);
     });
@@ -679,20 +745,25 @@ function renderResultPane(task, { deferJson = false } = {}) {
     renderedMarkdownKey = markdownKey;
     renderMathWhenReady(els.markdownView);
     warmJsonResultCache(task);
+    restoreResultScrollState(scrollState);
 }
 
-function renderJsonResult(task, { defer = false } = {}) {
+function renderJsonResult(task, { defer = false, scrollState = null } = {}) {
     const key = resultDataKey(task);
     if (renderedJsonKey === key) {
         renderVisibleJsonLines();
+        restoreResultScrollState(scrollState);
         return;
     }
 
     const render = () => {
         cacheJsonLines(JSON.stringify(toOfficialJson(task), null, 2));
         renderedJsonKey = key;
-        els.jsonView.scrollTop = 0;
+        if (!scrollState) {
+            els.jsonView.scrollTop = 0;
+        }
         renderVisibleJsonLines();
+        restoreResultScrollState(scrollState);
     };
 
     if (!defer) {
@@ -776,28 +847,39 @@ async function processTask(task, { confirmCompleted = true } = {}) {
 
     isProcessing = true;
     try {
+        const resumeExistingResults = shouldResumeTask(task);
+        if (resumeExistingResults) {
+            task.batches.forEach((batch) => {
+                if (batch.status === 'processing') batch.status = 'pending';
+            });
+            rebuildTaskResultFromCompletedBatches(task);
+        } else {
+            task.markdown = '';
+            task.images = {};
+            task.ocrResults = [];
+            task.batches.forEach((batch) => {
+                batch.status = 'pending';
+                batch.markdown = '';
+            });
+        }
         task.status = 'processing';
-        task.markdown = '';
-        task.images = {};
-        task.ocrResults = [];
-        task.batches.forEach((batch) => {
-            batch.status = 'pending';
-            batch.markdown = '';
-        });
+        task.error = null;
         task.updatedAt = Date.now();
         await saveTask(task);
         refreshTaskUi(task);
 
         for (const batch of task.batches) {
+            if (batch.status === 'completed') continue;
             batch.status = 'processing';
             task.updatedAt = Date.now();
+            await saveTask(task);
             refreshTaskUi(task);
 
             const result = await callVLLM(batch);
             const prepared = prepareBatchResult(result, batch.id);
             batch.status = 'completed';
             batch.markdown = prepared.markdown;
-            task.markdown += `${prepared.markdown}\n\n`;
+            appendTaskMarkdown(task, prepared.markdown);
             Object.assign(task.images, prepared.images);
             task.ocrResults.push(...normalizeOCRJsonResults(result));
             task.updatedAt = Date.now();
@@ -815,6 +897,55 @@ async function processTask(task, { confirmCompleted = true } = {}) {
         await saveTask(task);
         refreshTaskUi(task);
     }
+}
+
+function shouldResumeTask(task) {
+    const canResumeStatus = task?.status === 'pending' || task?.status === 'processing';
+    if (!canResumeStatus) return false;
+
+    if (Array.isArray(task?.batches)) {
+        const completedBatchCount = task.batches.filter((batch) => batch.status === 'completed').length;
+        const hasPendingBatch = task.batches.some((batch) => batch.status !== 'completed');
+        return completedBatchCount > 0 && hasPendingBatch;
+    }
+
+    const completedPages = Number(task?.completedPages || 0);
+    const pageCount = Number(task?.pageCount || 0);
+    return completedPages > 0 && (!pageCount || completedPages < pageCount);
+}
+
+function taskVisualStatus(task) {
+    return shouldResumeTask(task) ? 'pending' : (task?.status || 'pending');
+}
+
+function rebuildTaskResultFromCompletedBatches(task) {
+    const completedBatches = task.batches.filter((batch) => batch.status === 'completed');
+    if (completedBatches.length === 0) return;
+
+    const existingMarkdown = task.markdown || '';
+    const hasBatchMarkdown = completedBatches.some((batch) => batch.markdown);
+    if (!existingMarkdown && hasBatchMarkdown) {
+        task.markdown = completedBatches
+            .map((batch) => batch.markdown || '')
+            .filter(Boolean)
+            .join('\n\n');
+    }
+
+    if (!task.images || typeof task.images !== 'object') {
+        task.images = {};
+    }
+    if (!Array.isArray(task.ocrResults)) {
+        task.ocrResults = [];
+    }
+}
+
+function appendTaskMarkdown(task, markdown) {
+    const text = String(markdown || '');
+    if (!text) return;
+    if (task.markdown && !task.markdown.endsWith('\n\n')) {
+        task.markdown += '\n\n';
+    }
+    task.markdown += `${text}\n\n`;
 }
 
 function refreshTaskUi(task) {
@@ -860,17 +991,22 @@ async function callVLLM(batch) {
 
 function updateActionState(task) {
     const hasResult = Boolean(task?.markdown) || Boolean(task?.ocrResults?.length);
-    els.startBtn.disabled = !task || !isTaskDetailLoaded(task) || isProcessing || task.status === 'processing';
+    els.startBtn.disabled = !task || !isTaskDetailLoaded(task) || isProcessing;
     els.copyBtn.disabled = !task?.markdown;
     els.downloadBtn.disabled = !hasResult;
-    const startLabel = task?.status === 'completed'
-        ? '重新解析'
-        : task?.status === 'error'
-            ? '重试解析'
-            : '开始解析';
-    els.startBtn.innerHTML = task?.status === 'processing'
+    const startLabel = startButtonLabel(task);
+    const showProcessing = isProcessing && task?.status === 'processing';
+    els.startBtn.innerHTML = showProcessing
         ? '<span class="spinner"></span>解析中'
         : `<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>${startLabel}`;
+}
+
+function startButtonLabel(task) {
+    if (!task) return '开始解析';
+    if (task.status === 'completed') return '重新解析';
+    if (task.status === 'error') return '重试解析';
+    if (shouldResumeTask(task)) return '继续解析';
+    return '开始解析';
 }
 
 async function copyActiveMarkdown() {
@@ -1085,28 +1221,94 @@ function renderMathWhenReady(container, retries = 20) {
 
 function renderOfficialLayoutResult(task) {
     const blocks = collectOfficialRenderBlocks(task);
-    if (!blocks.length) return false;
+    if (!blocks.length) return { rendered: false, changed: false, mathRoots: [] };
 
-    clearSourceHighlight();
-    clearSourceHotspots();
-    els.markdownView.innerHTML = '';
+    const context = officialLayoutRenderContext(task);
+    const expectedKeys = blocks.map(officialLayoutBlockKey);
+    const children = Array.from(els.markdownView.children);
+    const existingBlocks = children.filter((element) => element.classList.contains('official-layout-block'));
+    const hasOnlyOfficialBlocks = children.length === existingBlocks.length;
+    const existingKeys = existingBlocks.map((element) => element.dataset.blockKey || '');
+    const canAppend = hasOnlyOfficialBlocks
+        && renderedOfficialLayoutContext === context
+        && existingKeys.length <= expectedKeys.length
+        && existingKeys.every((key, index) => key === expectedKeys[index]);
 
-    blocks.forEach((block) => {
-        const element = document.createElement('section');
-        element.className = 'layout-linked-block official-layout-block';
-        element.dataset.layoutLabel = layoutLabelText(block.label);
-        element.dataset.page = String(block.page);
-        element.dataset.blockIndex = String(block.blockIndex);
+    const appendedElements = [];
+    const fullRebuild = !canAppend;
+    if (fullRebuild) {
+        clearSourceHighlight();
+        clearSourceHotspots();
+        els.markdownView.replaceChildren();
+        renderedOfficialLayoutContext = context;
+    }
 
-        const content = rewriteBlockImageSources(block.content || fallbackBlockContent(block), block.pageResult, task);
-        element.innerHTML = renderMarkdownHtml(content);
-        els.markdownView.appendChild(element);
+    const startIndex = canAppend ? existingKeys.length : 0;
+    if (startIndex === expectedKeys.length) {
+        return { rendered: true, changed: false, mathRoots: [] };
+    }
 
-        addSourceHotspot(block, element);
-        bindLinkedBlockEvents(element, block);
+    const fragment = document.createDocumentFragment();
+    blocks.slice(startIndex).forEach((block, offset) => {
+        const blockIndex = startIndex + offset;
+        const element = createOfficialLayoutBlockElement(block, expectedKeys[blockIndex], task);
+        appendedElements.push(element);
+        fragment.appendChild(element);
     });
+    els.markdownView.appendChild(fragment);
+    renderedOfficialLayoutContext = context;
 
-    return true;
+    return {
+        rendered: true,
+        changed: true,
+        mathRoots: fullRebuild ? [els.markdownView] : appendedElements
+    };
+}
+
+function createOfficialLayoutBlockElement(block, blockKey, task) {
+    const element = document.createElement('section');
+    element.className = 'layout-linked-block official-layout-block';
+    element.dataset.blockKey = blockKey;
+    element.dataset.layoutLabel = layoutLabelText(block.label);
+    element.dataset.page = String(block.page);
+    element.dataset.blockIndex = String(block.blockIndex);
+
+    const content = rewriteBlockImageSources(block.content || fallbackBlockContent(block), block.pageResult, task);
+    element.innerHTML = renderMarkdownHtml(content);
+
+    addSourceHotspot(block, element);
+    bindLinkedBlockEvents(element, block);
+    return element;
+}
+
+function officialLayoutRenderContext(task) {
+    return [
+        task?.id || '',
+        sourceRenderToken,
+        currentZoom,
+        els.ignoreNumberSwitch.checked,
+        els.ignoreHeaderSwitch.checked,
+        els.ignoreFooterSwitch.checked
+    ].join(':');
+}
+
+function officialLayoutBlockKey(block) {
+    return [
+        block.page,
+        block.blockIndex,
+        String(block.label || '').toLowerCase(),
+        Array.isArray(block.bbox) ? block.bbox.join(',') : '',
+        shortHash(block.content || fallbackBlockContent(block))
+    ].join(':');
+}
+
+function shortHash(value) {
+    const text = String(value || '');
+    let hash = 5381;
+    for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash << 5) + hash) ^ text.charCodeAt(index);
+    }
+    return (hash >>> 0).toString(36);
 }
 
 function collectOfficialRenderBlocks(task) {
@@ -1598,6 +1800,7 @@ function taskIcon(task) {
 function statusText(task) {
     const donePages = task.batches?.filter((batch) => batch.status === 'completed').reduce((sum, batch) => sum + batch.pageCount, 0) || task.completedPages || 0;
     if (task.status === 'completed') return '完成';
+    if (shouldResumeTask(task)) return `${donePages}/${task.pageCount || 1} 可继续`;
     if (task.status === 'processing') return `${donePages}/${task.pageCount || 1}`;
     if (task.status === 'error') return '失败';
     return '待解析';
@@ -1605,12 +1808,14 @@ function statusText(task) {
 
 function resultPaneTitle(task) {
     if (task.status === 'completed') return '解析结果';
+    if (shouldResumeTask(task)) return '解析中断';
     if (task.status === 'processing') return '解析中';
     if (task.status === 'error') return '解析失败';
     return '待解析';
 }
 
 function emptyResultText(task) {
+    if (shouldResumeTask(task)) return '上次解析中断，点击“继续解析”从未完成页面恢复。';
     if (task.status === 'processing') return '正在解析，结果会实时追加到这里。';
     if (task.status === 'error') return `解析失败：${task.error || '未知错误'}`;
     return '点击“开始解析”生成 Markdown 或 JSON 结果。';

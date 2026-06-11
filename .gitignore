@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv-macos/
 ENV/
 env.bak/
 venv.bak/
@@ -44,6 +45,9 @@ data/tasks/
 ocr_results_*.md
 ocr_results_*.zip
 *.log
+logs/
+run/
+config_probe/
 
 # PaddleOCR Demo (user provided reference, keep in repo but ignore data)
 PaddleOCR-VL_Online_Demo/assets/*

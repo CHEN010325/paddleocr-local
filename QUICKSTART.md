@@ -1,5 +1,32 @@
 # 快速开始
 
+完整部署说明统一维护在 `README.md` 的“部署方式”章节；那里分为 NVIDIA Docker 版本和 macOS Apple Silicon 版本。
+
+## macOS Apple Silicon
+
+Apple M1/M2/M3/M4 使用本地部署：
+
+```bash
+make mac-setup
+make mac-up
+```
+
+```bash
+make mac-test
+make mac-down
+```
+
+MLX-VLM 提速模式：
+
+```bash
+make mac-setup-mlx
+make mac-down
+make mac-up-mlx
+make mac-test-mlx
+```
+
+NVIDIA 用户继续使用下面的 Docker 流程。
+
 ## 1. 检查环境
 
 ```powershell

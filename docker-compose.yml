@@ -5,12 +5,13 @@ services:
     command: /bin/bash /home/paddleocr/start-vlm.sh
     environment:
       - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+      - PADDLEOCR_VL_MODEL_NAME=${PADDLEOCR_VL_MODEL_NAME:-PaddleOCR-VL-1.6-0.9B}
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]
+              device_ids: ["${PANDOCR_GPU_DEVICE_ID:-0}"]
               capabilities: [gpu]
     user: root
     restart: unless-stopped
@@ -22,8 +23,8 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 300s
+      retries: 5
+      start_period: 900s
     networks:
       - paddleocr-network
 
@@ -43,7 +44,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]
+              device_ids: ["${PANDOCR_GPU_DEVICE_ID:-0}"]
               capabilities: [gpu]
     user: root
     restart: unless-stopped
@@ -56,11 +57,13 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 300s
     networks:
       - paddleocr-network
 
   pandocr-web:
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile

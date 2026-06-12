@@ -59,7 +59,7 @@ nvidia-smi
 ## 2. 拉取并构建
 
 ```powershell
-docker compose --env-file env.txt pull
+docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 docker compose --env-file env.txt build pandocr-web
 ```
 
@@ -100,6 +100,50 @@ curl http://localhost:8081/health
 - 历史任务会保存到本机 `data/tasks/`，侧边栏删除按钮会同时删除对应本地记录。
 
 ## 常见问题
+
+### 拉取镜像时出现 `pandocr-web:latest` 403
+
+如果日志里出现类似：
+
+```text
+failed to resolve reference "docker.io/library/pandocr-web:latest"
+unexpected status ... docker.m.daocloud.io ... 403 Forbidden
+```
+
+说明 Docker 正在尝试从远端仓库拉取 `pandocr-web:latest`。这个镜像应该在本机从项目源码构建，不需要从 Docker Hub 拉取。请先更新到最新代码，然后使用：
+
+```powershell
+docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
+docker compose --env-file env.txt build pandocr-web
+docker compose --env-file env.txt up -d
+```
+
+不要单独执行旧版本文档里的 `docker compose --env-file env.txt pull`。如果 403 出现在其他 Docker Hub 镜像上，再检查 Docker Desktop 的 registry mirror 配置，移除或更换返回 403 的 `docker.m.daocloud.io` 镜像源。
+
+### `paddleocr-vlm-server is unhealthy`
+
+`paddleocr-vlm-server` 是最底层的 VLM 推理服务。它没有健康起来时，后面的 `paddleocr-vl-api` 和 `pandocr-web` 都会被依赖关系卡住。先看它自己的日志：
+
+```powershell
+docker compose --env-file env.txt logs --tail=200 paddleocr-vlm-server
+```
+
+如果你使用 RTX 30/40 系列，命令里的 `env.txt` 要换成 `env.docker`：
+
+```powershell
+docker compose --env-file env.docker pull paddleocr-vlm-server paddleocr-vl-api
+docker compose --env-file env.docker build pandocr-web
+docker compose --env-file env.docker up -d
+```
+
+如果之前已经启动失败过，先清掉旧的 unhealthy 容器再重启：
+
+```powershell
+docker compose --env-file env.txt down
+docker compose --env-file env.txt up -d --force-recreate
+```
+
+首次启动 VLM 会加载模型，可能需要 10-15 分钟。若日志提示显存不足，请关闭占用 GPU 的程序，或在 `env.txt` / `env.docker` 中把 `PANDOCR_GPU_DEVICE_ID` 改成另一张空闲显卡的编号。
 
 ### 端口占用
 

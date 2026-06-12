@@ -55,7 +55,7 @@ NVIDIA Compose 只保留 3 个服务：
 下面命令以 RTX 50 系列的 `env.txt` 为例；RTX 30/40 系列用户把命令里的 `env.txt` 换成 `env.docker` 即可。
 
 ```powershell
-docker compose --env-file env.txt pull
+docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 docker compose --env-file env.txt build pandocr-web
 docker compose --env-file env.txt up -d
 ```
@@ -81,6 +81,7 @@ docker compose --env-file env.txt ps
 API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
 VLM_BACKEND=vllm
 VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
+PANDOCR_GPU_DEVICE_ID=0
 PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6-0.9B
 PADDLE_REQUEST_TIMEOUT=3600
 PANDOCR_CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000

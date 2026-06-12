@@ -55,7 +55,7 @@ Choose the environment file based on your GPU model:
 The commands below use `env.txt` for RTX 50 series as an example. For RTX 30/40 series, replace `env.txt` with `env.docker`.
 
 ```powershell
-docker compose --env-file env.txt pull
+docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 docker compose --env-file env.txt build pandocr-web
 docker compose --env-file env.txt up -d
 ```
@@ -81,6 +81,7 @@ Common environment variables:
 API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
 VLM_BACKEND=vllm
 VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
+PANDOCR_GPU_DEVICE_ID=0
 PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6-0.9B
 PADDLE_REQUEST_TIMEOUT=3600
 PANDOCR_CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000

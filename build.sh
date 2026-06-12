@@ -29,7 +29,7 @@ EOF
 fi
 
 echo "Pulling PaddleOCR-VL images..."
-docker compose --env-file env.txt pull
+docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 
 echo "Building pandocr-web..."
 docker compose --env-file env.txt build pandocr-web

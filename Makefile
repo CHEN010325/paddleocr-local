@@ -26,7 +26,7 @@ help:
 # 构建镜像
 build:
 	@echo "🔨 构建 Docker 镜像..."
-	docker compose --env-file env.txt pull
+	docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 	docker compose --env-file env.txt build pandocr-web
 
 # 部署（构建 + 启动）

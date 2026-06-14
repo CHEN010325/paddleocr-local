@@ -915,7 +915,7 @@ svg {
 }
 
 .markdown-preview.ocr-visual-mode {
-    padding: 18px 24px 34px;
+    padding: 18px 24px;
 }
 
 .ocr-visual-flow {
@@ -925,8 +925,8 @@ svg {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 22px;
-    padding: 0 0 32px;
+    gap: 18px;
+    padding: 0;
 }
 
 .ocr-visual-page {
@@ -948,6 +948,10 @@ svg {
 
 .ocr-page-stage.loading {
     min-height: 420px;
+}
+
+.ocr-page-stage.loading.sized {
+    min-height: 0;
 }
 
 .ocr-page-stage.loading::after {

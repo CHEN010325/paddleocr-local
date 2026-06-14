@@ -56,7 +56,7 @@ For Windows NVIDIA users, the recommended path is the one-click script:
 .\windows-one-click.bat
 ```
 
-It checks Docker, detects the NVIDIA GPU, selects `env.txt` or `env.docker`, pulls the official PaddleOCR-VL images, builds `pandocr-web`, clears old containers, creates all model containers without starting both models, starts the WebUI, waits for the active model health check, and prints key logs on failure.
+It checks Docker, detects the NVIDIA GPU, selects `env.txt` or `env.docker`, pulls the official PaddleOCR-VL images, builds `pandocr-web`, clears old containers, creates all model containers without starting both models, starts the WebUI, waits for the active model health check, and prints key `paddleocr-vlm-server`, `paddleocr-vl-api`, `paddleocr-ocr-api`, and `pandocr-web` logs on failure.
 
 Useful one-click options:
 
@@ -85,6 +85,8 @@ docker compose --env-file env.txt up -d --no-start
 docker compose --env-file env.txt start pandocr-web
 ```
 
+Keep this `up -d --no-start` then `start pandocr-web` order for single-GPU deployments. Starting the whole compose stack with a plain `docker compose up -d` can hot-load PaddleOCR-VL and PP-OCRv6 at the same time and waste VRAM. After the WebUI is online, use the top-right model selector to switch models; the UI calls `/api/model-runtime/switch`, starts only the selected model containers, stops the inactive model containers, and keeps the runtime badge synchronized with the real container state.
+
 Open:
 
 - WebUI: http://localhost:8000
@@ -97,6 +99,8 @@ Check status:
 
 ```powershell
 docker compose --env-file env.txt ps
+curl http://localhost:8000/api/model-runtime
+curl http://localhost:8000/api/models
 ```
 
 Common environment variables:

@@ -949,9 +949,6 @@ async function renderPdfDocument(renderToken = sourceRenderToken, scrollAnchor =
         flow.appendChild(wrap);
 
         await page.render({ canvasContext: context, viewport }).promise;
-        if (pageNumber === 1) {
-            renderPPOCRVisualWhenSourceReady(renderToken);
-        }
     }
 
     if (scrollAnchor) {
@@ -1090,8 +1087,6 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
 
     if (ppocrVisualTask) {
         renderedOfficialLayoutContext = '';
-        clearSourceHighlight();
-        clearSourceHotspots();
         renderPPOCRVisualResult(task, markdownKey, scrollState);
         warmJsonResultCache(task);
         return;
@@ -1204,13 +1199,6 @@ function isPPOCRVisualTask(task) {
         || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === 'pp-ocrv6'));
 }
 
-function renderPPOCRVisualWhenSourceReady(renderToken) {
-    if (renderToken !== sourceRenderToken) return;
-    const task = getActiveTask();
-    if (!task || !isPPOCRVisualTask(task) || activeResultView !== 'markdown') return;
-    renderResultPane(task, { preserveScroll: false });
-}
-
 function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
     const pages = collectPPOCRVisualPages(task);
     const context = ppocrVisualRenderContext(task);
@@ -1221,6 +1209,8 @@ function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
             && els.markdownView.firstElementChild?.classList.contains('empty-result')
             && renderedPPOCRVisualContext === context;
         if (!hasEmptyResult) {
+            clearSourceHighlight();
+            clearSourceHotspots();
             els.markdownView.innerHTML = `<div class="empty-result">${escapeHtml(emptyResultText(task))}</div>`;
         }
         renderedPPOCRVisualContext = context;
@@ -1241,7 +1231,15 @@ function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
         && existingKeys.length <= expectedKeys.length
         && existingKeys.every((key, index) => key === expectedKeys[index]);
 
+    if (canAppend && existingKeys.length === expectedKeys.length) {
+        renderedMarkdownKey = markdownKey;
+        restoreResultScrollState(visualScrollState);
+        return;
+    }
+
     if (!canAppend) {
+        clearSourceHighlight();
+        clearSourceHotspots();
         flow = document.createElement('div');
         flow.className = 'ocr-visual-flow';
         els.markdownView.replaceChildren(flow);
@@ -1380,6 +1378,10 @@ function createPPOCRVisualPage(page, pageIndex, pageKey = '') {
 
     const stage = document.createElement('div');
     stage.className = 'ocr-page-stage loading';
+    const displaySize = getPPOCRPageDisplaySize(page);
+    if (displaySize) {
+        applyPPOCRStageDisplaySize(stage, displaySize.width, displaySize.height);
+    }
     pageElement.appendChild(stage);
 
     const toolbar = createPPOCRFloatingToolbar();
@@ -1389,22 +1391,47 @@ function createPPOCRVisualPage(page, pageIndex, pageKey = '') {
         const img = document.createElement('img');
         img.className = 'ocr-page-image';
         img.alt = `OCR page ${page.pageNumber || pageIndex + 1}`;
-        img.src = imageValueToSrc(page.pageImage);
-        stage.appendChild(img);
         img.addEventListener('load', () => {
             stage.classList.remove('loading');
-            layoutPPOCRTextLayer(stage, page, img.naturalWidth, img.naturalHeight, toolbar, img);
+            const coordinateWidth = img.naturalWidth || displaySize?.width || 1;
+            const coordinateHeight = img.naturalHeight || displaySize?.height || 1;
+            layoutPPOCRTextLayer(stage, page, coordinateWidth, coordinateHeight, toolbar, img);
+            syncPPOCRVisualScrollFromSource();
         }, { once: true });
         img.addEventListener('error', () => {
             stage.classList.remove('loading');
             createPPOCRTextOnlyLayer(stage, page.lines, toolbar);
         }, { once: true });
+        if (displaySize) {
+            applyPPOCRStageDisplaySize(stage, displaySize.width, displaySize.height, img);
+        }
+        stage.appendChild(img);
+        img.src = imageValueToSrc(page.pageImage);
     } else {
         stage.classList.remove('loading');
         createPPOCRTextOnlyLayer(stage, page.lines, toolbar);
     }
 
     return pageElement;
+}
+
+function getPPOCRPageDisplaySize(page) {
+    const sourceSize = getSourcePageDisplaySize(page.pageNumber);
+    if (sourceSize?.width && sourceSize?.height) return sourceSize;
+    return null;
+}
+
+function applyPPOCRStageDisplaySize(stage, width, height, imageElement = null) {
+    if (!stage || !width || !height) return;
+    const roundedWidth = Math.round(width);
+    const roundedHeight = Math.round(height);
+    stage.classList.add('sized');
+    stage.style.width = `${roundedWidth}px`;
+    stage.style.height = `${roundedHeight}px`;
+    if (imageElement) {
+        imageElement.style.width = `${roundedWidth}px`;
+        imageElement.style.height = `${roundedHeight}px`;
+    }
 }
 
 function createPPOCRFloatingToolbar() {
@@ -1818,112 +1845,47 @@ function schedulePPOCRSourceScrollSync() {
 
 function handlePPOCRMarkdownScroll() {
     schedulePPOCRSourceScrollSync();
-    queueHorizontalScrollOnly(els.markdownView, els.sourceViewer);
-}
-
-function syncHorizontalScrollOnly(fromContainer, toContainer) {
-    const task = getActiveTask();
-    if (!isPPOCRVisualTask(task) || activeResultView !== 'markdown') return;
-    if (splitScrollSyncLocked || !fromContainer || !toContainer) return;
-    const targetLeft = horizontalScrollTarget(toContainer, horizontalScrollRatio(fromContainer));
-    if (Math.abs((toContainer.scrollLeft || 0) - targetLeft) < 1) return;
-    withSplitScrollLock(() => {
-        toContainer.scrollLeft = targetLeft;
-    });
-}
-
-function queueHorizontalScrollOnly(fromContainer, toContainer) {
-    syncHorizontalScrollOnly(fromContainer, toContainer);
-    window.setTimeout(() => {
-        syncHorizontalScrollOnly(fromContainer, toContainer);
-    }, 120);
 }
 
 function syncSourceScrollFromPPOCRVisual() {
     const task = getActiveTask();
     if (!isPPOCRVisualTask(task) || activeResultView !== 'markdown') return;
     if (!currentPdf || !els.sourceViewer || !els.markdownView) return;
-
-    const visualPage = getActivePPOCRVisualPage();
-    if (!visualPage) return;
-
-    const pageNumber = Number(visualPage.dataset.page || 1);
-    const sourcePage = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${pageNumber}"]`);
-    if (!sourcePage) return;
-
-    const stage = visualPage.querySelector('.ocr-page-stage') || visualPage;
-    const markdownRect = els.markdownView.getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
-    const sourceScrollable = Math.max(0, sourcePage.offsetHeight - els.sourceViewer.clientHeight);
-    const visualScrollable = Math.max(1, stageRect.height - els.markdownView.clientHeight);
-    const progress = Math.min(Math.max((markdownRect.top - stageRect.top) / visualScrollable, 0), 1);
-    const pageTop = sourcePageTop(sourcePage);
-    const targetTop = Math.max(0, pageTop + progress * sourceScrollable);
-
-    withSplitScrollLock(() => {
-        els.sourceViewer.scrollTo({
-            top: targetTop,
-            left: horizontalScrollTarget(els.sourceViewer, horizontalScrollRatio(els.markdownView)),
-            behavior: 'auto'
-        });
-    });
-    if (pageNumber !== currentPage) {
-        currentPage = pageNumber;
-        updatePdfControls();
-    }
+    syncPairedPPOCRScroll(els.markdownView, els.sourceViewer);
+    updateCurrentPageFromScroll();
 }
 
 function syncPPOCRVisualScrollFromSource() {
     const task = getActiveTask();
     if (!isPPOCRVisualTask(task) || activeResultView !== 'markdown') return;
     if (!currentPdf || !els.sourceViewer || !els.markdownView) return;
+    syncPairedPPOCRScroll(els.sourceViewer, els.markdownView);
+}
 
-    const sourcePage = getActiveSourcePage();
-    if (!sourcePage) return;
-
-    const pageNumber = Number(sourcePage.dataset.page || currentPage || 1);
-    const visualPage = els.markdownView.querySelector(`.ocr-visual-page[data-page="${pageNumber}"]`);
-    if (!visualPage) return;
-
-    const stage = visualPage.querySelector('.ocr-page-stage') || visualPage;
-    const sourceScrollable = Math.max(1, sourcePage.offsetHeight - els.sourceViewer.clientHeight);
-    const sourceProgress = Math.min(Math.max((els.sourceViewer.scrollTop - sourcePageTop(sourcePage)) / sourceScrollable, 0), 1);
-    const visualScrollable = Math.max(0, stage.offsetHeight - els.markdownView.clientHeight);
-    const visualTop = pageNumber <= 1
-        ? 0
-        : visualPage.offsetTop - els.markdownView.offsetTop - 12;
-    const targetTop = Math.max(0, visualTop + sourceProgress * visualScrollable);
-
+function syncPairedPPOCRScroll(fromContainer, toContainer) {
+    if (splitScrollSyncLocked || !fromContainer || !toContainer) return;
+    const targetTop = directScrollTarget(toContainer, fromContainer.scrollTop || 0, 'top');
+    const targetLeft = directScrollTarget(toContainer, fromContainer.scrollLeft || 0, 'left');
+    if (
+        Math.abs((toContainer.scrollTop || 0) - targetTop) < 1
+        && Math.abs((toContainer.scrollLeft || 0) - targetLeft) < 1
+    ) {
+        return;
+    }
     withSplitScrollLock(() => {
-        els.markdownView.scrollTo({
+        toContainer.scrollTo({
             top: targetTop,
-            left: horizontalScrollTarget(els.markdownView, horizontalScrollRatio(els.sourceViewer)),
+            left: targetLeft,
             behavior: 'auto'
         });
     });
 }
 
-function getActivePPOCRVisualPage() {
-    const pages = Array.from(els.markdownView.querySelectorAll('.ocr-visual-page'));
-    if (!pages.length) return null;
-
-    const viewerRect = els.markdownView.getBoundingClientRect();
-    let bestPage = pages[0];
-    let bestVisibleArea = -1;
-    let nearestDistance = Infinity;
-
-    pages.forEach((page) => {
-        const rect = page.getBoundingClientRect();
-        const visibleHeight = Math.max(0, Math.min(rect.bottom, viewerRect.bottom) - Math.max(rect.top, viewerRect.top));
-        const distance = Math.abs(rect.top - viewerRect.top);
-        if (visibleHeight > bestVisibleArea || (visibleHeight === bestVisibleArea && distance < nearestDistance)) {
-            bestPage = page;
-            bestVisibleArea = visibleHeight;
-            nearestDistance = distance;
-        }
-    });
-
-    return bestPage;
+function directScrollTarget(container, value, axis) {
+    const maxScroll = axis === 'left'
+        ? Math.max(0, container.scrollWidth - container.clientWidth)
+        : Math.max(0, container.scrollHeight - container.clientHeight);
+    return Math.min(Math.max(value, 0), maxScroll);
 }
 
 function ensureJsonVirtualDom() {
@@ -2364,7 +2326,6 @@ function scrollPdfPageIntoView(pageNumber, behavior = 'smooth') {
 function handleSourceViewerScroll() {
     updateCurrentPageFromScroll();
     scheduleSourceToPPOCRScrollSync();
-    queueHorizontalScrollOnly(els.sourceViewer, els.markdownView);
 }
 
 function updateCurrentPageFromScroll() {
@@ -2513,10 +2474,13 @@ function resetSplitHorizontalScroll() {
 
 function withSplitScrollLock(callback) {
     splitScrollSyncLocked = true;
-    callback();
-    window.setTimeout(() => {
-        splitScrollSyncLocked = false;
-    }, 90);
+    try {
+        callback();
+    } finally {
+        requestAnimationFrame(() => {
+            splitScrollSyncLocked = false;
+        });
+    }
 }
 
 function scheduleSourceToPPOCRScrollSync() {

@@ -100,6 +100,8 @@ svg {
 .language-toggle {
     height: 28px;
     min-width: 68px;
+    appearance: none;
+    -webkit-appearance: none;
     display: inline-grid;
     grid-template-columns: 1fr 1fr;
     align-items: center;
@@ -111,15 +113,28 @@ svg {
     cursor: pointer;
     font-size: 12px;
     line-height: 1;
+    white-space: nowrap;
+    box-shadow: none;
+    transition: border-color .16s ease, box-shadow .16s ease;
+}
+
+.language-toggle:hover,
+.language-toggle:focus-visible {
+    border-color: var(--line-strong);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+    outline: none;
 }
 
 .language-toggle span,
 .language-toggle strong {
     height: 22px;
+    min-width: 30px;
     display: grid;
     place-items: center;
     border-radius: 999px;
     font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
 }
 
 .language-toggle strong {
@@ -768,6 +783,18 @@ svg {
     gap: 18px;
 }
 
+.source-image-wrap {
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+.source-image-box {
+    width: fit-content;
+    max-width: 100%;
+    position: relative;
+}
+
 .pdf-page-wrap canvas,
 .source-image {
     display: block;
@@ -779,7 +806,6 @@ svg {
 .source-image {
     max-width: 100%;
     height: auto;
-    margin: 0 auto;
     border-radius: 6px;
 }
 

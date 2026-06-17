@@ -44,6 +44,7 @@ window.PANDOCR_I18N = {
             '开始解析': 'Start parsing',
             '复制': 'Copy',
             '复制 Markdown': 'Copy Markdown',
+            '复制 JSON': 'Copy JSON',
             '已复制': 'Copied',
             '复制失败': 'Copy failed',
             '纠正': 'Correct',

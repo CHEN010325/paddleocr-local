@@ -160,7 +160,7 @@ function setupEventListeners() {
     els.taskSearch.addEventListener('input', renderTaskList);
     els.clearHistoryBtn.addEventListener('click', clearHistory);
     els.startBtn.addEventListener('click', () => processActiveTask());
-    els.copyBtn.addEventListener('click', copyActiveMarkdown);
+    els.copyBtn.addEventListener('click', copyActiveResult);
     els.downloadBtn.addEventListener('click', downloadActiveTask);
     els.prevPageBtn.addEventListener('click', () => changePdfPage(-1));
     els.nextPageBtn.addEventListener('click', () => changePdfPage(1));
@@ -1236,10 +1236,21 @@ async function renderSource(task) {
     els.markdownView.scrollLeft = 0;
 
     if (task.sourceKind === 'image') {
+        const wrap = document.createElement('div');
+        wrap.className = 'source-image-wrap';
+        wrap.dataset.page = '1';
+        const imageBox = document.createElement('div');
+        imageBox.className = 'source-image-box';
         const img = document.createElement('img');
         img.className = 'source-image';
         img.src = task.sourceDataUrl || task.sourceUrl;
-        els.sourceViewer.appendChild(img);
+        imageBox.appendChild(img);
+        const highlightLayer = document.createElement('div');
+        highlightLayer.className = 'pdf-highlight-layer';
+        imageBox.appendChild(highlightLayer);
+        wrap.appendChild(imageBox);
+        els.sourceViewer.appendChild(wrap);
+        await waitForImageReady(img);
         return;
     }
 
@@ -1308,6 +1319,7 @@ function setActiveResultView(view) {
         tab.classList.toggle('active', tab.dataset.view === view);
     });
     renderResultPane(getActiveTask(), { deferJson: true });
+    updateActionState(getActiveTask());
 }
 
 function resultDataKey(task) {
@@ -2448,11 +2460,13 @@ async function callOCR(batch, task) {
     ignoreLabels.push('aside_text');
 
     const formData = new FormData();
+    const filename = batch.fileType === 0 ? `${batch.id}.pdf` : `${batch.id}.image`;
     if (batch.payloadBlob) {
-        const filename = batch.fileType === 0 ? `${batch.id}.pdf` : `${batch.id}.image`;
         formData.append('file', batch.payloadBlob, filename);
+    } else if (batch.payloadDataUrl) {
+        formData.append('file', dataUrlToBlob(batch.payloadDataUrl), filename);
     } else {
-        formData.append('image', batch.payloadDataUrl);
+        throw new Error(t('无法重建当前批次的解析 payload'));
     }
     formData.append('fileType', String(batch.fileType));
     formData.append('useLayoutDetection', 'true');
@@ -2547,7 +2561,7 @@ function updateActionState(task) {
         els.modelSelect.disabled = isProcessing || modelSwitchInFlight || isModelRuntimeSwitching();
     }
     els.startBtn.disabled = !task || !isTaskDetailLoaded(task) || isProcessing || (!modelReady && !canStartAfterSwitch);
-    els.copyBtn.disabled = !task?.markdown;
+    updateCopyButtonState(task);
     els.downloadBtn.disabled = !hasResult;
     const startLabel = startButtonLabel(task);
     const showProcessing = (isProcessing && task?.status === 'processing') || modelStarting;
@@ -2566,12 +2580,47 @@ function startButtonLabel(task) {
     return t('开始解析');
 }
 
-async function copyActiveMarkdown() {
+function hasJsonResult(task) {
+    return Boolean(task?.ocrResults?.length);
+}
+
+function canCopyActiveResult(task) {
+    if (activeResultView === 'json') return hasJsonResult(task);
+    return Boolean(task?.markdown);
+}
+
+function copyButtonLabel() {
+    return activeResultView === 'json' ? t('复制 JSON') : t('复制 Markdown');
+}
+
+function updateCopyButtonState(task) {
+    const label = copyButtonLabel();
+    els.copyBtn.disabled = !canCopyActiveResult(task);
+    els.copyBtn.setAttribute('title', label);
+    els.copyBtn.setAttribute('aria-label', label);
+}
+
+function activeResultCopyText(task) {
+    if (!task) return '';
+    if (activeResultView === 'json') {
+        if (!hasJsonResult(task)) return '';
+        return JSON.stringify(toOfficialJson(task), null, 2);
+    }
+    return task.markdown ? normalizeOCRMarkdown(task.markdown) : '';
+}
+
+async function copyActiveResult() {
     const task = getActiveTask();
-    if (!task?.markdown) return;
-    await navigator.clipboard.writeText(normalizeOCRMarkdown(task.markdown));
-    els.copyBtn.classList.add('success');
-    setTimeout(() => els.copyBtn.classList.remove('success'), 900);
+    const text = activeResultCopyText(task);
+    if (!text) return;
+    try {
+        await writeClipboardText(text);
+        els.copyBtn.classList.add('success');
+        setTimeout(() => els.copyBtn.classList.remove('success'), 900);
+    } catch (error) {
+        console.error(error);
+        alert(error.message || t('复制失败'));
+    }
 }
 
 async function downloadActiveTask() {
@@ -2674,7 +2723,7 @@ async function resetZoom() {
 }
 
 function scrollPdfPageIntoView(pageNumber, behavior = 'smooth') {
-    const page = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${pageNumber}"]`);
+    const page = sourcePageSurface(pageNumber)?.container;
     if (!page) return;
     const top = Number(pageNumber) <= 1 ? 0 : page.offsetTop - els.sourceViewer.offsetTop - 12;
     els.sourceViewer.scrollTo({ top: Math.max(top, 0), behavior });
@@ -3377,29 +3426,25 @@ function normalizeMatchText(value) {
 
 function showSourceHighlight(block) {
     clearSourceHighlight();
-    const pageWrap = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${block.page}"]`);
-    const canvas = pageWrap?.querySelector('canvas');
-    const layer = pageWrap?.querySelector('.pdf-highlight-layer');
-    if (!pageWrap || !canvas || !layer) return;
+    const surface = sourcePageSurface(block.page);
+    if (!surface) return;
 
     const box = document.createElement('div');
     box.className = 'source-highlight-box';
-    positionSourceOverlayBox(box, block, canvas);
+    positionSourceOverlayBox(box, block, surface.element);
     const label = document.createElement('span');
     label.className = 'source-highlight-label';
     label.textContent = layoutLabelText(block.label);
     box.appendChild(label);
-    layer.appendChild(box);
+    surface.layer.appendChild(box);
 
 }
 
 function showPPOCRSourceHighlight(line) {
     if (!line?.box || !line.pageWidth || !line.pageHeight) return;
     clearSourceHighlight();
-    const pageWrap = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${line.sourcePage}"]`);
-    const canvas = pageWrap?.querySelector('canvas');
-    const layer = pageWrap?.querySelector('.pdf-highlight-layer');
-    if (!pageWrap || !canvas || !layer) return;
+    const surface = sourcePageSurface(line.sourcePage);
+    if (!surface) return;
 
     const box = document.createElement('div');
     box.className = 'source-highlight-box source-highlight-box-ocr';
@@ -3407,8 +3452,8 @@ function showPPOCRSourceHighlight(line) {
         bbox: line.box,
         pageWidth: line.pageWidth,
         pageHeight: line.pageHeight
-    }, canvas);
-    layer.appendChild(box);
+    }, surface.element);
+    surface.layer.appendChild(box);
 }
 
 function clearSourceHighlight() {
@@ -3417,10 +3462,8 @@ function clearSourceHighlight() {
 
 function addPPOCRSourceHotspot(line, markdownElement, toolbar) {
     if (!line?.box || !line.pageWidth || !line.pageHeight) return;
-    const pageWrap = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${line.sourcePage}"]`);
-    const canvas = pageWrap?.querySelector('canvas');
-    const layer = pageWrap?.querySelector('.pdf-highlight-layer');
-    if (!pageWrap || !canvas || !layer) return;
+    const surface = sourcePageSurface(line.sourcePage);
+    if (!surface) return;
 
     const hotspot = document.createElement('button');
     hotspot.type = 'button';
@@ -3433,7 +3476,7 @@ function addPPOCRSourceHotspot(line, markdownElement, toolbar) {
         bbox: line.box,
         pageWidth: line.pageWidth,
         pageHeight: line.pageHeight
-    }, canvas);
+    }, surface.element);
 
     const preview = () => {
         activatePPOCRLine(markdownElement, toolbar, line, { scrollSource: false });
@@ -3447,20 +3490,18 @@ function addPPOCRSourceHotspot(line, markdownElement, toolbar) {
     hotspot.addEventListener('pointerenter', preview);
     hotspot.addEventListener('focusin', preview);
     hotspot.addEventListener('click', locate);
-    layer.appendChild(hotspot);
+    surface.layer.appendChild(hotspot);
 }
 
 function addSourceHotspot(block, markdownElement) {
-    const pageWrap = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${block.page}"]`);
-    const canvas = pageWrap?.querySelector('canvas');
-    const layer = pageWrap?.querySelector('.pdf-highlight-layer');
-    if (!pageWrap || !canvas || !layer) return;
+    const surface = sourcePageSurface(block.page);
+    if (!surface) return;
 
     const hotspot = document.createElement('button');
     hotspot.type = 'button';
     hotspot.className = 'source-link-hotspot';
     hotspot.setAttribute('aria-label', layoutLabelText(block.label));
-    positionSourceOverlayBox(hotspot, block, canvas);
+    positionSourceOverlayBox(hotspot, block, surface.element);
 
     const preview = () => activateLinkedBlock(markdownElement, block);
     const locate = () => activateLinkedBlock(markdownElement, block, { scrollMarkdown: true });
@@ -3474,17 +3515,36 @@ function addSourceHotspot(block, markdownElement) {
     hotspot.addEventListener('pointerleave', deactivate);
     hotspot.addEventListener('focusout', deactivate);
 
-    layer.appendChild(hotspot);
+    surface.layer.appendChild(hotspot);
 }
 
-function positionSourceOverlayBox(element, block, canvas) {
+function sourcePageSurface(pageNumber = 1) {
+    const page = String(pageNumber || 1);
+    const pdfPage = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${page}"]`);
+    if (pdfPage) {
+        const element = pdfPage.querySelector('canvas');
+        const layer = pdfPage.querySelector('.pdf-highlight-layer');
+        if (element && layer) return { container: pdfPage, element, layer };
+    }
+
+    const imagePage = els.sourceViewer.querySelector(`.source-image-wrap[data-page="${page}"]`);
+    if (imagePage) {
+        const element = imagePage.querySelector('.source-image');
+        const layer = imagePage.querySelector('.pdf-highlight-layer');
+        if (element && layer) return { container: imagePage, element, layer };
+    }
+
+    return null;
+}
+
+function positionSourceOverlayBox(element, block, sourceElement) {
     const [x1, y1, x2, y2] = block.bbox.map(Number);
-    const canvasWidth = canvas.clientWidth || canvas.width;
-    const canvasHeight = canvas.clientHeight || canvas.height;
-    element.style.left = `${(x1 / block.pageWidth) * canvasWidth}px`;
-    element.style.top = `${(y1 / block.pageHeight) * canvasHeight}px`;
-    element.style.width = `${((x2 - x1) / block.pageWidth) * canvasWidth}px`;
-    element.style.height = `${((y2 - y1) / block.pageHeight) * canvasHeight}px`;
+    const sourceWidth = sourceElement.clientWidth || sourceElement.width || sourceElement.naturalWidth;
+    const sourceHeight = sourceElement.clientHeight || sourceElement.height || sourceElement.naturalHeight;
+    element.style.left = `${(x1 / block.pageWidth) * sourceWidth}px`;
+    element.style.top = `${(y1 / block.pageHeight) * sourceHeight}px`;
+    element.style.width = `${((x2 - x1) / block.pageWidth) * sourceWidth}px`;
+    element.style.height = `${((y2 - y1) / block.pageHeight) * sourceHeight}px`;
 }
 
 function activateLinkedBlock(markdownElement, block, { scrollMarkdown = false, scrollSource = false } = {}) {
@@ -3495,8 +3555,8 @@ function activateLinkedBlock(markdownElement, block, { scrollMarkdown = false, s
         scrollElementIntoContainer(markdownElement, els.markdownView, 'smooth');
     }
     if (scrollSource) {
-        const pageWrap = els.sourceViewer.querySelector(`.pdf-page-wrap[data-page="${block.page}"]`);
-        if (pageWrap && !isElementMostlyVisible(pageWrap, els.sourceViewer)) {
+        const sourceSurface = sourcePageSurface(block.page);
+        if (sourceSurface?.container && !isElementMostlyVisible(sourceSurface.container, els.sourceViewer)) {
             scrollPdfPageIntoView(block.page, 'smooth');
         }
     }
@@ -3639,6 +3699,22 @@ function readAsDataUrl(file) {
         reader.onload = () => resolve(reader.result);
         reader.onerror = () => reject(reader.error);
         reader.readAsDataURL(file);
+    });
+}
+
+async function waitForImageReady(img) {
+    if (!img || (img.complete && img.naturalWidth > 0)) return;
+    if (typeof img.decode === 'function') {
+        try {
+            await img.decode();
+            return;
+        } catch (error) {
+            if (img.complete) return;
+        }
+    }
+    await new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
     });
 }
 

@@ -91,34 +91,34 @@ docker compose --env-file env.txt --profile unlimited-ocr up -d --no-start
 docker compose --env-file env.txt start pandocr-web
 ```
 
-当前默认 `UNLIMITED_OCR_BACKEND=transformers`，对个人电脑更友好，也对齐官方 Transformers `model.infer` / `model.infer_multi` 路径。NVIDIA Docker 版本选择 `Unlimited-OCR` 后，顶部会出现只针对该模型的 Backend 下拉框，可直接在 `Transformers` 和 `SGLang` 间切换；macOS 版本只暴露 `Transformers`，因为 SGLang/FlashAttention 路径依赖 CUDA。上次选择会写入 `data/runtime-settings.json`，下次启动继续使用同一 backend。这个运行态文件已被 Git 忽略，不会污染提交。
+NVIDIA Docker 版本选择 `Unlimited-OCR` 后，顶部会出现只针对该模型的 Backend 下拉框，可直接在 `Transformers` 和 `SGLang` 间切换；macOS 版本只暴露 `Transformers`，因为 SGLang/FlashAttention 路径依赖 CUDA。上次选择会写入 `data/runtime-settings.json`，下次启动继续使用同一 backend。这个运行态文件已被 Git 忽略，不会污染提交。Windows 一键脚本会根据 GPU 做默认选择：RTX 30/40 等非 Blackwell GPU 默认 `Transformers`；RTX 50 / Blackwell / SM120 默认 `SGLang`，因为当前 Transformers Docker 镜像里的 CUDA 12.6 PyTorch wheel 可以加载模型，但在 sm120 上真实推理会报 `no kernel image is available for execution on the device`。
 
 Backend 选择建议：
 
 | Backend | 是否优先尝试 | 更适合的机器/场景 | 代价和风险 |
 | --- | --- | --- | --- |
-| `Transformers` | 是，建议先用它验证 | 个人 NVIDIA 电脑、Windows Docker、RTX 30/40/50，以及希望少踩 kernel/runtime 环境坑的用户。 | 冷启动较慢，因为 Python 进程需要把模型加载进显存；吞吐/并发不是重点，但部署路径最可预期。 |
-| `SGLang` | Transformers 跑通后再试 | 常驻 NVIDIA 服务器、空闲显存更充足、希望对比 OpenAI-compatible streaming server 或吞吐能力的用户。 | 更挑环境：依赖官方定制 SGLang wheel、`kernels`、单独的 `unlimited-ocr-sglang` 服务、自定义 logit processor，以及必须和 GPU/CUDA 匹配的 attention backend。 |
+| `Transformers` | RTX 30/40 等兼容 GPU 建议先试 | 非 Blackwell NVIDIA 电脑、Windows Docker，以及希望少踩 SGLang kernel/runtime 环境坑的用户。 | 冷启动较慢，因为 Python 进程需要把模型加载进显存；当前 CUDA 12.6 wheel 不适合 RTX 50 / SM120 真实推理。 |
+| `SGLang` | RTX 50 / Blackwell 建议先试 | RTX 50 / SM120、本机驱动支持 CUDA 12.9、常驻 NVIDIA 服务器、希望对比 OpenAI-compatible streaming server 或吞吐能力的用户。 | 更挑环境：依赖官方定制 SGLang wheel、`kernels`、单独的 `unlimited-ocr-sglang` 服务、自定义 logit processor，以及必须和 GPU/CUDA 匹配的 attention backend。 |
 
-大多数用户建议先部署 Transformers：
+RTX 30/40 等非 Blackwell GPU 建议先部署 Transformers：
 
 ```powershell
 .\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend transformers
 ```
 
-确认 Transformers 可用后，再尝试 SGLang：
+RTX 50 / Blackwell 用户建议直接部署 SGLang：
 
 ```powershell
 .\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend sglang
 ```
 
-也可以后续直接从 WebUI 部署 SGLang：选择 `Unlimited-OCR`，在提示里输入 `sglang`，WebUI 会自动构建/创建缺失的 `unlimited-ocr-sglang` 容器。如果 SGLang 构建失败、启动卡住或健康检查不通过，直接在 Backend 下拉框切回 `Transformers`。
+也可以后续直接从 WebUI 部署 SGLang：选择 `Unlimited-OCR`，在提示里输入 `sglang`，WebUI 会自动构建/创建缺失的 `unlimited-ocr-sglang` 容器。如果 SGLang 构建失败、启动卡住或健康检查不通过，RTX 30/40 用户可以在 Backend 下拉框切回 `Transformers`；RTX 50 用户优先调整 SGLang 环境或等待支持 sm120 的 Transformers/PyTorch 镜像。
 
 SGLang 环境调参建议：
 
 - 本项目默认 `UNLIMITED_OCR_ATTENTION_BACKEND=flashinfer`，通常比官方示例里的 `fa3` 更适合消费级显卡和 RTX 50 / SM120 这类本地环境。
 - 官方 SGLang 示例使用 `--attention-backend fa3`。只有当你的 SGLang wheel、CUDA 版本和 GPU 架构都支持时再改成 `fa3`；否则保持 `flashinfer`。
-- 如果 SGLang 显存不足或长时间启动中，先关闭占显存程序、保持 PDF 每批页数为 `1`，或把 `UNLIMITED_OCR_MEM_FRACTION_STATIC` 从 `0.8` 降到 `0.7`；仍不稳定就回到 `Transformers`。
+- 如果 SGLang 显存不足或长时间启动中，先关闭占显存程序、保持 PDF 每批页数为 `1`，或把 `UNLIMITED_OCR_MEM_FRACTION_STATIC` 从 `0.8` 降到 `0.7`；非 RTX 50 用户仍不稳定时可回到 `Transformers`。
 - 如果 SGLang 报 context length 超限，先用单页请求验证。多页 one-shot 更适合研究压测，对上下文长度、显存和页序对齐都更敏感。
 
 Unlimited-OCR 走独立 `unlimited-ocr-api` 容器，`pandocr-web` 只代理 `/api/unlimited-ocr` 和 `/api/unlimited-ocr/stream`，不会把 Unlimited-OCR 的重依赖安装进 WebUI 容器。PDF 会先在 adapter 中按官方 300 DPI 转成页面图片；默认 PDF 每批页数为 1，单页走 `gundam + ngram_window=128`，`no_repeat_ngram_size=35`。如果手动把 PDF 每批页数调大，adapter 会按当前 batch 做多页 one-shot 请求，适合研究压测，但更容易受显存、上下文长度和页面对齐稳定性影响。最终结果会把官方 `<|det|>image/chart [bbox]<|/det|>` 块裁剪回填为 Markdown 图片。
@@ -268,7 +268,7 @@ PANDOCR_GPU_DEVICE_ID=0
 PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6-0.9B
 PPOCR_V6_MODEL_NAME=PP-OCRv6_medium
 UNLIMITED_OCR_MODEL_NAME=baidu/Unlimited-OCR
-UNLIMITED_OCR_BACKEND=transformers
+UNLIMITED_OCR_BACKEND=sglang
 UNLIMITED_OCR_PRELOAD=1
 UNLIMITED_OCR_SGLANG_PORT=10001
 PANDOCR_ENABLE_UNLIMITED_OCR=0

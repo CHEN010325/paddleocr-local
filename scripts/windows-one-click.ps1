@@ -3,6 +3,7 @@ param(
     [int]$GpuId = -1,
     [int]$TimeoutSeconds = 1800,
     [string]$Models = "",
+    [Alias("Backend")]
     [string]$UnlimitedOcrBackend = "",
     [switch]$DryRun,
     [switch]$SkipPull,
@@ -15,11 +16,14 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$script:RequestedModels = $Models
+$script:RequestedUnlimitedOcrBackend = $UnlimitedOcrBackend
 $script:RuntimeEnv = ""
 $script:DiagnosticsShown = $false
 $script:ActiveModel = "paddleocr-vl-1.6"
 $script:EnableUnlimitedOcr = $false
 $script:UnlimitedOcrBackend = "transformers"
+$script:UnlimitedOcrBackendExplicit = $false
 $script:DeployModelIds = @("paddleocr-vl-1.6")
 $script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr")
 Set-Location $script:RepoRoot
@@ -322,6 +326,29 @@ function Resolve-DeploymentSelection {
     return [pscustomobject]@{
         ModelIds = [string[]]$selected.ToArray()
         UnlimitedOcrBackend = $backend
+        UnlimitedOcrBackendExplicit = $backendExplicit
+    }
+}
+
+function Apply-GpuSpecificBackendDefaults {
+    param([object]$Gpu)
+
+    if (-not $script:EnableUnlimitedOcr) {
+        return
+    }
+
+    if (-not (Test-IsBlackwellGpu $Gpu.Name)) {
+        return
+    }
+
+    if (-not $script:UnlimitedOcrBackendExplicit -and $script:UnlimitedOcrBackend -eq "transformers") {
+        $script:UnlimitedOcrBackend = "sglang"
+        Write-Warn "RTX 50 / Blackwell GPU detected. Using Unlimited-OCR SGLang by default because the current Transformers CUDA 12.6 wheel does not execute on sm120 GPUs."
+        return
+    }
+
+    if ($script:UnlimitedOcrBackend -eq "transformers") {
+        Write-Warn "RTX 50 / Blackwell GPU detected. Unlimited-OCR Transformers was explicitly selected, but the current CUDA 12.6 PyTorch wheel may load and then fail during inference on sm120 GPUs. Use -UnlimitedOcrBackend sglang if that happens."
     }
 }
 
@@ -406,6 +433,36 @@ function New-RuntimeEnvFile {
     return (Resolve-Path $runtimeEnv).Path
 }
 
+function Set-UnlimitedOcrRuntimeSetting {
+    if (-not $script:EnableUnlimitedOcr) {
+        return
+    }
+
+    $dataDir = Join-Path $script:RepoRoot "data"
+    New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+    $settingsPath = Join-Path $dataDir "runtime-settings.json"
+    $settings = @{}
+
+    if (Test-Path $settingsPath) {
+        try {
+            $raw = Get-Content -Path $settingsPath -Raw -Encoding UTF8
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json
+                foreach ($property in $parsed.PSObject.Properties) {
+                    $settings[$property.Name] = $property.Value
+                }
+            }
+        }
+        catch {
+            Write-Warn "Could not read existing runtime settings. Rewriting $settingsPath."
+        }
+    }
+
+    $settings["unlimitedOcrBackend"] = $script:UnlimitedOcrBackend
+    $settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsPath -Encoding UTF8
+    Write-Ok "Persisted Unlimited-OCR backend: $script:UnlimitedOcrBackend"
+}
+
 function Get-ComposeArgs {
     param(
         [string[]]$Arguments,
@@ -458,7 +515,12 @@ function Get-ContainerStatus {
     param([string]$Name)
 
     $format = "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
-    $output = & docker inspect --format $format $Name 2>$null
+    try {
+        $output = & docker inspect --format $format $Name 2>$null
+    }
+    catch {
+        return "missing|none"
+    }
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
         return "missing|none"
     }
@@ -567,19 +629,21 @@ try {
     Invoke-Checked -File "docker" -Arguments @("info", "--format", "{{.ServerVersion}}") -Description "Checking Docker Desktop"
     Invoke-Checked -File "docker" -Arguments @("compose", "version") -Description "Checking Docker Compose"
 
-    $selection = Resolve-DeploymentSelection -RequestedModels $Models -RequestedBackend $UnlimitedOcrBackend
+    $selection = Resolve-DeploymentSelection -RequestedModels $script:RequestedModels -RequestedBackend $script:RequestedUnlimitedOcrBackend
     $script:DeployModelIds = @($selection.ModelIds)
     $script:ActiveModel = $script:DeployModelIds[0]
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
     $script:UnlimitedOcrBackend = Normalize-UnlimitedOcrBackend $selection.UnlimitedOcrBackend
+    $script:UnlimitedOcrBackendExplicit = [bool]$selection.UnlimitedOcrBackendExplicit
     Write-Ok "Selected models to deploy now: $($script:DeployModelIds -join ', ')"
-    if ($script:EnableUnlimitedOcr) {
-        Write-Ok "Unlimited-OCR backend: $script:UnlimitedOcrBackend"
-    }
 
     $gpus = Get-GpuList
     $gpu = Select-Gpu -Gpus $gpus -RequestedGpuId $GpuId
     Write-Ok ("Selected GPU {0}: {1}" -f $gpu.Index, $gpu.Name)
+    Apply-GpuSpecificBackendDefaults -Gpu $gpu
+    if ($script:EnableUnlimitedOcr) {
+        Write-Ok "Unlimited-OCR backend: $script:UnlimitedOcrBackend"
+    }
 
     if ($gpu.TotalMiB -lt 8192) {
         throw "GPU $($gpu.Index) has only $($gpu.TotalMiB) MiB VRAM. PaddleOCR-VL requires at least 8192 MiB."
@@ -607,6 +671,8 @@ try {
         Write-Host "No images were pulled, built, or started."
         exit 0
     }
+
+    Set-UnlimitedOcrRuntimeSetting
 
     if (-not $SkipPull) {
         $pullServices = @()

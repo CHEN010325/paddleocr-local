@@ -125,7 +125,7 @@ Unlimited-OCR 走独立 `unlimited-ocr-api` 容器，`pandocr-web` 只代理 `/a
 
 NVIDIA Docker 首次使用 Transformers 或 SGLang 后端时都会下载并加载 `baidu/Unlimited-OCR` 权重；权重缓存持久化在 `model_cache_unlimited_ocr/`，容器重启后不会重新下载，但新 Python 进程仍需要把权重重新加载到显存。默认 `UNLIMITED_OCR_PRELOAD=1` 会在 `unlimited-ocr-api` 容器启动后后台预热 Transformers 模型，WebUI 会等 `modelLoaded=true` 后才显示 Transformers 就绪；切到 SGLang 时会卸载 Transformers 权重并启动 `unlimited-ocr-sglang`。本机默认 `UNLIMITED_OCR_ATTENTION_BACKEND=flashinfer`，如果换到官方 `fa3` 支持的卡，可以改回 `fa3` 再重建/重启 SGLang 容器。
 
-macOS Apple Silicon 版本使用独立虚拟环境 `.venv-unlimited-ocr-macos`，不会把 PyTorch/Transformers 依赖安装进 `.venv-macos`。默认模型为 MPS 兼容的 `sabafallah/Unlimited-OCR-Universal`，默认缓存目录为 `model_cache_unlimited_ocr_macos/`，默认 `UNLIMITED_OCR_PRELOAD=0` 以避免打开 WebUI 时强制下载 6GB+ 权重；第一次真正使用 Unlimited-OCR 解析时会下载并加载模型。Mac 一键启动默认使用 `UNLIMITED_OCR_PDF_DPI=180` 和 `UNLIMITED_OCR_MAX_TOKENS=4096`，以降低 Apple Silicon MPS 内存压力；如需更高清或更长输出，可用环境变量覆盖。若要恢复旧的两模型 Mac 启动方式，可运行：
+macOS Apple Silicon 版本使用独立虚拟环境 `.venv-unlimited-ocr-macos`，不会把 PyTorch/Transformers 依赖安装进 `.venv-macos`。默认模型为 MPS 兼容的 `sabafallah/Unlimited-OCR-Universal`，默认缓存目录为 `model_cache_unlimited_ocr_macos/`，默认 `UNLIMITED_OCR_PRELOAD=0` 以避免打开 WebUI 时强制下载 6GB+ 权重；第一次真正使用 Unlimited-OCR 解析时会下载并加载模型。Mac 一键启动默认使用 `UNLIMITED_OCR_PDF_DPI=180`、`UNLIMITED_OCR_MAX_TOKENS=4096`、`UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT=120` 和 `UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT=30`，以降低 Apple Silicon MPS 内存压力并减少首次 Hugging Face 大文件下载被短超时打断的概率；如需更高清、更长输出或更长下载超时，可用环境变量覆盖。若要恢复旧的两模型 Mac 启动方式，可运行：
 
 ```bash
 PANDOCR_ENABLE_UNLIMITED_OCR=0 ./macos-one-click.command

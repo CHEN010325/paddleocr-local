@@ -5,6 +5,9 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=scripts/macos-python.sh
+source "$ROOT_DIR/scripts/macos-python.sh"
+
 failures=0
 warnings=0
 
@@ -68,18 +71,11 @@ check_cmd curl "Install curl or use your OS package manager."
 case "$os_name:$arch_name" in
   Darwin:arm64)
     printf "\nmacOS Apple Silicon checks\n"
-    if has_cmd python3 && python3 - <<'PY' >/dev/null 2>&1
-import sys
-raise SystemExit(0 if sys.version_info[:2] in {(3, 12), (3, 13)} else 1)
-PY
-    then
-      pass "supported $(python3 --version 2>&1) found: $(command -v python3)"
-    elif has_cmd python3.13; then
-      pass "python3.13 found: $(command -v python3.13)"
-    elif has_cmd python3.12; then
-      pass "python3.12 found: $(command -v python3.12)"
+    supported_python="$(PYTHON_BIN= find_supported_macos_python 2>/dev/null || true)"
+    if [[ -n "$supported_python" ]]; then
+      pass "supported $("$supported_python" --version 2>&1) found: $supported_python"
     else
-      fail "Python 3.12 or 3.13 not found. Install a supported Python version."
+      fail "Python 3.12 or 3.13 not found. The one-click installer will use Homebrew to install Python 3.13 when available."
     fi
 
 	    if [[ -x ".venv-macos/bin/python" ]]; then

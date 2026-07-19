@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=scripts/macos-python.sh
+source "$ROOT_DIR/scripts/macos-python.sh"
+
 VENV_DIR="${PANDOCR_MACOS_VENV:-.venv-macos}"
 PANDOCR_MACOS_BACKEND="${PANDOCR_MACOS_BACKEND:-mlx}"
 PANDOCR_ENABLE_UNLIMITED_OCR="${PANDOCR_ENABLE_UNLIMITED_OCR:-1}"
@@ -74,15 +77,28 @@ check_apple_silicon() {
 }
 
 ensure_python_available() {
-  if [[ -x "$VENV_DIR/bin/python" ]] && { ! truthy "$PANDOCR_ENABLE_UNLIMITED_OCR" || [[ -x "$UNLIMITED_OCR_MACOS_VENV/bin/python" ]]; }; then
+  local selected_python
+
+  if selected_python="$(find_supported_macos_python "$VENV_DIR/bin/python" "$UNLIMITED_OCR_MACOS_VENV/bin/python" 2>/dev/null)"; then
+    PYTHON_BIN="$selected_python"
+    export PYTHON_BIN
     return
   fi
 
-  if command -v python3 >/dev/null 2>&1 || command -v python3.13 >/dev/null 2>&1 || command -v python3.12 >/dev/null 2>&1; then
-    return
+  if install_supported_macos_python; then
+    unset PYTHON_BIN
+    if select_supported_macos_python "$VENV_DIR/bin/python"; then
+      return
+    fi
   fi
 
-  echo "Python 3.12 or 3.13 was not found. Install a supported Python version, then rerun this command."
+  if command -v brew >/dev/null 2>&1; then
+    echo "Homebrew could not provide a compatible Python interpreter."
+  else
+    echo "Homebrew was not found, so Python 3.13 could not be installed automatically."
+    echo "Install Homebrew from https://brew.sh or install Python 3.13 manually."
+  fi
+  echo "Python 3.12 or 3.13 was not found. Python 3.14 is not currently supported."
   exit 1
 }
 
@@ -106,7 +122,7 @@ required = [
     "uvicorn",
 ]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
-sys.exit(1 if missing else 0)
+sys.exit(1 if missing or sys.version_info[:2] not in {(3, 12), (3, 13)} else 0)
 PY
 }
 
@@ -144,13 +160,14 @@ PY
 
 run_setup_if_needed() {
   local install_mlx=0
+  local setup_python="$PYTHON_BIN"
   if [[ "$PANDOCR_MACOS_BACKEND" == "mlx" ]]; then
     install_mlx=1
   fi
 
   if truthy "$PANDOCR_ONE_CLICK_FORCE_SETUP"; then
     step "Installing macOS dependencies"
-    INSTALL_MLX_VLM="$install_mlx" PANDOCR_MACOS_VENV="$VENV_DIR" bash scripts/setup-macos.sh
+    PYTHON_BIN="$setup_python" INSTALL_MLX_VLM="$install_mlx" PANDOCR_MACOS_VENV="$VENV_DIR" bash scripts/setup-macos.sh
     return
   fi
 
@@ -160,17 +177,18 @@ run_setup_if_needed() {
   fi
 
   step "Installing macOS dependencies"
-  INSTALL_MLX_VLM="$install_mlx" PANDOCR_MACOS_VENV="$VENV_DIR" bash scripts/setup-macos.sh
+  PYTHON_BIN="$setup_python" INSTALL_MLX_VLM="$install_mlx" PANDOCR_MACOS_VENV="$VENV_DIR" bash scripts/setup-macos.sh
 }
 
 run_unlimited_ocr_setup_if_needed() {
+  local setup_python="$PYTHON_BIN"
   if ! truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
     return
   fi
 
   if truthy "$PANDOCR_ONE_CLICK_FORCE_SETUP"; then
     step "Installing macOS Unlimited-OCR dependencies"
-    UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
+    PYTHON_BIN="$setup_python" UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
     return
   fi
 
@@ -180,7 +198,7 @@ run_unlimited_ocr_setup_if_needed() {
   fi
 
   step "Installing macOS Unlimited-OCR dependencies"
-  UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
+  PYTHON_BIN="$setup_python" UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
 }
 
 start_services() {

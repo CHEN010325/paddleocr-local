@@ -346,6 +346,8 @@ make mac-one-click
 
 这条一键命令会自动检查 Apple Silicon 环境、安装 macOS 依赖、默认启用 MLX-VLM 提速模式、准备隔离的 Unlimited-OCR MPS 环境、启动 `mlx_vlm.server` / PaddleX API / PP-OCRv6 API / Unlimited-OCR adapter / PaddleOCR Local WebUI、执行健康检查，并自动打开 http://127.0.0.1:8000。
 
+安装器会自动选择 PaddlePaddle 支持的 Python 3.13 或 3.12，不会误用 Homebrew 默认的 Python 3.14。如果机器只有 Python 3.14 且已安装 Homebrew，安装器会自动安装 `python@3.13`；已有的 Python 3.14 虚拟环境会用兼容版本自动重建。
+
 首次启动会下载 `PP-DocLayoutV3`、`PaddleOCR-VL-1.6-0.9B` 和 MLX 模型权重，耗时取决于网络和磁盘速度。Unlimited-OCR 默认不在启动时预热，第一次使用时会下载 `sabafallah/Unlimited-OCR-Universal` 权重并在 MPS 上加载；Mac 默认以 `180 DPI / 4096 max tokens` 解析 PDF，适合本地 MPS 稳定运行。模型缓存完成后，后续再次运行同一条命令会复用已安装环境和已启动服务。
 
 高级手动启动：
@@ -422,7 +424,7 @@ PANDOCR_PORT=18000 make mac-up
 | --- | --- |
 | 设备 | MacBook Pro, Apple M4 Pro, 12 核 CPU（8P+4E）, 24GB 内存 |
 | 系统 | macOS 26.5.1, arm64 |
-| 环境 | Python 3.12.13, PaddlePaddle 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.1, mlx-vlm 0.6.3 |
+| 环境 | Python 3.12.13, PaddlePaddle 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.1, mlx-vlm 0.6.5 |
 | 启动模式 | `make mac-up-mlx` |
 | 测试输入 | 17KB PNG 小图，经 WebUI 后端 `/api/paddleocr-vl-1.6` 端到端请求 |
 | 5 次耗时 | 1.73s / 1.74s / 1.75s / 1.76s / 1.78s |

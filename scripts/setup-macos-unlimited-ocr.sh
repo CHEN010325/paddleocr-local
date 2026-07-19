@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=scripts/macos-python.sh
+source "$ROOT_DIR/scripts/macos-python.sh"
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This setup script is for macOS."
   exit 1
@@ -15,23 +18,26 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "$PYTHON_BIN" ]]; then
-  if command -v python3.12 >/dev/null 2>&1; then
-    PYTHON_BIN="python3.12"
-  else
-    PYTHON_BIN="python3"
-  fi
+VENV_DIR="${UNLIMITED_OCR_MACOS_VENV:-.venv-unlimited-ocr-macos}"
+VENV_PYTHON_VERSION=""
+if [[ -x "$VENV_DIR/bin/python" ]]; then
+  VENV_PYTHON_VERSION="$(python_minor_version "$VENV_DIR/bin/python" || true)"
 fi
 
-VENV_DIR="${UNLIMITED_OCR_MACOS_VENV:-.venv-unlimited-ocr-macos}"
+select_supported_macos_python "$VENV_DIR/bin/python"
+PYTHON_VERSION="$(python_minor_version "$PYTHON_BIN")"
 
 echo "Using Python: $($PYTHON_BIN -c 'import sys; print(sys.executable)')"
-if [[ ! -d "$VENV_DIR" ]]; then
-  echo "Creating Unlimited-OCR virtual environment: $VENV_DIR"
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+if [[ -x "$VENV_DIR/bin/python" ]]; then
+  if [[ "$VENV_PYTHON_VERSION" == "3.12" || "$VENV_PYTHON_VERSION" == "3.13" ]]; then
+    echo "Reusing Unlimited-OCR virtual environment: $VENV_DIR (Python $VENV_PYTHON_VERSION)"
+  else
+    echo "Recreating $VENV_DIR with Python $PYTHON_VERSION because its Python ${VENV_PYTHON_VERSION:-unknown} is unsupported."
+    "$PYTHON_BIN" -m venv --clear "$VENV_DIR"
+  fi
 else
-  echo "Using existing Unlimited-OCR virtual environment: $VENV_DIR"
+  echo "Creating Unlimited-OCR virtual environment: $VENV_DIR (Python $PYTHON_VERSION)"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 source "$VENV_DIR/bin/activate"

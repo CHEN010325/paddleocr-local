@@ -30,6 +30,9 @@ node --check static/app.js
 step "Checking shell script syntax"
 bash -n scripts/*.sh deploy.sh build.sh start-vlm.sh test-connection.sh
 
+step "Running macOS Python selection tests"
+bash tests/test_macos_python_selection.sh
+
 step "Checking generated OpenAPI snapshot"
 "$PYTHON" - <<'PY'
 import importlib

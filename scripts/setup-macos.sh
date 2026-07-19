@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=scripts/macos-python.sh
+source "$ROOT_DIR/scripts/macos-python.sh"
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This setup script is for macOS."
   exit 1
@@ -18,31 +21,11 @@ fi
 VENV_DIR="${PANDOCR_MACOS_VENV:-.venv-macos}"
 VENV_PYTHON_VERSION=""
 if [[ -x "$VENV_DIR/bin/python" ]]; then
-  VENV_PYTHON_VERSION="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  VENV_PYTHON_VERSION="$(python_minor_version "$VENV_DIR/bin/python" || true)"
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "$PYTHON_BIN" ]]; then
-  if [[ "$VENV_PYTHON_VERSION" == "3.12" || "$VENV_PYTHON_VERSION" == "3.13" ]]; then
-    PYTHON_BIN="$VENV_DIR/bin/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-  elif command -v python3.13 >/dev/null 2>&1; then
-    PYTHON_BIN="python3.13"
-  elif command -v python3.12 >/dev/null 2>&1; then
-    PYTHON_BIN="python3.12"
-  else
-    echo "Python 3.12 or 3.13 was not found. Install a supported Python version, then rerun this command."
-    exit 1
-  fi
-fi
-
-PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-if [[ "$PYTHON_VERSION" != "3.12" && "$PYTHON_VERSION" != "3.13" ]]; then
-  echo "Python 3.12 or 3.13 is required; found Python ${PYTHON_VERSION} at $PYTHON_BIN."
-  echo "Install a supported Python version, then rerun this command."
-  exit 1
-fi
+select_supported_macos_python "$VENV_DIR/bin/python"
+PYTHON_VERSION="$(python_minor_version "$PYTHON_BIN")"
 
 PADDLEPADDLE_VERSION="${PADDLEPADDLE_VERSION:-3.3.0}"
 INSTALL_MLX_VLM="${INSTALL_MLX_VLM:-false}"

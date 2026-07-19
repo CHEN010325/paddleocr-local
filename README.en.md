@@ -269,6 +269,8 @@ make mac-one-click
 
 This one-click command checks the Apple Silicon environment, installs macOS dependencies, enables MLX-VLM acceleration by default, starts `mlx_vlm.server` / PaddleX API / PaddleOCR Local WebUI, runs health checks, and opens http://127.0.0.1:8000 automatically.
 
+The installer automatically selects a PaddlePaddle-compatible Python 3.13 or 3.12 interpreter instead of accidentally using Homebrew's default Python 3.14. If only Python 3.14 is available and Homebrew is installed, it installs `python@3.13` automatically; existing Python 3.14 virtual environments are rebuilt with the compatible interpreter.
+
 The first startup downloads `PP-DocLayoutV3`, `PaddleOCR-VL-1.6-0.9B`, and MLX model weights. The time required depends on network and disk speed. After the model cache is ready, subsequent runs of the same command reuse the installed environment and running services.
 
 Advanced manual startup:
@@ -336,7 +338,7 @@ Local benchmark reference after model caching, excluding first download and cold
 | --- | --- |
 | Device | MacBook Pro, Apple M4 Pro, 12-core CPU (8P+4E), 24GB memory |
 | System | macOS 26.5.1, arm64 |
-| Environment | Python 3.12.13, PaddlePaddle 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.1, mlx-vlm 0.6.3 |
+| Environment | Python 3.12.13, PaddlePaddle 3.3.0, PaddleOCR 3.7.0, PaddleX 3.7.1, mlx-vlm 0.6.5 |
 | Startup mode | `make mac-up-mlx` |
 | Test input | 17KB PNG image, end-to-end request through the WebUI backend `/api/paddleocr-vl-1.6` |
 | Five runs | 1.73s / 1.74s / 1.75s / 1.76s / 1.78s |

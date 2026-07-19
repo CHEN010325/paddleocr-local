@@ -78,11 +78,11 @@ ensure_python_available() {
     return
   fi
 
-  if command -v python3.12 >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1 || command -v python3.13 >/dev/null 2>&1 || command -v python3.12 >/dev/null 2>&1; then
     return
   fi
 
-  echo "Python 3 was not found. Please install Python 3.12 or newer, then rerun this command."
+  echo "Python 3.12 or 3.13 was not found. Install a supported Python version, then rerun this command."
   exit 1
 }
 
@@ -132,12 +132,13 @@ required = [
     "paddlex",
 ]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
-sys.exit(1 if missing else 0)
+sys.exit(1 if missing or sys.version_info[:2] not in {(3, 12), (3, 13)} else 0)
 PY
 
   command -v paddlex >/dev/null 2>&1 || return 1
   if [[ "$PANDOCR_MACOS_BACKEND" == "mlx" ]]; then
     command -v mlx_vlm.server >/dev/null 2>&1 || return 1
+    python scripts/check-mlx-runtime.py >/dev/null 2>&1 || return 1
   fi
 }
 

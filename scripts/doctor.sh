@@ -68,16 +68,34 @@ check_cmd curl "Install curl or use your OS package manager."
 case "$os_name:$arch_name" in
   Darwin:arm64)
     printf "\nmacOS Apple Silicon checks\n"
-    if has_cmd python3.12; then
+    if has_cmd python3 && python3 - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] in {(3, 12), (3, 13)} else 1)
+PY
+    then
+      pass "supported $(python3 --version 2>&1) found: $(command -v python3)"
+    elif has_cmd python3.13; then
+      pass "python3.13 found: $(command -v python3.13)"
+    elif has_cmd python3.12; then
       pass "python3.12 found: $(command -v python3.12)"
-    elif has_cmd python3; then
-      pass "python3 found: $(command -v python3)"
     else
-      fail "Python 3 not found. Install Python 3.12 or newer."
+      fail "Python 3.12 or 3.13 not found. Install a supported Python version."
     fi
 
 	    if [[ -x ".venv-macos/bin/python" ]]; then
-	      pass "macOS virtual environment exists: .venv-macos"
+	      if .venv-macos/bin/python - <<'PY' >/dev/null 2>&1
+import importlib.util
+raise SystemExit(0 if importlib.util.find_spec("mlx_vlm") else 1)
+PY
+	      then
+	        if .venv-macos/bin/python scripts/check-mlx-runtime.py >/dev/null 2>&1; then
+	          pass "macOS MLX runtime is importable and uses the pinned versions."
+	        else
+	          warn "macOS virtual environment exists but the MLX runtime is incompatible. Rerun ./macos-one-click.command to repair it."
+	        fi
+	      else
+	        pass "macOS virtual environment exists; optional MLX runtime is not installed."
+	      fi
 	    else
 	      warn "macOS virtual environment is not installed yet. The one-click script will create it."
 	    fi

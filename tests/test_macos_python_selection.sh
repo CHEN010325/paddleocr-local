@@ -116,12 +116,12 @@ case_homebrew_keg_python() {
   make_fake_python "$fake_bin/python3" "3.14"
   make_fake_python "$keg_prefix/bin/python3.13" "3.13"
   {
-    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '#!/bin/bash'
     printf 'if [[ "${1:-}" == "--prefix" && "${2:-}" == "python@3.13" ]]; then printf "%%s\\n" "%s"; exit 0; fi\n' "$keg_prefix"
     printf '%s\n' 'exit 1'
   } > "$fake_bin/brew"
   chmod +x "$fake_bin/brew"
-  selected="$(PATH="$fake_bin:/usr/bin:/bin" PYTHON_BIN= find_supported_macos_python)"
+  selected="$(PATH="$fake_bin" PYTHON_BIN= find_supported_macos_python)"
   assert_eq "$keg_prefix/bin/python3.13" "$selected" "Homebrew keg-only Python 3.13 is discovered"
 }
 

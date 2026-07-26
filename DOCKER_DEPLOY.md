@@ -2,16 +2,19 @@
 
 ## 服务组成
 
-`docker-compose.yml` 当前部署 4 个服务：
+`docker-compose.yml` 包含常驻 WebUI、PaddleOCR 服务和两个可选 profile：
 
 | 服务 | 作用 | 对外端口 |
 | --- | --- | --- |
 | `paddleocr-vlm-server` | VLLM 推理，加载 `PaddleOCR-VL-1.6-0.9B` | 无 |
 | `paddleocr-vl-api` | PaddleX layout-parsing API | `8081:8080` |
 | `paddleocr-ocr-api` | PaddleX OCR API，默认使用 PP-OCRv6 | `8082:8080` |
+| `unlimited-ocr-api` | Unlimited-OCR 适配服务（可选） | `8083:8080` |
+| `unlimited-ocr-sglang` | Unlimited-OCR SGLang 推理（按 backend 可选） | `10000:10000` |
+| `ovisocr2-api` | OvisOCR2 独立 vLLM 推理（可选） | `8084:8080` |
 | `pandocr-web` | WebUI、FastAPI 代理、Office 转 PDF | `8000:8000` |
 
-单 GPU 部署默认只热加载一个模型：`pandocr-web` 挂载 Docker socket，并通过 Docker Engine API 启停本 compose 文件中的模型容器。选择 `PaddleOCR-VL 1.6` 会启动 `paddleocr-vlm-server` + `paddleocr-vl-api` 并停止 `paddleocr-ocr-api`；选择 `PP-OCRv6` 会反向切换。Docker socket 等同于宿主机管理权限，请勿把 WebUI 暴露给不可信网络。
+单 GPU 部署默认只热加载一个模型：`pandocr-web` 挂载 Docker socket，并通过 Docker Engine API 在 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2` 之间切换对应容器。Docker socket 等同于宿主机管理权限，请勿把 WebUI 暴露给不可信网络。
 解析历史会通过 `./data:/app/data` 挂载保存到宿主机，默认路径为 `data/tasks/`。
 
 ## 推荐配置
@@ -61,7 +64,14 @@ Windows + NVIDIA 用户推荐直接运行一键部署脚本：
 .\windows-one-click.bat
 ```
 
-脚本会自动选择环境文件、清理旧容器、创建模型容器但只启动 WebUI，然后等待默认活跃模型健康。手动部署命令如下：
+脚本会自动选择环境文件，并让用户从四个模型中选择首次部署模型；只创建选中的模型容器和 WebUI，然后等待所选模型健康。选择多个模型时可通过 `-ActiveModel` 指定首次启动模型：
+
+```powershell
+.\windows-one-click.bat -Model ovisocr2
+.\windows-one-click.bat -Models all -ActiveModel ovisocr2
+```
+
+手动部署命令如下：
 
 ```powershell
 docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api

@@ -2,6 +2,7 @@ const API_BASE = '/api';
 const DEFAULT_PDF_BATCH_SIZE = 1;
 const MAX_PDF_BATCH_SIZE = 400;
 const UNLIMITED_OCR_MODEL_ID = 'unlimited-ocr';
+const OVIS_OCR_MODEL_ID = 'ovisocr2';
 const UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE = 1;
 const UNLIMITED_OCR_COORDINATE_SIZE = 1000;
 const UNLIMITED_OCR_BACKENDS = ['transformers', 'sglang'];
@@ -1688,9 +1689,9 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
         return;
     }
 
-    const officialRender = isUnlimitedOCRTask(task)
-        ? { rendered: false, changed: false, mathRoots: [] }
-        : renderOfficialLayoutResult(task);
+    const officialRender = shouldRenderOfficialLayout(task)
+        ? renderOfficialLayoutResult(task)
+        : { rendered: false, changed: false, mathRoots: [] };
     if (officialRender.rendered) {
         renderedMarkdownKey = markdownKey;
         if (officialRender.changed) {
@@ -1800,6 +1801,17 @@ function isPPOCRVisualTask(task) {
 function isUnlimitedOCRTask(task) {
     return task?.modelId === UNLIMITED_OCR_MODEL_ID
         || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === 'unlimited-ocr'));
+}
+
+function isOvisOCR2Task(task) {
+    return task?.modelId === OVIS_OCR_MODEL_ID
+        || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === OVIS_OCR_MODEL_ID));
+}
+
+function shouldRenderOfficialLayout(task) {
+    // These models return complete document Markdown, while their layout blocks
+    // are partial metadata and must not replace the full Markdown result.
+    return !isUnlimitedOCRTask(task) && !isOvisOCR2Task(task);
 }
 
 function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
@@ -4472,7 +4484,7 @@ function compactOCRJsonResult(pageResult, batchOrId, pageIndex = 0) {
     const batch = typeof batchOrId === 'object' ? batchOrId : null;
     const batchId = batch?.id || batchOrId;
     const compact = stripLargeOCRFields(pageResult);
-    if (batch && ['pp-ocrv6', 'unlimited-ocr'].includes(compact?.parser)) {
+    if (batch && ['pp-ocrv6', 'unlimited-ocr', OVIS_OCR_MODEL_ID].includes(compact?.parser)) {
         compact.sourcePage = Number(batch.startPage || 1) + pageIndex;
         compact.batchId = batch.id;
     }

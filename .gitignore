@@ -46,6 +46,8 @@ model_cache_ocr/
 model_cache_ppocrv6/
 model_cache_ppocrv6_ocr/
 model_cache_unlimited_ocr/
+model_cache_ovisocr2/
+model_cache_ovisocr2_vllm/
 model_cache_unlimited_ocr_macos/
 data/runtime-settings.json
 data/tasks/
@@ -55,6 +57,8 @@ ocr_results_*.zip
 logs/
 run/
 config_probe/
+.playwright-cli/
+output/
 
 # PaddleOCR Demo (user provided reference, keep in repo but ignore data)
 PaddleOCR-VL_Online_Demo/assets/*

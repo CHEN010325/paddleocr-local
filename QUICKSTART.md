@@ -53,7 +53,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-脚本会自动检查 Docker、识别 NVIDIA GPU、选择 `env.txt` 或 `env.docker`、拉取官方镜像、构建 `paddleocr-ocr-api` 和 `pandocr-web`、清理旧容器、创建全部容器但只启动 `pandocr-web`。随后由 WebUI 的模型运行时控制器按 `PANDOCR_ACTIVE_MODEL_ON_START` 启动当前活跃模型，并通过 `/api/model-runtime` 等待它进入 ready。失败时会自动打印 `paddleocr-vlm-server`、`paddleocr-vl-api`、`paddleocr-ocr-api` 和 `pandocr-web` 的关键日志。
+脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2` 中选择首次部署模型，只拉取或构建对应服务和 `pandocr-web`。随后由 WebUI 运行时控制器只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready，避免单 GPU 同时加载多个模型。
 
 只做预检、不启动服务：
 
@@ -65,6 +65,13 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 
 ```powershell
 .\windows-one-click.bat -GpuId 1
+```
+
+直接指定 OvisOCR2，或部署四个模型但首次启动 OvisOCR2：
+
+```powershell
+.\windows-one-click.bat -Model ovisocr2
+.\windows-one-click.bat -Models all -ActiveModel ovisocr2
 ```
 
 ## 手动 Docker 流程

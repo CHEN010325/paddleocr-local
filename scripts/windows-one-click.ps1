@@ -2,7 +2,9 @@ param(
     [string]$EnvFile = "",
     [int]$GpuId = -1,
     [int]$TimeoutSeconds = 1800,
+    [string]$Model = "",
     [string]$Models = "",
+    [string]$ActiveModel = "",
     [Alias("Backend")]
     [string]$UnlimitedOcrBackend = "",
     [switch]$DryRun,
@@ -16,16 +18,19 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$script:RequestedModel = $Model
 $script:RequestedModels = $Models
+$script:RequestedActiveModel = $ActiveModel
 $script:RequestedUnlimitedOcrBackend = $UnlimitedOcrBackend
 $script:RuntimeEnv = ""
 $script:DiagnosticsShown = $false
 $script:ActiveModel = "paddleocr-vl-1.6"
 $script:EnableUnlimitedOcr = $false
+$script:EnableOvisOcr2 = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
 $script:DeployModelIds = @("paddleocr-vl-1.6")
-$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr")
+$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2")
 Set-Location $script:RepoRoot
 
 function Write-Section {
@@ -288,23 +293,72 @@ function Add-DeploymentModel {
     }
 }
 
-function Read-DeploymentSelection {
-    Write-Section "Choose models to deploy"
-    Write-Host "Only selected model containers/images will be pulled or built now."
-    Write-Host "The WebUI will still show the other models as undeployed and explain how to enable them."
-    Write-Host ""
-    Write-Host "  1) PaddleOCR-VL 1.6        document parsing, recommended default"
-    Write-Host "  2) PP-OCRv6                text OCR"
-    Write-Host "  3) Unlimited-OCR           Transformers backend"
-    Write-Host "  4) Unlimited-OCR           SGLang backend"
-    Write-Host "  5) PaddleOCR core          PaddleOCR-VL 1.6 + PP-OCRv6"
-    Write-Host "  6) All three               PaddleOCR-VL 1.6 + PP-OCRv6 + Unlimited-OCR Transformers"
-    Write-Host ""
-    $answer = Read-Host "Enter one or more options separated by comma [1]"
-    if ([string]::IsNullOrWhiteSpace($answer)) {
-        return "1"
+function Resolve-ModelId {
+    param([string]$Value)
+
+    $normalized = $Value.Trim().ToLowerInvariant()
+    switch ($normalized) {
+        { $_ -in @("1", "vl", "paddleocr-vl", "paddleocr-vl-1.6", "paddleocrvl") } { return "paddleocr-vl-1.6" }
+        { $_ -in @("2", "ppocr", "ppocrv6", "pp-ocrv6", "ocr") } { return "pp-ocrv6" }
+        { $_ -in @("3", "unlimited", "unlimited-ocr", "uow") } { return "unlimited-ocr" }
+        { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } { return "ovisocr2" }
+        default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, or ovisocr2." }
     }
-    return $answer
+}
+
+function Get-ModelDisplayName {
+    param([string]$ModelId)
+    switch ($ModelId) {
+        "paddleocr-vl-1.6" { return "PaddleOCR-VL 1.6" }
+        "pp-ocrv6" { return "PP-OCRv6" }
+        "unlimited-ocr" { return "Unlimited-OCR" }
+        "ovisocr2" { return "OvisOCR2" }
+        default { return $ModelId }
+    }
+}
+
+function Read-FriendlyDeploymentSelection {
+    Write-Section "Choose the model to start first"
+    Write-Host "Only this model is downloaded and started by default."
+    Write-Host ""
+    Write-Host "  1) PaddleOCR-VL 1.6   Full document parsing (recommended default)"
+    Write-Host "  2) PP-OCRv6           Fast text OCR"
+    Write-Host "  3) Unlimited-OCR      Long-document parsing"
+    Write-Host "  4) OvisOCR2           Document parsing with vLLM"
+    Write-Host ""
+
+    $answer = Read-Host "Select a model [1]"
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+        $answer = "1"
+    }
+    $initialModel = Resolve-ModelId $answer
+    $selected = New-Object System.Collections.Generic.List[string]
+    Add-DeploymentModel -Models $selected -ModelId $initialModel
+    Write-Ok "First model: $(Get-ModelDisplayName $initialModel)"
+
+    Write-Host ""
+    Write-Host "Optional: prepare other models now (they will remain stopped)."
+    Write-Host "Enter model numbers separated by commas, or press Enter to skip."
+    $additional = Read-Host "Additional models"
+    if (-not [string]::IsNullOrWhiteSpace($additional)) {
+        $tokens = @($additional -split "[,\s;]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        foreach ($token in $tokens) {
+            if ($token.Trim().ToLowerInvariant() -eq "all") {
+                foreach ($modelId in $script:ModelCatalogIds) {
+                    Add-DeploymentModel -Models $selected -ModelId $modelId
+                }
+                continue
+            }
+            Add-DeploymentModel -Models $selected -ModelId (Resolve-ModelId $token)
+        }
+    }
+
+    return [pscustomobject]@{
+        ModelIds = [string[]]$selected.ToArray()
+        InitialModel = $initialModel
+        UnlimitedOcrBackend = "transformers"
+        UnlimitedOcrBackendExplicit = $false
+    }
 }
 
 function Resolve-DeploymentSelection {
@@ -313,11 +367,11 @@ function Resolve-DeploymentSelection {
         [string]$RequestedBackend
     )
 
-    $rawSelection = $RequestedModels
-    if ([string]::IsNullOrWhiteSpace($rawSelection)) {
-        $rawSelection = Read-DeploymentSelection
+    if ([string]::IsNullOrWhiteSpace($RequestedModels)) {
+        throw "No models were provided to the advanced -Models option."
     }
 
+    $rawSelection = $RequestedModels
     $backendExplicit = -not [string]::IsNullOrWhiteSpace($RequestedBackend)
     $backend = Normalize-UnlimitedOcrBackend $RequestedBackend
     $selected = New-Object System.Collections.Generic.List[string]
@@ -351,7 +405,7 @@ function Resolve-DeploymentSelection {
                 Add-DeploymentModel -Models $selected -ModelId "pp-ocrv6"
                 continue
             }
-            { $_ -in @("6", "all", "three", "full") } {
+            { $_ -in @("6", "three", "first-three") } {
                 Add-DeploymentModel -Models $selected -ModelId "paddleocr-vl-1.6"
                 Add-DeploymentModel -Models $selected -ModelId "pp-ocrv6"
                 Add-DeploymentModel -Models $selected -ModelId "unlimited-ocr"
@@ -360,8 +414,30 @@ function Resolve-DeploymentSelection {
                 }
                 continue
             }
+            { $_ -in @("7", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } {
+                Add-DeploymentModel -Models $selected -ModelId "ovisocr2"
+                continue
+            }
+            { $_ -in @("8", "all", "four", "full") } {
+                Add-DeploymentModel -Models $selected -ModelId "paddleocr-vl-1.6"
+                Add-DeploymentModel -Models $selected -ModelId "pp-ocrv6"
+                Add-DeploymentModel -Models $selected -ModelId "unlimited-ocr"
+                Add-DeploymentModel -Models $selected -ModelId "ovisocr2"
+                if (-not $backendExplicit) {
+                    $backend = "transformers"
+                }
+                continue
+            }
+            { $_ -in @("9", "all-sglang", "full-sglang") } {
+                Add-DeploymentModel -Models $selected -ModelId "paddleocr-vl-1.6"
+                Add-DeploymentModel -Models $selected -ModelId "pp-ocrv6"
+                Add-DeploymentModel -Models $selected -ModelId "unlimited-ocr"
+                Add-DeploymentModel -Models $selected -ModelId "ovisocr2"
+                $backend = "sglang"
+                continue
+            }
             default {
-                throw "Unknown model selection '$token'. Use 1,2,3,4,5,6 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr."
+                throw "Unknown model selection '$token'. Use 1-9 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2."
             }
         }
     }
@@ -375,6 +451,79 @@ function Resolve-DeploymentSelection {
         UnlimitedOcrBackend = $backend
         UnlimitedOcrBackendExplicit = $backendExplicit
     }
+}
+
+function Resolve-SingleDeploymentSelection {
+    param(
+        [string]$RequestedModel,
+        [string]$RequestedBackend
+    )
+
+    $modelId = Resolve-ModelId $RequestedModel
+    return [pscustomobject]@{
+        ModelIds = [string[]]@($modelId)
+        InitialModel = $modelId
+        UnlimitedOcrBackend = Normalize-UnlimitedOcrBackend $RequestedBackend
+        UnlimitedOcrBackendExplicit = -not [string]::IsNullOrWhiteSpace($RequestedBackend)
+    }
+}
+
+function Read-UnlimitedOcrBackendSelection {
+    param([object]$Gpu)
+
+    $recommended = if (Test-IsBlackwellGpu $Gpu.Name) { "SGLang" } else { "Transformers" }
+    Write-Section "Choose the Unlimited-OCR backend"
+    Write-Host "  1) Auto          $recommended is recommended for this GPU"
+    Write-Host "  2) Transformers  Simpler runtime"
+    Write-Host "  3) SGLang        CUDA optimized, requires sm75 or newer"
+    Write-Host ""
+    $answer = Read-Host "Select a backend [1]"
+    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq "1") {
+        return
+    }
+    if ($answer -eq "2") {
+        $script:UnlimitedOcrBackend = "transformers"
+        $script:UnlimitedOcrBackendExplicit = $true
+        return
+    }
+    if ($answer -eq "3") {
+        $script:UnlimitedOcrBackend = "sglang"
+        $script:UnlimitedOcrBackendExplicit = $true
+        return
+    }
+    throw "Unknown backend selection '$answer'. Use 1, 2, or 3."
+}
+
+function Confirm-DeploymentPlan {
+    Write-Section "Review deployment"
+    Write-Host "GPU:                 $($script:SelectedGpu.Index) - $($script:SelectedGpu.Name)"
+    Write-Host "Starts first:        $(Get-ModelDisplayName $script:ActiveModel)"
+    Write-Host "Models prepared now: $((@($script:DeployModelIds | ForEach-Object { Get-ModelDisplayName $_ })) -join ', ')"
+    if ($script:EnableUnlimitedOcr) {
+        Write-Host "Unlimited backend:   $script:UnlimitedOcrBackend"
+    }
+    Write-Host "Other models remain visible in the WebUI and can be deployed later."
+    Write-Host ""
+    $answer = Read-Host "Start downloading and deploying? [Y/n]"
+    return ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim().ToLowerInvariant() -in @("y", "yes"))
+}
+
+function Resolve-ActiveModel {
+    param(
+        [string]$RequestedActiveModel,
+        [string[]]$SelectedModels
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RequestedActiveModel)) {
+        return $SelectedModels[0]
+    }
+
+    $resolved = Resolve-ModelId $RequestedActiveModel
+
+    if ($SelectedModels -notcontains $resolved) {
+        throw "Active model '$resolved' is not included in the deployment selection."
+    }
+    return $resolved
 }
 
 function Apply-GpuSpecificBackendDefaults {
@@ -413,6 +562,9 @@ function Get-DeployedModelServices {
             $services.Add($service)
         }
     }
+    if ($script:EnableOvisOcr2) {
+        $services.Add("ovisocr2-api")
+    }
     return [string[]]$services.ToArray()
 }
 
@@ -436,6 +588,9 @@ function Get-GpuCheckService {
     }
     if ($script:DeployModelIds -contains "unlimited-ocr") {
         return "unlimited-ocr-api"
+    }
+    if ($script:EnableOvisOcr2) {
+        return "ovisocr2-api"
     }
     return "pandocr-web"
 }
@@ -466,6 +621,7 @@ function New-RuntimeEnvFile {
     $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -Value $script:UnlimitedOcrBackend
     $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_PRELOAD" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_UNLIMITED_OCR" -Value "1"
+    $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_OVISOCR2" -Value "1"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_SWITCH_TIMEOUT" -Value "1200"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_UPLOAD_MB" -Value "512"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_CONCURRENT_OCR" -Value "1"
@@ -474,6 +630,7 @@ function New-RuntimeEnvFile {
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_API_DOCS" -Value "0"
     $script:ActiveModel = Get-EnvLineValue -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -DefaultValue $script:ActiveModel
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
+    $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
     $script:UnlimitedOcrBackend = (Get-EnvLineValue -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -DefaultValue "transformers").Trim().ToLowerInvariant()
     Set-Content -Path $runtimeEnv -Value $lines -Encoding ASCII
 
@@ -513,11 +670,14 @@ function Set-UnlimitedOcrRuntimeSetting {
 function Get-ComposeArgs {
     param(
         [string[]]$Arguments,
-        [switch]$IncludeUnlimitedOcrProfile
+        [switch]$IncludeOptionalProfiles
     )
     $args = @("compose", "--env-file", $script:RuntimeEnv)
-    if ($script:EnableUnlimitedOcr -or $IncludeUnlimitedOcrProfile) {
+    if ($script:EnableUnlimitedOcr -or $IncludeOptionalProfiles) {
         $args += @("--profile", "unlimited-ocr")
+    }
+    if ($script:EnableOvisOcr2 -or $IncludeOptionalProfiles) {
+        $args += @("--profile", "ovisocr2")
     }
     return $args + $Arguments
 }
@@ -607,10 +767,12 @@ function Wait-ForServices {
         $ocr = Get-ContainerStatus "paddleocr-ocr-api"
         $uow = if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") { Get-ContainerStatus "unlimited-ocr-sglang" } else { "disabled|none" }
         $uowApi = if ($script:EnableUnlimitedOcr) { Get-ContainerStatus "unlimited-ocr-api" } else { "disabled|none" }
+        $ovis = if ($script:EnableOvisOcr2) { Get-ContainerStatus "ovisocr2-api" } else { "disabled|none" }
         $web = Get-ContainerStatus "pandocr-web"
         $apiOk = Test-HttpOk "http://localhost:8081/health"
         $ocrOk = Test-HttpOk "http://localhost:8082/health"
         $uowOk = if ($script:EnableUnlimitedOcr) { Test-HttpOk "http://localhost:8083/health" } else { $false }
+        $ovisOk = if ($script:EnableOvisOcr2) { Test-HttpOk "http://localhost:8084/health" } else { $false }
         $webOk = Test-HttpOk "http://localhost:8000/"
         $runtime = if ($webOk) { Get-ModelRuntimePayload } else { $null }
         $activeRuntimeStatus = Get-RuntimeModelStatus -Runtime $runtime -ModelId $script:ActiveModel
@@ -625,6 +787,9 @@ function Wait-ForServices {
         }
         elseif ($script:ActiveModel -eq "unlimited-ocr") {
             $activeStatuses = if ($script:UnlimitedOcrBackend -eq "sglang") { @($uow, $uowApi, $web) } else { @($uowApi, $web) }
+        }
+        elseif ($script:ActiveModel -eq "ovisocr2") {
+            $activeStatuses = @($ovis, $web)
         }
         else {
             $activeStatuses = @($vlm, $api, $web)
@@ -653,7 +818,7 @@ function Wait-ForServices {
             }
         }
 
-        $line = "vlm=$vlm api=$api ocr=$ocr uow=$uow uowApi=$uowApi web=$web apiHttp=$apiOk ocrHttp=$ocrOk uowHttp=$uowOk webHttp=$webOk runtime=$runtimeState operation=$operationState"
+        $line = "vlm=$vlm api=$api ocr=$ocr uow=$uow uowApi=$uowApi ovis=$ovis web=$web apiHttp=$apiOk ocrHttp=$ocrOk uowHttp=$uowOk ovisHttp=$ovisOk webHttp=$webOk runtime=$runtimeState operation=$operationState"
         if ($line -ne $lastLine) {
             Write-Host $line
             $lastLine = $line
@@ -676,24 +841,43 @@ try {
     Invoke-Checked -File "docker" -Arguments @("info", "--format", "{{.ServerVersion}}") -Description "Checking Docker Desktop"
     Invoke-Checked -File "docker" -Arguments @("compose", "version") -Description "Checking Docker Compose"
 
-    $selection = Resolve-DeploymentSelection -RequestedModels $script:RequestedModels -RequestedBackend $script:RequestedUnlimitedOcrBackend
+    if (-not [string]::IsNullOrWhiteSpace($script:RequestedModel) -and -not [string]::IsNullOrWhiteSpace($script:RequestedModels)) {
+        throw "Use either -Model for the simple single-model flow or -Models for the advanced multi-model flow, not both."
+    }
+
+    $interactiveSelection = [string]::IsNullOrWhiteSpace($script:RequestedModel) -and [string]::IsNullOrWhiteSpace($script:RequestedModels)
+    if ($interactiveSelection) {
+        $selection = Read-FriendlyDeploymentSelection
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($script:RequestedModel)) {
+        $selection = Resolve-SingleDeploymentSelection -RequestedModel $script:RequestedModel -RequestedBackend $script:RequestedUnlimitedOcrBackend
+    }
+    else {
+        $selection = Resolve-DeploymentSelection -RequestedModels $script:RequestedModels -RequestedBackend $script:RequestedUnlimitedOcrBackend
+    }
+
     $script:DeployModelIds = @($selection.ModelIds)
-    $script:ActiveModel = $script:DeployModelIds[0]
+    $script:ActiveModel = Resolve-ActiveModel -RequestedActiveModel $script:RequestedActiveModel -SelectedModels $script:DeployModelIds
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
+    $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
     $script:UnlimitedOcrBackend = Normalize-UnlimitedOcrBackend $selection.UnlimitedOcrBackend
     $script:UnlimitedOcrBackendExplicit = [bool]$selection.UnlimitedOcrBackendExplicit
     Write-Ok "Selected models to deploy now: $($script:DeployModelIds -join ', ')"
 
     $gpus = Get-GpuList
     $gpu = Select-Gpu -Gpus $gpus -RequestedGpuId $GpuId
+    $script:SelectedGpu = $gpu
     Write-Ok ("Selected GPU {0}: {1}" -f $gpu.Index, $gpu.Name)
+    if ($interactiveSelection -and $script:EnableUnlimitedOcr -and -not $script:UnlimitedOcrBackendExplicit) {
+        Read-UnlimitedOcrBackendSelection -Gpu $gpu
+    }
     Apply-GpuSpecificBackendDefaults -Gpu $gpu
     if ($script:EnableUnlimitedOcr) {
         Write-Ok "Unlimited-OCR backend: $script:UnlimitedOcrBackend"
     }
 
     if ($gpu.TotalMiB -lt 8192) {
-        throw "GPU $($gpu.Index) has only $($gpu.TotalMiB) MiB VRAM. PaddleOCR-VL requires at least 8192 MiB."
+        throw "GPU $($gpu.Index) has only $($gpu.TotalMiB) MiB VRAM. The selected OCR model deployment requires at least 8192 MiB."
     }
     if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") {
         Test-GpuSupportsSglang -Gpu $gpu
@@ -722,6 +906,12 @@ try {
         exit 0
     }
 
+    if ($interactiveSelection -and -not (Confirm-DeploymentPlan)) {
+        Write-Section "Deployment cancelled"
+        Write-Host "No images or containers were changed."
+        exit 0
+    }
+
     Set-UnlimitedOcrRuntimeSetting
 
     if (-not $SkipPull) {
@@ -746,6 +936,9 @@ try {
             $buildServices += "paddleocr-ocr-api"
         }
         $buildServices += Get-UnlimitedOcrServices
+        if ($script:EnableOvisOcr2) {
+            $buildServices += "ovisocr2-api"
+        }
         Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("build") + $buildServices)) -Description "Building local images"
     }
     else {
@@ -753,7 +946,7 @@ try {
     }
 
     if (-not $SkipClean) {
-        Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs -Arguments @("down", "--remove-orphans") -IncludeUnlimitedOcrProfile) -Description "Clearing old containers"
+        Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs -Arguments @("down", "--remove-orphans") -IncludeOptionalProfiles) -Description "Clearing old containers"
     }
     else {
         Write-Warn "Skipping old-container cleanup."
@@ -776,6 +969,9 @@ try {
     }
     if ($script:EnableUnlimitedOcr) {
         Write-Host "Unlimited-OCR API health: http://localhost:8083/health"
+    }
+    if ($script:EnableOvisOcr2) {
+        Write-Host "OvisOCR2 API health: http://localhost:8084/health"
     }
     Write-Host "Active model on startup: $script:ActiveModel. Select another model in the UI to stop this one and start the others."
     Write-Host "Useful logs: docker compose --env-file `"$script:RuntimeEnv`" logs -f"

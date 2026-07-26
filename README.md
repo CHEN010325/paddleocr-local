@@ -45,10 +45,11 @@ Browser
   -> PaddleOCR services
        - NVIDIA: docker compose 中的 paddleocr-vl-api + paddleocr-ocr-api + paddleocr-vlm-server
        - NVIDIA optional: unlimited-ocr-api + unlimited-ocr-sglang
+       - NVIDIA optional: ovisocr2-api
        - macOS: 本地 paddlex --serve，可选 mlx_vlm.server
 ```
 
-NVIDIA Compose 默认保留 4 个核心服务；启用 `unlimited-ocr` profile 后会额外创建 Unlimited-OCR 实验服务：
+NVIDIA Compose 提供四个可选模型；`unlimited-ocr` 和 `ovisocr2` 使用独立 profile：
 
 - `pandocr-web`
 - `paddleocr-vl-api`
@@ -56,13 +57,14 @@ NVIDIA Compose 默认保留 4 个核心服务；启用 `unlimited-ocr` profile �
 - `paddleocr-vlm-server`
 - `unlimited-ocr-api`，可选实验服务
 - `unlimited-ocr-sglang`，仅 SGLang 后端需要
+- `ovisocr2-api`，OvisOCR2 独立 vLLM 服务
 
-单 GPU Docker 部署默认只热加载一个模型。`pandocr-web` 常驻运行，并通过 Docker socket 按需启停模型容器：选择 `PaddleOCR-VL 1.6` 会启动 `paddleocr-vlm-server` + `paddleocr-vl-api` 并停止 `paddleocr-ocr-api`；选择 `PP-OCRv6` 会反向切换；启用并选择 `Unlimited-OCR` 后会启动 `unlimited-ocr-api`，并按 UI 里选择的 backend 决定是否启动 `unlimited-ocr-sglang`。顶部 UI 会实时轮询显示模型就绪、启动中、待启动或失败状态。
+单 GPU Docker 部署默认只热加载一个模型。`pandocr-web` 常驻运行，并通过 Docker socket 按需启停四个模型各自的容器；OvisOCR2 只启动独立的 `ovisocr2-api`。顶部 UI 会实时轮询显示模型就绪、启动中、待启动或失败状态。
 
 ## 功能
 
 - 支持图片、PDF、PPT/PPTX、DOC/DOCX 上传。
-- 支持在 `PaddleOCR-VL 1.6` 文档解析、`PP-OCRv6` 文字识别和可选 `Unlimited-OCR` 长文档解析之间自由切换；Docker 单 GPU 部署会按需启停模型，避免多个模型同时占用显存。
+- 支持在 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR` 和 `OvisOCR2` 四个模型之间自由切换；Docker 单 GPU 部署会按需启停模型，避免多个模型同时占用显存。
 - WebUI 支持中文/英文一键切换并记住用户选择，翻译集中维护在 `static/i18n.js`，便于后续扩展更多语言。
 - PDF 按页发送给 PaddleOCR-VL，便于对齐官方在线解析结果并稳定保留每页原始 JSON。
 - PP-OCRv6 结果使用接近官方的可视化文字层展示：左右页面对齐，上下/左右滚动和缩放同步，识别文字支持复制和纠正，同时保留原始 JSON。
@@ -103,13 +105,13 @@ Backend 选择建议：
 RTX 30/40 等非 Blackwell GPU 建议先部署 Transformers：
 
 ```powershell
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend transformers
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend transformers
 ```
 
 RTX 50 / Blackwell 用户建议直接部署 SGLang：
 
 ```powershell
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend sglang
 ```
 
 也可以后续直接从 WebUI 部署 SGLang：选择 `Unlimited-OCR`，在提示里输入 `sglang`，WebUI 会自动构建/创建缺失的 `unlimited-ocr-sglang` 容器。如果 SGLang 构建失败、启动卡住或健康检查不通过，RTX 30/40 用户可以在 Backend 下拉框切回 `Transformers`；RTX 50 用户优先调整 SGLang 环境或等待支持 sm120 的 Transformers/PyTorch 镜像。
@@ -174,13 +176,13 @@ RUN python -m venv /opt/venv && \
 本机使用的部署命令：
 
 ```powershell
-.\windows-one-click.bat -EnvFile env.docker -Models unlimited-ocr -UnlimitedOcrBackend transformers -NoOpen
+.\windows-one-click.bat -EnvFile env.docker -Model unlimited-ocr -UnlimitedOcrBackend transformers -NoOpen
 ```
 
 这次复测还修复了两个一键脚本问题：
 
 - 只部署 `Unlimited-OCR` 时，等待阶段查询未部署的 `paddleocr-vlm-server` 不能让脚本失败；现在缺失容器会稳定显示为 `missing|none`。
-- `-Models unlimited-ocr -UnlimitedOcrBackend sglang` 里的显式 backend 参数不能被默认值覆盖；现在会正确创建 `unlimited-ocr-sglang` 和 `unlimited-ocr-api`。
+- `-Model unlimited-ocr -UnlimitedOcrBackend sglang` 里的显式 backend 参数不能被默认值覆盖；现在会正确创建 `unlimited-ocr-sglang` 和 `unlimited-ocr-api`。
 
 若需要查看真实容器状态，可用同一个临时 env 文件检查：
 
@@ -215,7 +217,7 @@ Windows + NVIDIA 用户推荐直接使用一键部署脚本：
 .\windows-one-click.bat
 ```
 
-它会自动检查 Docker、识别 NVIDIA GPU、选择 `env.txt` 或 `env.docker`，询问当前要部署的模型，只拉取/构建选中的模型服务和 `pandocr-web`，然后启动 WebUI 并等待当前活跃模型健康检查。未部署的模型仍会显示在 WebUI 中，后续可在页面上触发下载/构建和容器创建。失败时会自动打印相关模型服务和 `pandocr-web` 的关键日志。
+它会自动检查 Docker、识别 NVIDIA GPU、选择 `env.txt` 或 `env.docker`，并让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2` 四个模型中选择首次部署和启动的模型。脚本只拉取/构建选中的模型服务和 `pandocr-web`，然后启动 WebUI 并等待当前活跃模型健康检查。未部署的模型仍会显示在 WebUI 中，后续可在页面上触发下载/构建和容器创建。
 
 常用一键部署参数：
 
@@ -223,14 +225,16 @@ Windows + NVIDIA 用户推荐直接使用一键部署脚本：
 .\windows-one-click.bat -DryRun
 .\windows-one-click.bat -GpuId 1
 .\windows-one-click.bat -EnvFile env.docker
-.\windows-one-click.bat -Models paddleocr-vl-1.6
-.\windows-one-click.bat -Models pp-ocrv6
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend transformers
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model paddleocr-vl-1.6
+.\windows-one-click.bat -Model pp-ocrv6
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend transformers
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model ovisocr2
 .\windows-one-click.bat -Models all
+.\windows-one-click.bat -Models all -ActiveModel ovisocr2
 ```
 
-Windows 一键部署会先让用户选择当前要部署的模型，只拉取/构建选中的模型服务和 `pandocr-web`。未部署的模型仍会显示在 WebUI 的模型下拉框中，状态为“未部署”；用户后续在 UI 中选择该模型时，可以直接触发下载/构建并创建对应容器，不需要回到命令行操作。
+Windows 一键部署第一步只要求从四个模型中选择首次启动模型，默认只准备这一个；第二步可直接回车跳过，也可选填要预下载的其他模型。只有选择 Unlimited-OCR 时才会询问 backend，正式下载前还会显示最终方案供确认。单模型自动化使用 `-Model`；高级多模型自动化使用 `-Models`，并可用 `-ActiveModel` 指定首次启动模型。
 
 也可以继续使用手动部署流程：
 

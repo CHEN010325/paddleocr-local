@@ -111,6 +111,37 @@ class ServerTaskApiTests(unittest.TestCase):
         self.assertIn("ocrActiveCount", payload)
         self.assertIn("maxConcurrentOcr", payload)
 
+    def test_model_catalog_can_include_all_independent_models(self):
+        with (
+            patch.object(
+                self.server,
+                "MODEL_CATALOG_ENV",
+                "paddleocr-vl-1.6,pp-ocrv6,unlimited-ocr,ovisocr2",
+            ),
+            patch.dict(
+                os.environ,
+                {"PANDOCR_MODEL_CATALOG": "paddleocr-vl-1.6,pp-ocrv6,unlimited-ocr,ovisocr2"},
+            ),
+        ):
+            self.assertEqual(
+                self.server.parse_model_catalog(),
+                ["paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2"],
+            )
+        self.assertEqual(
+            {
+                "paddleocr-vl-1.6": self.server.services_for_model_deploy("paddleocr-vl-1.6"),
+                "pp-ocrv6": self.server.services_for_model_deploy("pp-ocrv6"),
+                "unlimited-ocr": self.server.services_for_model_deploy("unlimited-ocr", "transformers"),
+                "ovisocr2": self.server.services_for_model_deploy("ovisocr2"),
+            },
+            {
+                "paddleocr-vl-1.6": ["paddleocr-vlm-server", "paddleocr-vl-api"],
+                "pp-ocrv6": ["paddleocr-ocr-api"],
+                "unlimited-ocr": ["unlimited-ocr-api"],
+                "ovisocr2": ["ovisocr2-api"],
+            },
+        )
+
     def test_model_runtime_switch_requires_docker_control(self):
         with patch.object(self.server, "model_control_available", return_value=False):
             response = self.client.post("/api/model-runtime/switch", json={"modelId": "pp-ocrv6"})
@@ -121,9 +152,9 @@ class ServerTaskApiTests(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(context), mode="r") as tar:
             self.assertIn("Dockerfile", tar.getnames())
             self.assertIn("unlimited_ocr_adapter.py", tar.getnames())
-            dockerfile = tar.extractfile("Dockerfile").read().decode("utf-8")
+            dockerfile = tar.extractfile("Dockerfile").read()
 
-        expected = (self.server.PROJECT_ROOT / "Dockerfile.unlimited-ocr-sglang").read_text(encoding="utf-8")
+        expected = (self.server.PROJECT_ROOT / "Dockerfile.unlimited-ocr-sglang").read_bytes()
         self.assertEqual(dockerfile, expected)
         self.assertEqual(
             self.server.docker_build_args_for("unlimited-ocr-sglang"),
@@ -133,6 +164,35 @@ class ServerTaskApiTests(unittest.TestCase):
             self.server.docker_build_args_for("paddleocr-ocr-api"),
             {"API_IMAGE_TAG_SUFFIX": self.server.API_IMAGE_TAG_SUFFIX},
         )
+
+    def test_ovisocr2_build_context_and_runtime_service(self):
+        context = self.server.make_docker_build_context("ovisocr2-api")
+        with tarfile.open(fileobj=io.BytesIO(context), mode="r") as tar:
+            self.assertIn("Dockerfile", tar.getnames())
+            self.assertIn("ovisocr2_adapter.py", tar.getnames())
+
+        self.assertEqual(self.server.docker_image_name_for("ovisocr2-api"), "pandocr-ovisocr2:latest")
+        self.assertEqual(self.server.services_for_model_deploy("ovisocr2"), ["ovisocr2-api"])
+        web_dockerfile = (self.server.PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY ovisocr2_adapter.py .", web_dockerfile)
+        self.assertIn("COPY Dockerfile.ovisocr2 ./", web_dockerfile)
+        container_config = self.server.container_payload_for(
+            "ovisocr2-api",
+            host_root=str(self.server.PROJECT_ROOT),
+            network_name="test-network",
+        )
+        self.assertIn(f"OVISOCR2_KV_CACHE_MEMORY_MB={self.server.OVISOCR2_KV_CACHE_MEMORY_MB}", container_config["Env"])
+        self.assertIn(
+            f"OVISOCR2_STARTUP_MEMORY_FRACTION={self.server.OVISOCR2_STARTUP_MEMORY_FRACTION}",
+            container_config["Env"],
+        )
+        self.assertIn(f"OVISOCR2_MAX_MODEL_LEN={self.server.OVISOCR2_MAX_MODEL_LEN}", container_config["Env"])
+        self.assertIn(f"OVISOCR2_MAX_NUM_SEQS={self.server.OVISOCR2_MAX_NUM_SEQS}", container_config["Env"])
+        self.assertIn(
+            f"OVISOCR2_GDN_PREFILL_BACKEND={self.server.OVISOCR2_GDN_PREFILL_BACKEND}",
+            container_config["Env"],
+        )
+        self.assertFalse(any(value.startswith("OVISOCR2_GPU_MEMORY_UTILIZATION=") for value in container_config["Env"]))
 
     def test_runtime_settings_can_persist_unlimited_ocr_backend(self):
         settings_path = self.server.RUNTIME_SETTINGS_FILE
@@ -312,6 +372,20 @@ class ServerTaskApiTests(unittest.TestCase):
         box = adapter.scaled_crop_box([100, 200, 500, 600], Image.new("RGB", (2000, 3000)))
 
         self.assertEqual(box, (184, 576, 1016, 1824))
+
+    def test_ovisocr2_visual_regions_are_cropped_and_rewritten(self):
+        adapter = importlib.import_module("ovisocr2_adapter")
+        from PIL import Image
+
+        markdown, images, blocks = adapter.crop_visual_regions(
+            'Before\n\n<img src="images/bbox_100_200_500_600.jpg" />\n\nAfter',
+            Image.new("RGB", (2000, 3000), "white"),
+            0,
+        )
+
+        self.assertIn("![image](ocr_images/ovisocr2_p1_image_1.jpg)", markdown)
+        self.assertEqual(list(images), ["ocr_images/ovisocr2_p1_image_1.jpg"])
+        self.assertEqual(blocks[0]["block_bbox"], [100, 200, 500, 600])
 
     def test_unlimited_ocr_streaming_markdown_can_include_images_once(self):
         adapter = importlib.import_module("unlimited_ocr_adapter")

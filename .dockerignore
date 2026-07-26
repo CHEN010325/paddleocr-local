@@ -46,10 +46,14 @@ model_cache_ocr/
 model_cache_ppocrv6/
 model_cache_ppocrv6_ocr/
 model_cache_unlimited_ocr/
+model_cache_ovisocr2/
+model_cache_ovisocr2_vllm/
 ollama_storage/
 ocr_results_*.md
 ocr_results_*.zip
 *.log
+.playwright-cli/
+output/
 
 # Keep only the .gitkeep in ocr_images
 static/ocr_images/*

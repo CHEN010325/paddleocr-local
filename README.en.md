@@ -44,10 +44,11 @@ Browser
   -> PaddleOCR services
        - NVIDIA: paddleocr-vl-api + paddleocr-ocr-api + paddleocr-vlm-server in docker compose
        - NVIDIA optional: unlimited-ocr-api + unlimited-ocr-sglang
+       - NVIDIA optional: ovisocr2-api
        - macOS: local paddlex --serve, optionally with mlx_vlm.server
 ```
 
-The NVIDIA Compose stack keeps four core services by default. Enabling the `unlimited-ocr` profile adds the optional Unlimited-OCR services:
+The NVIDIA Compose stack exposes four selectable models. Unlimited-OCR and OvisOCR2 use independent Compose profiles:
 
 - `pandocr-web`
 - `paddleocr-vl-api`
@@ -55,13 +56,14 @@ The NVIDIA Compose stack keeps four core services by default. Enabling the `unli
 - `paddleocr-vlm-server`
 - `unlimited-ocr-api`, optional experimental service
 - `unlimited-ocr-sglang`, only needed for the SGLang backend
+- `ovisocr2-api`, isolated OvisOCR2 vLLM service
 
-For single-GPU machines, the Docker deployment keeps only one OCR model hot-loaded by default. `pandocr-web` stays online and controls the model containers through the Docker socket: selecting `PaddleOCR-VL 1.6` starts `paddleocr-vlm-server` + `paddleocr-vl-api` and stops `paddleocr-ocr-api`; selecting `PP-OCRv6` does the reverse; selecting enabled `Unlimited-OCR` starts `unlimited-ocr-api` and starts `unlimited-ocr-sglang` only when the UI-selected backend is SGLang. The UI polls this runtime state in real time.
+For single-GPU machines, the Docker deployment keeps only one OCR model hot-loaded by default. `pandocr-web` stays online and controls each model's containers through the Docker socket; OvisOCR2 runs only in its isolated `ovisocr2-api` container. The UI polls this runtime state in real time.
 
 ## Features
 
 - Supports image, PDF, PPT/PPTX, and DOC/DOCX uploads.
-- Supports model switching between `PaddleOCR-VL 1.6` document parsing, `PP-OCRv6` text OCR, and optional `Unlimited-OCR` long-document parsing, with Docker-based on-demand start/stop for single-GPU deployments.
+- Supports switching between `PaddleOCR-VL 1.6`, `PP-OCRv6`, `Unlimited-OCR`, and `OvisOCR2`, with Docker-based on-demand start/stop for single-GPU deployments.
 - The WebUI supports one-click Chinese/English switching, remembers the user's choice, and keeps translations centralized in `static/i18n.js` for future languages.
 - Sends PDFs to PaddleOCR-VL page by page, making it easier to compare with the official online parsing result and reliably keep the raw JSON for each page.
 - Renders PP-OCRv6 results with an official-style visual OCR layer: source/result pages stay aligned, scrolling and zooming are synchronized, recognized text can be copied or corrected, and raw JSON remains available.
@@ -103,13 +105,13 @@ Backend guidance:
 For most users, deploy `Transformers` first:
 
 ```powershell
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend transformers
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend transformers
 ```
 
 Then try SGLang only if the Transformers path is already working and you want to compare server-style streaming or throughput:
 
 ```powershell
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend sglang
 ```
 
 You can also deploy SGLang later from the WebUI: select `Unlimited-OCR`, choose or enter `sglang` when prompted, and the WebUI will build/create the missing `unlimited-ocr-sglang` container. If SGLang fails to build or stays in startup, switch back to `Transformers` in the Backend selector.
@@ -140,7 +142,7 @@ For Windows NVIDIA users, the recommended path is the one-click script:
 .\windows-one-click.bat
 ```
 
-It checks Docker, detects the NVIDIA GPU, selects `env.txt` or `env.docker`, asks which model(s) to deploy now, pulls/builds only the selected model services plus `pandocr-web`, starts the WebUI, and waits for the selected active model health check. Models that were not deployed still appear in the WebUI as "not deployed"; selecting one there can download/build and create its containers without returning to the command line.
+It checks Docker, detects the NVIDIA GPU, selects `env.txt` or `env.docker`, and lets the user choose the initial deployment from four models: `PaddleOCR-VL 1.6`, `PP-OCRv6`, `Unlimited-OCR`, and `OvisOCR2`. It pulls/builds only the selected model services plus `pandocr-web`, starts the WebUI, and waits for the selected active model health check. Models that were not deployed still appear in the WebUI as "not deployed".
 
 Useful one-click options:
 
@@ -148,12 +150,16 @@ Useful one-click options:
 .\windows-one-click.bat -DryRun
 .\windows-one-click.bat -GpuId 1
 .\windows-one-click.bat -EnvFile env.docker
-.\windows-one-click.bat -Models paddleocr-vl-1.6
-.\windows-one-click.bat -Models pp-ocrv6
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend transformers
-.\windows-one-click.bat -Models unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model paddleocr-vl-1.6
+.\windows-one-click.bat -Model pp-ocrv6
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend transformers
+.\windows-one-click.bat -Model unlimited-ocr -UnlimitedOcrBackend sglang
+.\windows-one-click.bat -Model ovisocr2
 .\windows-one-click.bat -Models all
+.\windows-one-click.bat -Models all -ActiveModel ovisocr2
 ```
+
+The interactive flow first asks which of the four models to start, defaults to preparing only that model, then offers an optional additional-model step. The backend question appears only when Unlimited-OCR is selected, and a final summary is shown before downloads begin. Use `-Model` for simple automation; retain `-Models` plus `-ActiveModel` for advanced multi-model preparation.
 
 Manual deployment is still available:
 

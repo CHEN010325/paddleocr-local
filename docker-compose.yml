@@ -15,6 +15,13 @@ x-unlimited-ocr-sglang-image: &unlimited-ocr-sglang-image
       UNLIMITED_OCR_SGLANG_WHEEL_URL: ${UNLIMITED_OCR_SGLANG_WHEEL_URL:-https://github.com/baidu/Unlimited-OCR/raw/main/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl}
   image: pandocr-unlimited-ocr-sglang:latest
 
+x-ovisocr2-image: &ovisocr2-image
+  pull_policy: build
+  build:
+    context: .
+    dockerfile: Dockerfile.ovisocr2
+  image: pandocr-ovisocr2:latest
+
 services:
   paddleocr-vlm-server:
     image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -201,6 +208,48 @@ services:
     networks:
       - paddleocr-network
 
+  ovisocr2-api:
+    <<: *ovisocr2-image
+    profiles: ["ovisocr2"]
+    container_name: ovisocr2-api
+    ports:
+      - "127.0.0.1:${OVISOCR2_API_PORT:-8084}:8080"
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
+      - VLLM_USE_FLASHINFER_SAMPLER=0
+      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
+      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
+      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
+      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR2_MAX_MODEL_LEN:-32768}
+      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR2_MAX_NUM_SEQS:-1}
+      - OVISOCR2_MAX_TOKENS=${OVISOCR2_MAX_TOKENS:-8192}
+      - OVISOCR2_PDF_DPI=${OVISOCR2_PDF_DPI:-200}
+      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
+      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PANDOCR_GPU_DEVICE_ID:-0}"]
+              capabilities: [gpu]
+    user: root
+    restart: unless-stopped
+    shm_size: "16gb"
+    volumes:
+      - ./model_cache_ovisocr2:/root/.cache/huggingface
+      - ./model_cache_ovisocr2_vllm:/root/.cache/vllm
+    command: uvicorn ovisocr2_adapter:app --host 0.0.0.0 --port 8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 900s
+    networks:
+      - paddleocr-network
+
   pandocr-web:
     pull_policy: build
     build:
@@ -215,6 +264,7 @@ services:
       - PADDLE_SERVICE_URL=http://paddleocr-vl-api:8080/layout-parsing
       - PADDLE_OCR_SERVICE_URL=http://paddleocr-ocr-api:8080/ocr
       - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
+      - OVISOCR2_SERVICE_URL=http://ovisocr2-api:8080/ocr
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
       - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -230,7 +280,18 @@ services:
       - PADDLEOCR_VL_MODEL_NAME=${PADDLEOCR_VL_MODEL_NAME:-PaddleOCR-VL-1.6-0.9B}
       - PPOCR_V6_MODEL_NAME=${PPOCR_V6_MODEL_NAME:-PP-OCRv6_medium}
       - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
+      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
+      - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
+      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
+      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
+      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR2_MAX_MODEL_LEN:-32768}
+      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR2_MAX_NUM_SEQS:-1}
+      - OVISOCR2_MAX_TOKENS=${OVISOCR2_MAX_TOKENS:-8192}
+      - OVISOCR2_PDF_DPI=${OVISOCR2_PDF_DPI:-200}
+      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
+      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
       - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
+      - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-0}
       - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
       - PADDLE_REQUEST_TIMEOUT=${PADDLE_REQUEST_TIMEOUT:-3600}
       - PANDOCR_MODEL_CONTROL=${PANDOCR_MODEL_CONTROL:-docker}
@@ -250,6 +311,8 @@ services:
       - ./Dockerfile.ocr:/app/Dockerfile.ocr:ro
       - ./Dockerfile.unlimited-ocr:/app/Dockerfile.unlimited-ocr:ro
       - ./Dockerfile.unlimited-ocr-sglang:/app/Dockerfile.unlimited-ocr-sglang:ro
+      - ./ovisocr2_adapter.py:/app/ovisocr2_adapter.py:ro
+      - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     security_opt:

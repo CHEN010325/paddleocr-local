@@ -1,11 +1,17 @@
 ﻿# 快速开始
 
-完整部署说明统一维护在默认中文 `README.md` 的“部署方式”章节；那里分为 NVIDIA Docker 版本和 macOS Apple Silicon 版本。
+默认中文 `README.md` 只保留最常用的一键部署入口；本页提供 Windows/NVIDIA、macOS Apple Silicon 和手动 Docker 的补充步骤。
 
-先检查当前机器是否满足一键部署条件：
+macOS 可先运行统一诊断：
 
 ```bash
 make doctor
+```
+
+Windows 可直接使用一键脚本的预检模式：
+
+```powershell
+.\windows-one-click.bat -DryRun
 ```
 
 ## macOS Apple Silicon
@@ -136,14 +142,24 @@ curl http://localhost:8081/health
 ./test-connection.sh env.txt
 ```
 
-期望看到 4 个容器，其中只有 `pandocr-web` 和当前活跃模型在 running/healthy，另一个模型处于 created/exited/standby 属于正常：
+实际容器数量取决于已部署模型和启用的 Compose profile。单 GPU 环境中，`pandocr-web` 与当前活跃模型处于 running/healthy，其他已创建模型处于 created/exited/standby 均属正常。可能出现的模型服务包括：
 
 - `paddleocr-vlm-server`
 - `paddleocr-vl-api`
 - `paddleocr-ocr-api`
+- `unlimited-ocr-api`
+- `unlimited-ocr-sglang`
+- `ovisocr2-api`
 - `pandocr-web`
 
-`/api/models` 应返回 `paddleocr-vl-1.6` 和 `pp-ocrv6`，`/api/model-runtime` 应返回当前活跃模型和每个模型的容器状态。
+`/api/models` 应返回 `paddleocr-vl-1.6`、`pp-ocrv6`、`unlimited-ocr` 和 `ovisocr2`；未部署模型会显示为待部署。`/api/model-runtime` 应返回当前活跃模型和每个模型的真实运行状态。
+
+模型健康检查端口：
+
+- PaddleOCR-VL: http://localhost:8081/health
+- PP-OCRv6: http://localhost:8082/health
+- Unlimited-OCR: http://localhost:8083/health
+- OvisOCR2: http://localhost:8084/health
 
 ### 5. 使用
 

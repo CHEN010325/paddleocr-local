@@ -1,8 +1,8 @@
-# PaddleOCR Local - PaddleOCR-VL, PP-OCRv6 & Unlimited-OCR WebUI
+# PaddleOCR Local - PaddleOCR-VL、PP-OCRv6、Unlimited-OCR 与 OvisOCR2 WebUI
 
 **语言 / Language**: 简体中文 | [English](README.en.md)
 
-PaddleOCR Local 是一个面向 PaddleOCR-VL、PP-OCRv6 和可选 Unlimited-OCR 的轻量 Web 前端。前端负责文件上传、队列、预览、模型切换和下载，后端 FastAPI 做静态文件服务、Office 转 PDF 和请求代理；OCR 推理由独立模型服务完成，NVIDIA 路线使用 Docker Compose 管理 PaddleOCR 与 Unlimited-OCR 服务，macOS Apple Silicon 路线使用本地 PaddleX/MLX 服务。
+PaddleOCR Local 是一个支持 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR` 和 `OvisOCR2` 的本地文档解析 WebUI。前端负责文件上传、逐页队列、进度显示、预览、模型选择和结果下载；FastAPI 后端负责静态页面、Office 转 PDF、任务持久化和请求代理。Windows/NVIDIA 使用 Docker Compose，macOS Apple Silicon 使用本地 PaddleX、MLX-VLM 或隔离的 Transformers 服务。
 
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
@@ -14,6 +14,12 @@ macOS Apple Silicon：
 
 ```bash
 ./macos-one-click.command
+```
+
+第一次可在四模型菜单中选择，也可以直接指定 OvisOCR2；Apple Silicon 默认使用 MLX：
+
+```bash
+./macos-one-click.command --model ovisocr2
 ```
 
 Windows + NVIDIA：
@@ -28,7 +34,7 @@ Windows + NVIDIA：
 make doctor
 ```
 
-macOS 会走本地 PaddlePaddle + PaddleX + 可选 MLX-VLM；Windows/NVIDIA 会走 Docker Compose。默认只绑定本机地址，保持本地即开即用。
+macOS 只安装并启动所选模型；OvisOCR2 默认走 MLX，只有显式设置 `OVISOCR2_BACKEND=transformers` 才回退到 PyTorch MPS。Windows/NVIDIA 会走 Docker Compose。所有服务默认只绑定本机地址。
 
 
 ## 当前架构
@@ -42,11 +48,12 @@ Browser
        - PaddleOCR-VL request proxy
        - PP-OCRv6 OCR request proxy
        - optional Unlimited-OCR request/stream proxy
+       - optional OvisOCR2 request proxy
   -> PaddleOCR services
        - NVIDIA: docker compose 中的 paddleocr-vl-api + paddleocr-ocr-api + paddleocr-vlm-server
        - NVIDIA optional: unlimited-ocr-api + unlimited-ocr-sglang
        - NVIDIA optional: ovisocr2-api
-       - macOS: 本地 paddlex --serve，可选 mlx_vlm.server
+       - macOS: 按所选模型启动本地 PaddleX、mlx_vlm.server、Unlimited-OCR adapter 或 OvisOCR2 adapter
 ```
 
 NVIDIA Compose 提供四个可选模型；`unlimited-ocr` 和 `ovisocr2` 使用独立 profile：
@@ -69,6 +76,7 @@ NVIDIA Compose 提供四个可选模型；`unlimited-ocr` 和 `ovisocr2` 使用�
 - PDF 按页发送给 PaddleOCR-VL，便于对齐官方在线解析结果并稳定保留每页原始 JSON。
 - PP-OCRv6 结果使用接近官方的可视化文字层展示：左右页面对齐，上下/左右滚动和缩放同步，识别文字支持复制和纠正，同时保留原始 JSON。
 - 可选接入 `Unlimited-OCR`，支持 Transformers / SGLang 后端切换、流式输出、左右同步滚动和 `<|det|>image/chart` 图片块回填。
+- OvisOCR2 在 Apple Silicon 上默认使用 MLX-VLM，Transformers/MPS 作为显式回退；PDF 逐页解析并显示当前页和已用时间。
 - 解析任务会持久化到本机 `data/tasks/`，刷新页面后仍可查看历史任务，删除按钮会同步删除本地记录。
 - Markdown 预览支持表格横向滚动、KaTeX 数学公式渲染、OCR 结果中的字面量 `\n` 换行修正。
 - 支持解析选项：版面检测、图表识别、文档矫正、方向识别、印章识别、公式编号、Markdown 忽略标签等。
@@ -76,7 +84,7 @@ NVIDIA Compose 提供四个可选模型；`unlimited-ocr` 和 `ovisocr2` 使用�
 
 ### 可选实验模型：Unlimited-OCR
 
-项目提供了 `Unlimited-OCR` 的第三模型接入路径，适合研究/评测长文档一次性解析能力。NVIDIA Docker 路线保持可选启用；macOS Apple Silicon 一键部署会默认启用隔离的 Unlimited-OCR Transformers/MPS 服务，并作为模型下拉框里的 `Unlimited-OCR` 选项出现。
+项目提供 `Unlimited-OCR` 作为四个可选模型之一，适合研究/评测长文档一次性解析能力。NVIDIA Docker 路线通过独立 profile 按需部署；macOS Apple Silicon 选择该模型时，只安装并启动隔离的 Transformers/MPS 服务。
 
 启用 NVIDIA Docker 版本：
 
@@ -370,7 +378,14 @@ make mac-one-click
 
 安装器会自动选择 PaddlePaddle 支持的 Python 3.13 或 3.12，不会误用 Homebrew 默认的 Python 3.14。如果机器只有 Python 3.14 且已安装 Homebrew，安装器会自动安装 `python@3.13`；已有的 Python 3.14 虚拟环境会用兼容版本自动重建。
 
-首次启动会下载 `PP-DocLayoutV3`、`PaddleOCR-VL-1.6-0.9B` 和 MLX 模型权重，耗时取决于网络和磁盘速度。Unlimited-OCR 默认不在启动时预热，第一次使用时会下载 `sabafallah/Unlimited-OCR-Universal` 权重并在 MPS 上加载；Mac 默认以 `180 DPI / 4096 max tokens` 解析 PDF，适合本地 MPS 稳定运行。模型缓存完成后，后续再次运行同一条命令会复用已安装环境和已启动服务。
+首次启动只下载所选模型的依赖和权重：PaddleOCR-VL 使用 PaddleX/MLX，PP-OCRv6 使用本地 PaddleX，Unlimited-OCR 使用隔离的 Transformers/MPS 环境，OvisOCR2 使用隔离的 MLX-VLM 环境。OvisOCR2 默认缓存目录为 `model_cache_ovisocr2_macos/`，默认参数为 `180 DPI / 2048 max tokens / 1MP vision input`。模型缓存完成后，后续启动会直接复用。
+
+OvisOCR2 独立一键命令及显式回退方式：
+
+```bash
+./macos-ovisocr2-one-click.command
+OVISOCR2_BACKEND=transformers ./macos-one-click.command --model ovisocr2
+```
 
 高级手动启动：
 
@@ -391,6 +406,9 @@ make mac-test-unlimited-ocr
 
 - WebUI: http://127.0.0.1:8000
 - PaddleOCR-VL API health: http://127.0.0.1:8081/health
+- PP-OCRv6 API health: http://127.0.0.1:8082/health
+- Unlimited-OCR API health: http://127.0.0.1:8083/health
+- OvisOCR2 API health: http://127.0.0.1:8084/health
 
 测试、停止和查看日志：
 
@@ -430,6 +448,12 @@ PANDOCR_MACOS_BACKEND=mlx
 MLX_HOST=127.0.0.1
 MLX_PORT=8111
 MLX_MODEL=PaddlePaddle/PaddleOCR-VL-1.6
+OVISOCR2_BACKEND=mlx
+OVISOCR2_MODEL_NAME=ATH-MaaS/OvisOCR2
+OVISOCR2_API_PORT=8084
+OVISOCR2_PDF_DPI=180
+OVISOCR2_MAX_TOKENS=2048
+OVISOCR2_MAX_PIXELS=1048576
 PADDLEPADDLE_VERSION=3.3.0
 STARTUP_TIMEOUT_SECONDS=900
 ```
@@ -452,7 +476,14 @@ PANDOCR_PORT=18000 make mac-up
 | 5 次耗时 | 1.73s / 1.74s / 1.75s / 1.76s / 1.78s |
 | 平均耗时 | 约 1.75s |
 
-复杂 PDF、表格/公式密集页面、大图和 native 模式会明显更慢。首次运行还需要下载 `PP-DocLayoutV3`、`PaddleOCR-VL-1.6-0.9B` 和 MLX 模型权重，耗时主要取决于网络和磁盘速度。
+OvisOCR2 真实 PDF 对照（同一张 1488×2105、含中文正文和密集 HTML 表格的页面）：
+
+| 后端 | 完整页耗时 | 结果 |
+| --- | ---: | --- |
+| MLX-VLM 0.6.7（默认） | 正式 API 约 19 秒 | 2727 字符，表格完整闭合 |
+| Transformers/MPS（回退） | 约 72.4 秒 | 1408 tokens，表格完整闭合 |
+
+复杂 PDF、表格/公式密集页面、大图和 native 模式会明显更慢。首次运行需要下载所选模型的权重，耗时主要取决于网络和磁盘速度。
 
 ## 主要接口
 
@@ -472,6 +503,7 @@ PANDOCR_PORT=18000 make mac-up
 - `POST /api/unlimited-ocr`：可选代理到 Unlimited-OCR adapter，只有 `PANDOCR_ENABLE_UNLIMITED_OCR=1` 时可用。
 - `POST /api/unlimited-ocr/stream`：Unlimited-OCR 流式解析代理，响应类型为 `application/x-ndjson`。
 - `GET/POST /api/unlimited-ocr/backend`：读取或切换 Unlimited-OCR 的 `Transformers` / `SGLang` backend。
+- `POST /api/ovisocr2`：代理到 OvisOCR2 adapter；macOS 默认 MLX，Windows/NVIDIA 默认 vLLM。
 - `GET /api/openapi.json`：当前 WebUI 后端的 OpenAPI JSON；仓库里的 `paddle-layout-openapi.json` 是上游 Paddle layout-parsing 服务接口。
 
 ## 项目结构
@@ -482,7 +514,9 @@ PANDOCR_PORT=18000 make mac-up
 ├── requirements.txt
 ├── requirements-macos.txt
 ├── requirements-macos-mlx.txt
+├── requirements-macos-ovisocr2.txt
 ├── macos-one-click.command
+├── macos-ovisocr2-one-click.command
 ├── windows-one-click.bat
 ├── Dockerfile
 ├── Dockerfile.ocr
@@ -490,6 +524,7 @@ PANDOCR_PORT=18000 make mac-up
 ├── Dockerfile.unlimited-ocr-sglang
 ├── docker-compose.yml
 ├── unlimited_ocr_adapter.py
+├── ovisocr2_adapter.py
 ├── data/                  # 本地任务数据目录，默认不提交
 ├── env.txt
 ├── env.docker
@@ -498,6 +533,8 @@ PANDOCR_PORT=18000 make mac-up
 ├── pipeline_config_macos_mlx.template.yaml
 ├── scripts/               # 部署辅助脚本
 │   ├── windows-one-click.ps1
+│   ├── setup-macos-ovisocr2.sh
+│   └── start-macos-ovisocr2.sh
 ├── static/
 │   ├── index.html
 │   ├── app.js

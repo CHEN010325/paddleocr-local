@@ -1,8 +1,8 @@
-# PaddleOCR Local - PaddleOCR-VL, PP-OCRv6 & Unlimited-OCR WebUI
+# PaddleOCR Local - PaddleOCR-VL, PP-OCRv6, Unlimited-OCR & OvisOCR2 WebUI
 
 **Language / 语言**: [简体中文](README.md) | English
 
-PaddleOCR Local is a lightweight Web frontend for PaddleOCR-VL, PP-OCRv6, and optional Unlimited-OCR. The frontend handles file upload, queueing, preview, model switching, and download, while the FastAPI backend serves static files, converts Office files to PDF, and proxies requests. OCR inference runs in separate model services. The NVIDIA path uses Docker Compose to manage PaddleOCR and Unlimited-OCR services, and the macOS Apple Silicon path uses local PaddleX/MLX services.
+PaddleOCR Local is a local document-parsing WebUI for `PaddleOCR-VL 1.6`, `PP-OCRv6`, `Unlimited-OCR`, and `OvisOCR2`. The frontend handles uploads, page queues, visible progress, preview, model selection, and result downloads. FastAPI serves the UI, converts Office documents to PDF, persists tasks, and proxies inference. Windows/NVIDIA uses Docker Compose; macOS Apple Silicon uses local PaddleX, MLX-VLM, or isolated Transformers services.
 
 <img width="1920" height="945" alt="image" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
@@ -14,6 +14,12 @@ macOS Apple Silicon:
 
 ```bash
 ./macos-one-click.command
+```
+
+Choose one of four models on first run, or deploy OvisOCR2 directly. Apple Silicon uses MLX by default:
+
+```bash
+./macos-one-click.command --model ovisocr2
 ```
 
 Windows + NVIDIA:
@@ -28,7 +34,7 @@ Before deployment, or after a failed run, use the doctor:
 make doctor
 ```
 
-macOS uses local PaddlePaddle + PaddleX + optional MLX-VLM. Windows/NVIDIA uses Docker Compose. By default, services bind to localhost for a zero-config local setup.
+macOS installs and starts only the selected model. OvisOCR2 uses MLX by default and falls back to PyTorch MPS only when `OVISOCR2_BACKEND=transformers` is explicitly set. Windows/NVIDIA uses Docker Compose. All services bind to localhost by default.
 
 ## Current Architecture
 
@@ -41,11 +47,12 @@ Browser
        - PaddleOCR-VL request proxy
        - PP-OCRv6 OCR request proxy
        - optional Unlimited-OCR request/stream proxy
+       - optional OvisOCR2 request proxy
   -> PaddleOCR services
        - NVIDIA: paddleocr-vl-api + paddleocr-ocr-api + paddleocr-vlm-server in docker compose
        - NVIDIA optional: unlimited-ocr-api + unlimited-ocr-sglang
        - NVIDIA optional: ovisocr2-api
-       - macOS: local paddlex --serve, optionally with mlx_vlm.server
+       - macOS: selected local PaddleX, mlx_vlm.server, Unlimited-OCR adapter, or OvisOCR2 adapter
 ```
 
 The NVIDIA Compose stack exposes four selectable models. Unlimited-OCR and OvisOCR2 use independent Compose profiles:
@@ -68,6 +75,7 @@ For single-GPU machines, the Docker deployment keeps only one OCR model hot-load
 - Sends PDFs to PaddleOCR-VL page by page, making it easier to compare with the official online parsing result and reliably keep the raw JSON for each page.
 - Renders PP-OCRv6 results with an official-style visual OCR layer: source/result pages stay aligned, scrolling and zooming are synchronized, recognized text can be copied or corrected, and raw JSON remains available.
 - Optionally integrates `Unlimited-OCR` with Transformers / SGLang backend switching, streaming output, synchronized source/result scrolling, and Markdown image recovery for `<|det|>image/chart` blocks.
+- Runs OvisOCR2 through MLX-VLM by default on Apple Silicon, with an explicit Transformers/MPS fallback; PDFs are parsed page by page with current-page and elapsed-time feedback.
 - Persists parsing tasks locally under `data/tasks/`, so history remains available after refreshing the page. Deleting a task also removes the local record.
 - Markdown preview supports horizontally scrollable tables, KaTeX math rendering, and correction for literal `\n` line breaks in OCR output.
 - Supports parsing options including layout detection, chart recognition, document rectification, orientation recognition, seal recognition, formula numbering, and Markdown tag ignoring.
@@ -75,7 +83,7 @@ For single-GPU machines, the Docker deployment keeps only one OCR model hot-load
 
 ### Optional Experimental Model: Unlimited-OCR
 
-The project includes an optional third-model integration path for `Unlimited-OCR`. It is disabled by default, so existing `PaddleOCR-VL 1.6` and `PP-OCRv6` one-click deployment, model switching, and API behavior remain unchanged. After enabling it, `Unlimited-OCR` appears in the model selector and uses the same runtime switching flow.
+`Unlimited-OCR` is one of the four selectable models and is intended for research and evaluation of long-document parsing. NVIDIA Docker deploys it on demand through an isolated profile; macOS Apple Silicon installs and starts its isolated Transformers/MPS service only when that model is selected.
 
 Enable it for the NVIDIA Docker deployment:
 
@@ -291,7 +299,14 @@ http://127.0.0.1:8000. Unselected models are not downloaded, started, or kept in
 
 The installer automatically selects a PaddlePaddle-compatible Python 3.13 or 3.12 interpreter instead of accidentally using Homebrew's default Python 3.14. If only Python 3.14 is available and Homebrew is installed, it installs `python@3.13` automatically; existing Python 3.14 virtual environments are rebuilt with the compatible interpreter.
 
-The first startup downloads `PP-DocLayoutV3`, `PaddleOCR-VL-1.6-0.9B`, and MLX model weights. OvisOCR2 also uses MLX by default on Apple Silicon, with Transformers/MPS available as a fallback. The time required depends on network and disk speed. After the model cache is ready, subsequent runs of the same command reuse the installed environment and running services.
+The first startup downloads only the selected model's dependencies and weights: PaddleOCR-VL uses PaddleX/MLX, PP-OCRv6 uses local PaddleX, Unlimited-OCR uses an isolated Transformers/MPS environment, and OvisOCR2 uses an isolated MLX-VLM environment. OvisOCR2 uses `model_cache_ovisocr2_macos/` by default, with `180 DPI / 2048 max tokens / 1MP vision input`. Subsequent starts reuse the installed environment and model cache.
+
+OvisOCR2 also has a dedicated one-click command. To use the slower Transformers/MPS fallback explicitly:
+
+```bash
+./macos-ovisocr2-one-click.command
+OVISOCR2_BACKEND=transformers ./macos-one-click.command --model ovisocr2
+```
 
 Advanced manual startup:
 
@@ -304,6 +319,9 @@ Then open:
 
 - WebUI: http://127.0.0.1:8000
 - PaddleOCR-VL API health: http://127.0.0.1:8081/health
+- PP-OCRv6 API health: http://127.0.0.1:8082/health
+- Unlimited-OCR API health: http://127.0.0.1:8083/health
+- OvisOCR2 API health: http://127.0.0.1:8084/health
 
 Test, stop, and view logs:
 
@@ -342,6 +360,12 @@ PANDOCR_MACOS_BACKEND=mlx
 MLX_HOST=127.0.0.1
 MLX_PORT=8111
 MLX_MODEL=PaddlePaddle/PaddleOCR-VL-1.6
+OVISOCR2_BACKEND=mlx
+OVISOCR2_MODEL_NAME=ATH-MaaS/OvisOCR2
+OVISOCR2_API_PORT=8084
+OVISOCR2_PDF_DPI=180
+OVISOCR2_MAX_TOKENS=2048
+OVISOCR2_MAX_PIXELS=1048576
 PADDLEPADDLE_VERSION=3.3.0
 STARTUP_TIMEOUT_SECONDS=900
 ```
@@ -364,7 +388,14 @@ Local benchmark reference after model caching, excluding first download and cold
 | Five runs | 1.73s / 1.74s / 1.75s / 1.76s / 1.78s |
 | Average time | About 1.75s |
 
-Complex PDFs, table/formula-heavy pages, large images, and native mode will be noticeably slower. The first run also needs to download `PP-DocLayoutV3`, `PaddleOCR-VL-1.6-0.9B`, and MLX model weights, with time mainly determined by network and disk speed.
+OvisOCR2 comparison on the same real 1488×2105 PDF page containing Chinese text and a dense HTML table:
+
+| Backend | Full-page time | Result |
+| --- | ---: | --- |
+| MLX-VLM 0.6.7 (default) | About 19 seconds through the API | 2727 characters, complete closing table tag |
+| Transformers/MPS (fallback) | About 72.4 seconds | 1408 tokens, complete closing table tag |
+
+Complex PDFs, table/formula-heavy pages, and large images will be noticeably slower. The first run downloads the selected model's weights, with time mainly determined by network and disk speed.
 
 ## Main APIs
 
@@ -384,6 +415,7 @@ Complex PDFs, table/formula-heavy pages, large images, and native mode will be n
 - `POST /api/unlimited-ocr`: Optional proxy to the Unlimited-OCR adapter. Available only when `PANDOCR_ENABLE_UNLIMITED_OCR=1`.
 - `POST /api/unlimited-ocr/stream`: Unlimited-OCR streaming proxy. The response media type is `application/x-ndjson`.
 - `GET/POST /api/unlimited-ocr/backend`: Reads or switches the Unlimited-OCR `Transformers` / `SGLang` backend.
+- `POST /api/ovisocr2`: Proxies requests to the OvisOCR2 adapter; macOS defaults to MLX and Windows/NVIDIA defaults to vLLM.
 - `GET /api/openapi.json`: OpenAPI JSON for this WebUI backend. `paddle-layout-openapi.json` in the repo documents the upstream Paddle layout-parsing service.
 
 ## Project Structure
@@ -394,7 +426,9 @@ Complex PDFs, table/formula-heavy pages, large images, and native mode will be n
 |-- requirements.txt
 |-- requirements-macos.txt
 |-- requirements-macos-mlx.txt
+|-- requirements-macos-ovisocr2.txt
 |-- macos-one-click.command
+|-- macos-ovisocr2-one-click.command
 |-- windows-one-click.bat
 |-- Dockerfile
 |-- Dockerfile.ocr
@@ -402,6 +436,7 @@ Complex PDFs, table/formula-heavy pages, large images, and native mode will be n
 |-- Dockerfile.unlimited-ocr-sglang
 |-- docker-compose.yml
 |-- unlimited_ocr_adapter.py
+|-- ovisocr2_adapter.py
 |-- data/                  # Local task data directory, not committed by default
 |-- env.txt
 |-- env.docker
@@ -410,6 +445,8 @@ Complex PDFs, table/formula-heavy pages, large images, and native mode will be n
 |-- pipeline_config_macos_mlx.template.yaml
 |-- scripts/               # Deployment helper scripts
 |   |-- windows-one-click.ps1
+|   |-- setup-macos-ovisocr2.sh
+|   `-- start-macos-ovisocr2.sh
 |-- static/
 |   |-- index.html
 |   |-- app.js

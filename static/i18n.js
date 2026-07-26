@@ -130,6 +130,7 @@ window.PANDOCR_I18N = {
             '解析失败：{detail}': 'Parsing failed: {detail}',
             '{done}/{total} 解析中': '{done}/{total} parsing',
             '正在解析，结果会实时追加到这里。': 'Parsing is running. Results will appear here as they complete.',
+            'OvisOCR2 正在解析{label}，已用时 {seconds} 秒。苹果端逐页处理，完成后会自动显示结果。': 'OvisOCR2 is parsing {label} ({seconds}s elapsed). Pages are processed one at a time on Apple Silicon and results appear automatically.',
             '上次解析中断，点击“继续解析”从未完成页面恢复。': 'The last run was interrupted. Click "Resume parsing" to continue unfinished pages.',
             '未知错误': 'Unknown error',
             '点击“开始解析”生成 Markdown 或 JSON 结果。': 'Click "Start parsing" to generate Markdown or JSON results.',

@@ -66,6 +66,33 @@ Check readiness:
 curl.exe http://localhost:8084/health
 ```
 
+### macOS Apple Silicon (MLX by default)
+
+vLLM's CUDA/Triton runtime does not run natively on Apple Silicon. This repository therefore provides
+an isolated MLX-VLM backend for native Metal inference. A Transformers/PyTorch MPS implementation is
+kept as a compatibility fallback:
+
+```bash
+./macos-ovisocr2-one-click.command
+```
+
+Open `http://127.0.0.1:8000`. The model weights are cached in
+`model_cache_ovisocr2_macos/`, and the local adapter listens on `http://127.0.0.1:8084`.
+For a manual two-step installation, run `bash scripts/setup-macos-ovisocr2.sh` followed by
+`bash scripts/start-macos-ovisocr2.sh`.
+Stop both processes with:
+
+```bash
+bash scripts/stop-macos.sh
+```
+
+The default Mac settings use MLX-VLM, 180 DPI PDF rendering, a 2048-token output limit, and a
+1-megapixel vision-input limit. On an M4 Pro, the repository's real dense-table test page completed in
+about 21 seconds with MLX versus about 72 seconds with Transformers/MPS. Set
+`OVISOCR2_BACKEND=transformers` before starting to use the fallback implementation. Its defaults use
+`float16`, eager attention, a 128-token interval for repeated-document stopping checks, and PyTorch
+MPS CPU fallback for operations without an MPS kernel.
+
 The first start downloads the model to `model_cache_ovisocr2/` and stores vLLM/Torch compile artifacts in
 `model_cache_ovisocr2_vllm/`. Both caches persist across container recreation.
 
@@ -75,6 +102,7 @@ The first start downloads the model to `model_cache_ovisocr2/` and stores vLLM/T
 | --- | --- | --- |
 | `PANDOCR_ENABLE_OVISOCR2` | `1` in provided env files | Adds OvisOCR2 to the WebUI model catalog |
 | `OVISOCR2_MODEL_NAME` | `ATH-MaaS/OvisOCR2` | Hugging Face model id or mounted local path |
+| `OVISOCR2_BACKEND` | `mlx` on macOS, `vllm` in Docker | Inference implementation (`mlx`, `transformers`, or `vllm`) |
 | `OVISOCR2_KV_CACHE_MEMORY_MB` | `512` | Fixed KV cache allocation for one 32K sequence |
 | `OVISOCR2_STARTUP_MEMORY_FRACTION` | `0.50` | vLLM startup free-memory threshold only; fixed KV cache sizing remains 512 MiB |
 | `OVISOCR2_MAX_MODEL_LEN` | `32768` | Maximum input and output context length |

@@ -48,7 +48,9 @@ model_cache_ppocrv6_ocr/
 model_cache_unlimited_ocr/
 model_cache_ovisocr2/
 model_cache_ovisocr2_vllm/
+model_cache_ovisocr2_macos/
 model_cache_unlimited_ocr_macos/
+.venv-ovisocr2-macos/
 data/runtime-settings.json
 data/tasks/
 ocr_results_*.md

@@ -267,17 +267,31 @@ One-click deployment (recommended):
 ./macos-one-click.command
 ```
 
+Like the Windows installer, the Mac installer presents four choices and only installs and starts the
+selected model:
+
+```bash
+./macos-one-click.command --model paddleocr-vl-1.6
+./macos-one-click.command --model pp-ocrv6
+./macos-one-click.command --model unlimited-ocr
+./macos-one-click.command --model ovisocr2
+```
+
+Use `--dry-run` to validate a selection without changing services, and `--no-open` to avoid opening a browser.
+
 Equivalent Make command:
 
 ```bash
 make mac-one-click
 ```
 
-This one-click command checks the Apple Silicon environment, installs macOS dependencies, enables MLX-VLM acceleration by default, starts `mlx_vlm.server` / PaddleX API / PaddleOCR Local WebUI, runs health checks, and opens http://127.0.0.1:8000 automatically.
+This command checks Apple Silicon, prepares only the selected model's isolated environment, starts only
+that inference service and the WebUI, runs model-specific health checks, and opens
+http://127.0.0.1:8000. Unselected models are not downloaded, started, or kept in memory.
 
 The installer automatically selects a PaddlePaddle-compatible Python 3.13 or 3.12 interpreter instead of accidentally using Homebrew's default Python 3.14. If only Python 3.14 is available and Homebrew is installed, it installs `python@3.13` automatically; existing Python 3.14 virtual environments are rebuilt with the compatible interpreter.
 
-The first startup downloads `PP-DocLayoutV3`, `PaddleOCR-VL-1.6-0.9B`, and MLX model weights. The time required depends on network and disk speed. After the model cache is ready, subsequent runs of the same command reuse the installed environment and running services.
+The first startup downloads `PP-DocLayoutV3`, `PaddleOCR-VL-1.6-0.9B`, and MLX model weights. OvisOCR2 also uses MLX by default on Apple Silicon, with Transformers/MPS available as a fallback. The time required depends on network and disk speed. After the model cache is ready, subsequent runs of the same command reuse the installed environment and running services.
 
 Advanced manual startup:
 

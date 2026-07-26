@@ -387,6 +387,16 @@ class ServerTaskApiTests(unittest.TestCase):
         self.assertEqual(list(images), ["ocr_images/ovisocr2_p1_image_1.jpg"])
         self.assertEqual(blocks[0]["block_bbox"], [100, 200, 500, 600])
 
+    def test_ovisocr2_mlx_backend_dispatches_to_native_parser(self):
+        adapter = importlib.import_module("ovisocr2_adapter")
+        sentinel = object()
+        with (
+            patch.object(adapter, "BACKEND", "mlx"),
+            patch.object(adapter, "MlxOvisOCR2Parser", return_value=sentinel) as parser,
+        ):
+            self.assertIs(adapter.create_parser(), sentinel)
+        parser.assert_called_once_with(adapter.MODEL_NAME)
+
     def test_unlimited_ocr_streaming_markdown_can_include_images_once(self):
         adapter = importlib.import_module("unlimited_ocr_adapter")
         from PIL import Image

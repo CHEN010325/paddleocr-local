@@ -1572,7 +1572,8 @@ function resultDataKey(task) {
         task.status,
         task.updatedAt || 0,
         visibleMarkdown.length,
-        task.ocrResults?.length || 0
+        task.ocrResults?.length || 0,
+        taskProgressSeconds(task)
     ].join(':');
 }
 
@@ -2634,10 +2635,19 @@ async function processTask(task, { confirmCompleted = true } = {}) {
             refreshTaskUi(task);
 
             let result;
+            const showOvisProgress = isOvisOCR2Task(task);
+            if (showOvisProgress) batch._progressStartedAt = Date.now();
+            const progressTimer = showOvisProgress
+                ? window.setInterval(() => {
+                    if (batch.status === 'processing') refreshTaskUi(task);
+                }, 1000)
+                : null;
             try {
                 await ensureBatchPayload(task, batch);
                 result = await callOCR(batch, task);
             } finally {
+                if (progressTimer) window.clearInterval(progressTimer);
+                delete batch._progressStartedAt;
                 releaseBatchPayload(batch);
             }
             const prepared = prepareBatchResult(result, batch.id);
@@ -4638,10 +4648,28 @@ function resultPaneTitle(task) {
 }
 
 function emptyResultText(task) {
-    if (task.status === 'processing') return t('正在解析，结果会实时追加到这里。');
+    if (task.status === 'processing') {
+        const batch = task.batches?.find((item) => item.status === 'processing');
+        if (batch?._progressStartedAt && isOvisOCR2Task(task)) {
+            return t(
+                'OvisOCR2 正在解析{label}，已用时 {seconds} 秒。苹果端逐页处理，完成后会自动显示结果。',
+                {
+                    label: batch.label || '',
+                    seconds: taskProgressSeconds(task)
+                }
+            );
+        }
+        return t('正在解析，结果会实时追加到这里。');
+    }
     if (shouldResumeTask(task)) return t('上次解析中断，点击“继续解析”从未完成页面恢复。');
     if (task.status === 'error') return t('解析失败：{detail}', { detail: task.error || t('未知错误') });
     return t('点击“开始解析”生成 Markdown 或 JSON 结果。');
+}
+
+function taskProgressSeconds(task) {
+    const batch = task?.batches?.find((item) => item.status === 'processing');
+    if (!batch?._progressStartedAt) return 0;
+    return Math.max(0, Math.floor((Date.now() - Number(batch._progressStartedAt)) / 1000));
 }
 
 function sourceLabel(task) {

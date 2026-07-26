@@ -342,13 +342,31 @@ PaddleOCR-VL-1.6
 ./macos-one-click.command
 ```
 
+脚本会显示与 Windows 一键部署对应的四模型菜单，并且只安装、下载和启动所选模型：
+
+1. `PaddleOCR-VL 1.6`（MLX）
+2. `PP-OCRv6`
+3. `Unlimited-OCR`（Transformers/MPS）
+4. `OvisOCR2`（默认 MLX，Transformers/MPS 回退）
+
+也可以跳过交互直接指定：
+
+```bash
+./macos-one-click.command --model paddleocr-vl-1.6
+./macos-one-click.command --model pp-ocrv6
+./macos-one-click.command --model unlimited-ocr
+./macos-one-click.command --model ovisocr2
+```
+
+使用 `--dry-run` 只验证选择，使用 `--no-open` 阻止自动打开浏览器。
+
 也可以使用等价的 Make 命令：
 
 ```bash
 make mac-one-click
 ```
 
-这条一键命令会自动检查 Apple Silicon 环境、安装 macOS 依赖、默认启用 MLX-VLM 提速模式、准备隔离的 Unlimited-OCR MPS 环境、启动 `mlx_vlm.server` / PaddleX API / PP-OCRv6 API / Unlimited-OCR adapter / PaddleOCR Local WebUI、执行健康检查，并自动打开 http://127.0.0.1:8000。
+这条一键命令会自动检查 Apple Silicon 环境，只准备所选模型的隔离环境，只启动对应推理服务与 PaddleOCR Local WebUI，执行针对所选模型的健康检查，并自动打开 http://127.0.0.1:8000。未选择的模型不会下载、启动或占用内存。
 
 安装器会自动选择 PaddlePaddle 支持的 Python 3.13 或 3.12，不会误用 Homebrew 默认的 Python 3.14。如果机器只有 Python 3.14 且已安装 Homebrew，安装器会自动安装 `python@3.13`；已有的 Python 3.14 虚拟环境会用兼容版本自动重建。
 

@@ -16,6 +16,21 @@ Apple M1/M2/M3/M4 一键部署：
 ./macos-one-click.command
 ```
 
+脚本会像 Windows 版本一样提示选择一个模型，只安装并启动所选模型：
+
+```bash
+./macos-one-click.command --model paddleocr-vl-1.6
+./macos-one-click.command --model pp-ocrv6
+./macos-one-click.command --model unlimited-ocr
+./macos-one-click.command --model ovisocr2
+```
+
+只检查选择和参数，不安装或启动：
+
+```bash
+./macos-one-click.command --model ovisocr2 --dry-run
+```
+
 或：
 
 ```bash

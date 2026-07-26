@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -16,6 +17,11 @@ logging.basicConfig(level=os.getenv("OVISOCR2_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("ovisocr2-adapter")
 
 MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
+BACKEND = os.getenv("OVISOCR2_BACKEND", "vllm").strip().lower()
+TRANSFORMERS_DEVICE = os.getenv("OVISOCR2_TRANSFORMERS_DEVICE", "auto").strip().lower()
+TRANSFORMERS_DTYPE = os.getenv("OVISOCR2_TRANSFORMERS_DTYPE", "auto").strip().lower()
+ATTENTION_IMPLEMENTATION = os.getenv("OVISOCR2_ATTENTION_IMPLEMENTATION", "eager").strip()
+RESTART_CHECK_INTERVAL = max(32, int(os.getenv("OVISOCR2_RESTART_CHECK_INTERVAL", "128")))
 KV_CACHE_MEMORY_MB = int(os.getenv("OVISOCR2_KV_CACHE_MEMORY_MB", "512"))
 STARTUP_MEMORY_FRACTION = float(os.getenv("OVISOCR2_STARTUP_MEMORY_FRACTION", "0.50"))
 MAX_MODEL_LEN = int(os.getenv("OVISOCR2_MAX_MODEL_LEN", "32768"))
@@ -46,7 +52,7 @@ PARSER_LOCK = asyncio.Lock()
 INFERENCE_LOCK = asyncio.Lock()
 
 
-class OvisOCR2Parser:
+class VllmOvisOCR2Parser:
     def __init__(self, model_name_or_path: str):
         from vllm import LLM, SamplingParams
 
@@ -72,7 +78,7 @@ class OvisOCR2Parser:
     @staticmethod
     def clean_truncated_repeats(
         text: str,
-        min_text_len: int = 8000,
+        min_text_len: int = 800,
         max_period: int = 200,
         min_repeat_chars: int = 100,
         min_repeat_times: int = 5,
@@ -94,6 +100,25 @@ class OvisOCR2Parser:
                 return text[: n - total_len + unit_len] + text[n - tail_len :]
         return text
 
+    @staticmethod
+    def clean_restarted_document(text: str) -> str:
+        """Remove a second pass that restarts from the document's first line."""
+        lines = text.splitlines()
+        first_index = next((index for index, line in enumerate(lines) if line.strip()), None)
+        if first_index is None:
+            return text
+        first_line = lines[first_index].strip()
+        if len(first_line) < 8:
+            return text
+        substantial_lines = 0
+        for index in range(first_index + 1, len(lines)):
+            current = lines[index].strip()
+            if current:
+                substantial_lines += 1
+            if substantial_lines >= 2 and current == first_line:
+                return "\n".join(lines[:index]).rstrip()
+        return text
+
     def parse(self, images: list[Image.Image]) -> list[str]:
         inputs = [
             {
@@ -106,10 +131,234 @@ class OvisOCR2Parser:
             for image in images
         ]
         outputs = self.model.generate(inputs, self.sampling_params)
-        return [self.clean_truncated_repeats(output.outputs[0].text.strip()) for output in outputs]
+        return [
+            self.clean_truncated_repeats(
+                self.clean_restarted_document(output.outputs[0].text.strip())
+            )
+            for output in outputs
+        ]
 
 
-async def get_parser() -> OvisOCR2Parser:
+class TransformersOvisOCR2Parser:
+    """PyTorch backend for Apple Silicon and other machines without vLLM/CUDA."""
+
+    clean_truncated_repeats = staticmethod(VllmOvisOCR2Parser.clean_truncated_repeats)
+    clean_restarted_document = staticmethod(VllmOvisOCR2Parser.clean_restarted_document)
+
+    def __init__(self, model_name_or_path: str):
+        import torch
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+        if TRANSFORMERS_DEVICE == "auto":
+            if torch.backends.mps.is_available():
+                device = "mps"
+            elif torch.cuda.is_available():
+                device = "cuda"
+            else:
+                device = "cpu"
+        else:
+            device = TRANSFORMERS_DEVICE
+
+        if TRANSFORMERS_DTYPE == "auto":
+            dtype = torch.float16 if device == "mps" else (
+                torch.bfloat16 if device == "cuda" else torch.float32
+            )
+        else:
+            dtype = getattr(torch, TRANSFORMERS_DTYPE)
+
+        logger.info(
+            "Loading OvisOCR2 with Transformers on %s using %s",
+            device,
+            str(dtype).removeprefix("torch."),
+        )
+        self.device = torch.device(device)
+        self.processor = AutoProcessor.from_pretrained(model_name_or_path)
+        self.model = AutoModelForMultimodalLM.from_pretrained(
+            model_name_or_path,
+            dtype=dtype,
+            attn_implementation=ATTENTION_IMPLEMENTATION,
+            low_cpu_mem_usage=True,
+        ).to(self.device)
+        self.model.eval()
+
+    def parse(self, images: list[Image.Image]) -> list[str]:
+        import torch
+        from transformers import StoppingCriteria, StoppingCriteriaList
+
+        markdowns = []
+        for image_index, image in enumerate(images):
+            started_at = time.monotonic()
+            logger.info(
+                "Starting Transformers OCR for image %s/%s (%sx%s), restart check every %s tokens",
+                image_index + 1,
+                len(images),
+                image.width,
+                image.height,
+                RESTART_CHECK_INTERVAL,
+            )
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": PROMPT},
+                    ],
+                }
+            ]
+            inputs = self.processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                enable_thinking=False,
+                return_dict=True,
+                return_tensors="pt",
+                processor_kwargs={
+                    "images_kwargs": {
+                        "min_pixels": MIN_PIXELS,
+                        "max_pixels": MAX_PIXELS,
+                    }
+                },
+            )
+            inputs = {
+                key: value.to(self.device) if hasattr(value, "to") else value
+                for key, value in inputs.items()
+            }
+            input_length = inputs["input_ids"].shape[-1]
+            image_grid = inputs.get("image_grid_thw")
+            visual_tokens = (
+                int(image_grid.prod(dim=-1).sum().item())
+                // int(self.processor.image_processor.merge_size) ** 2
+                if image_grid is not None
+                else 0
+            )
+            logger.info(
+                "Prepared image %s/%s with %s visual tokens (%s total prompt tokens)",
+                image_index + 1,
+                len(images),
+                visual_tokens,
+                input_length,
+            )
+
+            processor = self.processor
+            clean_restarted_document = self.clean_restarted_document
+
+            class DocumentRestartStoppingCriteria(StoppingCriteria):
+                def __call__(self, input_ids, scores, **kwargs):
+                    generated_length = input_ids.shape[-1] - input_length
+                    if (
+                        generated_length < RESTART_CHECK_INTERVAL
+                        or generated_length % RESTART_CHECK_INTERVAL
+                    ):
+                        return False
+                    partial = processor.decode(
+                        input_ids[0][input_length:],
+                        skip_special_tokens=True,
+                    )
+                    partial = re.sub(r"\n*<think>\s*</think>\n*", "\n\n", partial).strip()
+                    return clean_restarted_document(partial) != partial
+
+            with torch.inference_mode():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=MAX_TOKENS,
+                    do_sample=False,
+                    no_repeat_ngram_size=64,
+                    stopping_criteria=StoppingCriteriaList([DocumentRestartStoppingCriteria()]),
+                    use_cache=True,
+                )
+            text = self.processor.decode(
+                output_ids[0][input_length:],
+                skip_special_tokens=True,
+            ).strip()
+            text = re.sub(r"\n*<think>\s*</think>\n*", "\n\n", text).strip()
+            text = self.clean_restarted_document(text)
+            markdowns.append(self.clean_truncated_repeats(text))
+            logger.info(
+                "Finished Transformers OCR for image %s/%s in %.1fs (%s generated tokens)",
+                image_index + 1,
+                len(images),
+                time.monotonic() - started_at,
+                output_ids.shape[-1] - input_length,
+            )
+        return markdowns
+
+
+class MlxOvisOCR2Parser:
+    """Native Apple Silicon backend powered by MLX-VLM."""
+
+    clean_truncated_repeats = staticmethod(VllmOvisOCR2Parser.clean_truncated_repeats)
+    clean_restarted_document = staticmethod(VllmOvisOCR2Parser.clean_restarted_document)
+
+    def __init__(self, model_name_or_path: str):
+        from mlx_vlm import load
+        from mlx_vlm.prompt_utils import apply_chat_template
+
+        logger.info("Loading OvisOCR2 with MLX-VLM")
+        self.model, self.processor = load(model_name_or_path)
+        self.prompt = apply_chat_template(
+            self.processor,
+            self.model.config,
+            PROMPT,
+            num_images=1,
+            enable_thinking=False,
+            thinking_mode="disabled",
+        )
+
+    def parse(self, images: list[Image.Image]) -> list[str]:
+        from mlx_vlm import generate
+
+        markdowns = []
+        for image_index, image in enumerate(images):
+            started_at = time.monotonic()
+            logger.info(
+                "Starting MLX OCR for image %s/%s (%sx%s, max %s pixels)",
+                image_index + 1,
+                len(images),
+                image.width,
+                image.height,
+                MAX_PIXELS,
+            )
+            result = generate(
+                self.model,
+                self.processor,
+                self.prompt,
+                image=[image],
+                max_tokens=MAX_TOKENS,
+                temperature=0.0,
+                min_pixels=MIN_PIXELS,
+                max_pixels=MAX_PIXELS,
+                enable_thinking=False,
+                skip_special_tokens=True,
+                verbose=False,
+            )
+            text = re.sub(r"\n*<think>\s*</think>\n*", "\n\n", result.text).strip()
+            text = self.clean_restarted_document(text)
+            markdowns.append(self.clean_truncated_repeats(text))
+            logger.info(
+                "Finished MLX OCR for image %s/%s in %.1fs "
+                "(%s generated tokens, %.1f tokens/s, %.2f GB peak memory, reason=%s)",
+                image_index + 1,
+                len(images),
+                time.monotonic() - started_at,
+                result.generation_tokens,
+                result.generation_tps,
+                result.peak_memory,
+                result.finish_reason,
+            )
+        return markdowns
+
+
+def create_parser():
+    if BACKEND == "vllm":
+        return VllmOvisOCR2Parser(MODEL_NAME)
+    if BACKEND == "transformers":
+        return TransformersOvisOCR2Parser(MODEL_NAME)
+    if BACKEND == "mlx":
+        return MlxOvisOCR2Parser(MODEL_NAME)
+    raise ValueError(f"Unsupported OvisOCR2 backend: {BACKEND}")
+
+
+async def get_parser():
     global PARSER, PARSER_ERROR
     if PARSER is not None:
         return PARSER
@@ -118,7 +367,7 @@ async def get_parser() -> OvisOCR2Parser:
             return PARSER
         PARSER_ERROR = None
         try:
-            PARSER = await asyncio.to_thread(OvisOCR2Parser, MODEL_NAME)
+            PARSER = await asyncio.to_thread(create_parser)
             return PARSER
         except Exception as error:
             PARSER_ERROR = str(error) or error.__class__.__name__
@@ -239,7 +488,7 @@ app = FastAPI(title="OvisOCR2 Adapter", version="0.1.0", lifespan=lifespan)
 async def health():
     if PARSER is None:
         raise HTTPException(status_code=503, detail=PARSER_ERROR or "OvisOCR2 is loading")
-    return {"status": "ok", "model": MODEL_NAME, "modelLoaded": True}
+    return {"status": "ok", "model": MODEL_NAME, "backend": BACKEND, "modelLoaded": True}
 
 
 @app.post("/ocr")

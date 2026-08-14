@@ -1,0 +1,5 @@
+-r requirements.txt
+
+pytest==8.4.2
+pytest-cov==7.1.0
+pymupdf==1.27.2.2

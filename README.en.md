@@ -4,12 +4,13 @@
 
 A self-hosted, multi-model document parsing WebUI for images, PDFs, PowerPoint, and Word documents, with Markdown preview and export.
 
-Four isolated models are supported:
+Five isolated models are supported:
 
 - PaddleOCR-VL 1.6
 - PP-OCRv6
 - Unlimited-OCR
 - OvisOCR2
+- HPD-Parsing
 
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
@@ -30,6 +31,14 @@ Deploy OvisOCR2 directly:
 ```powershell
 .\windows-one-click.bat -Model ovisocr2
 ```
+
+Deploy HPD-Parsing directly:
+
+```powershell
+.\windows-one-click.bat -Model hpd-parsing
+```
+
+HPD-Parsing uses its official customized vLLM image and requires an NVIDIA GPU, Linux x86-64 containers, and a driver supporting CUDA 12.8 or newer.
 
 Validate the plan without downloading or starting services:
 
@@ -68,13 +77,14 @@ After deployment, open:
 - PP-OCRv6: http://localhost:8082/health
 - Unlimited-OCR: http://localhost:8083/health
 - OvisOCR2: http://localhost:8084/health
+- HPD-Parsing: http://localhost:8085/health
 
 A health endpoint is available only while its model is running. On a single GPU, only the selected model is loaded; switching models automatically stops the others to avoid unnecessary VRAM use.
 
 ## Features
 
 - Image, PDF, PPT/PPTX, and DOC/DOCX parsing
-- Four-model selection and on-demand deployment
+- Five-model selection and on-demand deployment
 - Page-by-page PDF parsing, progress, and persistent history
 - Markdown, table, formula, and visual-region rendering
 - Side-by-side source and result views

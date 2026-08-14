@@ -18,14 +18,20 @@ step() {
 }
 
 step "Checking Python syntax"
-"$PYTHON" -m py_compile server.py unlimited_ocr_adapter.py
+"$PYTHON" -m py_compile \
+  server.py \
+  hpd_parsing_adapter.py \
+  unlimited_ocr_adapter.py \
+  ovisocr2_adapter.py \
+  scripts/check-mlx-runtime.py
 
-step "Running server unit tests"
-"$PYTHON" -m unittest tests.test_server -v
+step "Running Python unit tests"
+"$PYTHON" -m pytest -q
 
-step "Checking frontend JavaScript syntax"
+step "Checking and testing frontend JavaScript"
 node --check static/i18n.js
 node --check static/app.js
+npm run test:frontend
 
 step "Checking shell script syntax"
 bash -n scripts/*.sh deploy.sh build.sh start-vlm.sh test-connection.sh

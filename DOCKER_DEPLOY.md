@@ -2,7 +2,7 @@
 
 ## 服务组成
 
-`docker-compose.yml` 包含常驻 WebUI、PaddleOCR 服务和两个可选 profile：
+`docker-compose.yml` 包含常驻 WebUI、PaddleOCR 服务和三个可选 profile：
 
 | 服务 | 作用 | 对外端口 |
 | --- | --- | --- |
@@ -12,9 +12,11 @@
 | `unlimited-ocr-api` | Unlimited-OCR 适配服务（可选） | `8083:8080` |
 | `unlimited-ocr-sglang` | Unlimited-OCR SGLang 推理（按 backend 可选） | `10000:10000` |
 | `ovisocr2-api` | OvisOCR2 独立 vLLM 推理（可选） | `8084:8080` |
+| `hpd-parsing-server` | HPD-Parsing 官方定制 vLLM 推理（可选） | 无 |
+| `hpd-parsing-api` | HPD-Parsing 图片/PDF 与 Markdown 适配服务（可选） | `8085:8080` |
 | `pandocr-web` | WebUI、FastAPI 代理、Office 转 PDF | `8000:8000` |
 
-单 GPU 部署默认只热加载一个模型：`pandocr-web` 挂载 Docker socket，并通过 Docker Engine API 在 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2` 之间切换对应容器。Docker socket 等同于宿主机管理权限，请勿把 WebUI 暴露给不可信网络。
+单 GPU 部署默认只热加载一个模型：`pandocr-web` 挂载 Docker socket，并通过 Docker Engine API 在五个模型之间切换对应容器。Docker socket 等同于宿主机管理权限，请勿把 WebUI 暴露给不可信网络。
 解析历史会通过 `./data:/app/data` 挂载保存到宿主机，默认路径为 `data/tasks/`。
 
 ## 推荐配置
@@ -64,12 +66,20 @@ Windows + NVIDIA 用户推荐直接运行一键部署脚本：
 .\windows-one-click.bat
 ```
 
-脚本会自动选择环境文件，并让用户从四个模型中选择首次部署模型；只创建选中的模型容器和 WebUI，然后等待所选模型健康。选择多个模型时可通过 `-ActiveModel` 指定首次启动模型：
+脚本会自动选择环境文件，并让用户从五个模型中选择首次部署模型；只创建选中的模型容器和 WebUI，然后等待所选模型健康。选择多个模型时可通过 `-ActiveModel` 指定首次启动模型：
 
 ```powershell
 .\windows-one-click.bat -Model ovisocr2
-.\windows-one-click.bat -Models all -ActiveModel ovisocr2
+.\windows-one-click.bat -Models all-five -ActiveModel ovisocr2
 ```
+
+HPD-Parsing 可直接一键部署：
+
+```powershell
+.\windows-one-click.bat -Model hpd-parsing
+```
+
+该模型使用官方 `hpd-parsing-vllm` 镜像，要求 NVIDIA GPU、Linux x86-64 容器和支持 CUDA 12.8+ 的驱动。在线镜像首次启动会下载 `PaddlePaddle/HPD-Parsing`；缓存保存在 `model_cache_hpd_parsing/`。如需官方离线镜像，可设置 `HPD_PARSING_IMAGE=ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu-offline`。
 
 手动部署命令如下：
 

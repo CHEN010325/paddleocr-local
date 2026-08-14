@@ -48,6 +48,7 @@ model_cache_ppocrv6_ocr/
 model_cache_unlimited_ocr/
 model_cache_ovisocr2/
 model_cache_ovisocr2_vllm/
+model_cache_hpd_parsing/
 model_cache_ovisocr2_macos/
 model_cache_unlimited_ocr_macos/
 .venv-ovisocr2-macos/
@@ -71,6 +72,12 @@ tmp/
 temp/
 *.tmp
 tests/*.png
+.coverage
+coverage-*.json
+coverage.xml
+htmlcov/
+coverage/
+node_modules/
 
 # OS
 Thumbs.db

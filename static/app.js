@@ -3,8 +3,10 @@ const DEFAULT_PDF_BATCH_SIZE = 1;
 const MAX_PDF_BATCH_SIZE = 400;
 const UNLIMITED_OCR_MODEL_ID = 'unlimited-ocr';
 const OVIS_OCR_MODEL_ID = 'ovisocr2';
+const HPD_PARSING_MODEL_ID = 'hpd-parsing';
 const UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE = 1;
 const UNLIMITED_OCR_COORDINATE_SIZE = 1000;
+const HPD_PARSING_COORDINATE_SIZE = 1000;
 const UNLIMITED_OCR_BACKENDS = ['transformers', 'sglang'];
 const STREAM_RENDER_MIN_INTERVAL_MS = 140;
 const STREAM_STATUS_MARKDOWN_RE = /^\s*\*\*Unlimited-OCR status\*\*/i;
@@ -1809,10 +1811,15 @@ function isOvisOCR2Task(task) {
         || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === OVIS_OCR_MODEL_ID));
 }
 
+function isHPDParsingTask(task) {
+    return task?.modelId === HPD_PARSING_MODEL_ID
+        || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === HPD_PARSING_MODEL_ID));
+}
+
 function shouldRenderOfficialLayout(task) {
     // These models return complete document Markdown, while their layout blocks
     // are partial metadata and must not replace the full Markdown result.
-    return !isUnlimitedOCRTask(task) && !isOvisOCR2Task(task);
+    return !isUnlimitedOCRTask(task) && !isOvisOCR2Task(task) && !isHPDParsingTask(task);
 }
 
 function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
@@ -2737,10 +2744,7 @@ function rebuildTaskResultFromCompletedBatches(task) {
     const existingMarkdown = task.markdown || '';
     const hasBatchMarkdown = completedBatches.some((batch) => batch.markdown);
     if (!existingMarkdown && hasBatchMarkdown) {
-        task.markdown = completedBatches
-            .map((batch) => batch.markdown || '')
-            .filter(Boolean)
-            .join('\n\n');
+        task.markdown = joinTaskBatchMarkdown(task, completedBatches.map((batch) => batch.markdown || ''));
     }
 
     if (!task.images || typeof task.images !== 'object') {
@@ -2774,12 +2778,30 @@ function visibleTaskMarkdown(task) {
     return stripStreamStatusMarkdown(task?.markdown || '');
 }
 
+function shouldJoinHPDPageContinuation(left, right) {
+    const previous = String(left || '').trimEnd();
+    const next = String(right || '').trimStart();
+    if (!previous || !next || !/^[a-z]/.test(next)) return false;
+    if (/[.!?;:]$/.test(previous)) return false;
+    if (/(?:^|\n)!\[[^\]]*\]\([^)]+\)\s*$/.test(previous)) return false;
+    return /[A-Za-z0-9,)\]%'”’]$/.test(previous);
+}
+
+function joinTaskBatchMarkdown(task, markdownParts) {
+    const parts = markdownParts
+        .map((markdown) => String(markdown || '').trim())
+        .filter((markdown) => markdown && !isStreamStatusMarkdown(markdown));
+    if (!isHPDParsingTask(task)) return parts.join('\n\n');
+    return parts.reduce((combined, part) => {
+        if (!combined) return part;
+        return shouldJoinHPDPageContinuation(combined, part)
+            ? `${combined} ${part}`
+            : `${combined}\n\n${part}`;
+    }, '');
+}
+
 function rebuildTaskMarkdownFromBatches(task) {
-    task.markdown = (task.batches || [])
-        .map((batch) => String(batch.markdown || '').trim())
-        .filter((markdown) => markdown && !isStreamStatusMarkdown(markdown))
-        .filter(Boolean)
-        .join('\n\n');
+    task.markdown = joinTaskBatchMarkdown(task, (task.batches || []).map((batch) => batch.markdown || ''));
     if (task.markdown) task.markdown += '\n\n';
 }
 
@@ -3809,6 +3831,10 @@ function isUnlimitedOCRResult(pageResult, pruned = null) {
     return String(pageResult?.parser || pruned?.parser || '').toLowerCase() === UNLIMITED_OCR_MODEL_ID;
 }
 
+function isHPDParsingResult(pageResult, pruned = null) {
+    return String(pageResult?.parser || pruned?.parser || '').toLowerCase() === HPD_PARSING_MODEL_ID;
+}
+
 function looksLikeUnlimitedOCRNormalizedBox(bbox, pageWidth, pageHeight) {
     if (!Array.isArray(bbox) || bbox.length < 4) return false;
     if (Math.round(Number(pageWidth)) !== 1024 || Math.round(Number(pageHeight)) !== 1024) return false;
@@ -3817,10 +3843,27 @@ function looksLikeUnlimitedOCRNormalizedBox(bbox, pageWidth, pageHeight) {
     return Math.max(...coords.map(Math.abs)) <= UNLIMITED_OCR_COORDINATE_SIZE + 0.5;
 }
 
+function looksLikeHPDParsingNormalizedBox(bbox) {
+    if (!Array.isArray(bbox) || bbox.length < 4) return false;
+    const coords = bbox.map(Number).slice(0, 4);
+    if (!coords.every(Number.isFinite)) return false;
+    return Math.max(...coords.map(Math.abs)) <= HPD_PARSING_COORDINATE_SIZE + 0.5;
+}
+
 function layoutCoordinateBoundsForBlock(pageResult, pruned, bbox) {
     const rawPageWidth = Number(pruned?.width);
     const rawPageHeight = Number(pruned?.height);
     if (!rawPageWidth || !rawPageHeight) return null;
+
+    // HPD-Parsing reports boxes in a fixed 0-1000 space, independently of
+    // the page raster dimensions used for inference.
+    if (isHPDParsingResult(pageResult, pruned)
+        && looksLikeHPDParsingNormalizedBox(bbox)) {
+        return {
+            pageWidth: HPD_PARSING_COORDINATE_SIZE,
+            pageHeight: HPD_PARSING_COORDINATE_SIZE
+        };
+    }
 
     if (isUnlimitedOCRResult(pageResult, pruned)
         && looksLikeUnlimitedOCRNormalizedBox(bbox, rawPageWidth, rawPageHeight)) {
@@ -4174,11 +4217,11 @@ function isMarkdownImageBlock(element) {
 }
 
 function isFigureTitleText(value) {
-    return /^Figure\s+\d+\s*[:：]/i.test(String(value || '').trim());
+    return /^Figure\s+\d+(?=\s|$|[:：])/i.test(String(value || '').trim());
 }
 
 function isAlgorithmText(value) {
-    return /^Algorithm\s+\d+\s*[:：]/i.test(String(value || '').trim());
+    return /^Algorithm\s+\d+(?=\s|$|[:：])/i.test(String(value || '').trim());
 }
 
 function findBestLayoutBlock(text, blocks, cursor) {
@@ -4494,7 +4537,7 @@ function compactOCRJsonResult(pageResult, batchOrId, pageIndex = 0) {
     const batch = typeof batchOrId === 'object' ? batchOrId : null;
     const batchId = batch?.id || batchOrId;
     const compact = stripLargeOCRFields(pageResult);
-    if (batch && ['pp-ocrv6', 'unlimited-ocr', OVIS_OCR_MODEL_ID].includes(compact?.parser)) {
+    if (batch && ['pp-ocrv6', 'unlimited-ocr', OVIS_OCR_MODEL_ID, HPD_PARSING_MODEL_ID].includes(compact?.parser)) {
         compact.sourcePage = Number(batch.startPage || 1) + pageIndex;
         compact.batchId = batch.id;
     }

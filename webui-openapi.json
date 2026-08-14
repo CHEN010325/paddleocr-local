@@ -548,6 +548,40 @@
         }
       }
     },
+    "/api/ovisocr2": {
+      "post": {
+        "summary": "Proxy Ovisocr2",
+        "description": "Proxy request to the optional OvisOCR2 vLLM adapter service.",
+        "operationId": "proxy_ovisocr2_api_ovisocr2_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hpd-parsing": {
+      "post": {
+        "summary": "Proxy Hpd Parsing",
+        "description": "Proxy a document to the optional official HPD-Parsing runtime.",
+        "operationId": "proxy_hpd_parsing_api_hpd_parsing_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/unlimited-ocr/stream": {
       "post": {
         "summary": "Proxy Unlimited Ocr Stream",

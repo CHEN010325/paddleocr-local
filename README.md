@@ -4,12 +4,13 @@
 
 一个可本地部署的多模型文档解析 WebUI，支持上传图片、PDF、PPT、Word，查看解析结果并导出 Markdown。
 
-支持四个独立模型：
+支持五个独立模型：
 
 - PaddleOCR-VL 1.6
 - PP-OCRv6
 - Unlimited-OCR
 - OvisOCR2
+- HPD-Parsing
 
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
@@ -30,6 +31,14 @@
 ```powershell
 .\windows-one-click.bat -Model ovisocr2
 ```
+
+直接部署 HPD-Parsing：
+
+```powershell
+.\windows-one-click.bat -Model hpd-parsing
+```
+
+HPD-Parsing 使用官方定制 vLLM 镜像，需要 NVIDIA GPU、Linux x86-64 容器和支持 CUDA 12.8+ 的驱动。
 
 只检查配置，不下载或启动：
 
@@ -68,13 +77,14 @@ Linux、手动 Docker 部署和高级参数请查看 [部署文档](DOCKER_DEPLO
 - PP-OCRv6：http://localhost:8082/health
 - Unlimited-OCR：http://localhost:8083/health
 - OvisOCR2：http://localhost:8084/health
+- HPD-Parsing：http://localhost:8085/health
 
 健康检查地址只会在对应模型运行时可用。单 GPU 环境默认只加载当前选择的模型，切换模型时会自动停止其他模型，避免同时占用显存。
 
 ## 主要功能
 
 - 图片、PDF、PPT/PPTX、DOC/DOCX 解析
-- 四模型自由选择和按需部署
+- 五模型自由选择和按需部署
 - PDF 逐页解析、进度显示和历史任务保存
 - Markdown、表格、公式和图片区域展示
 - 原文件与解析结果左右对照

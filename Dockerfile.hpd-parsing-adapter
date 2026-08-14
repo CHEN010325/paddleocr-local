@@ -1,0 +1,15 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+      fastapi==0.136.1 \
+      uvicorn==0.46.0 \
+      httpx==0.28.1 \
+      Pillow==12.1.1 \
+      pymupdf==1.27.2.2
+
+COPY hpd_parsing_adapter.py /app/hpd_parsing_adapter.py
+
+ENTRYPOINT []
+CMD ["uvicorn", "hpd_parsing_adapter:app", "--host", "0.0.0.0", "--port", "8080"]

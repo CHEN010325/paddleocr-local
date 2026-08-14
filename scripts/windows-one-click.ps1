@@ -27,10 +27,11 @@ $script:DiagnosticsShown = $false
 $script:ActiveModel = "paddleocr-vl-1.6"
 $script:EnableUnlimitedOcr = $false
 $script:EnableOvisOcr2 = $false
+$script:EnableHpdParsing = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
 $script:DeployModelIds = @("paddleocr-vl-1.6")
-$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2")
+$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing")
 Set-Location $script:RepoRoot
 
 function Write-Section {
@@ -302,7 +303,8 @@ function Resolve-ModelId {
         { $_ -in @("2", "ppocr", "ppocrv6", "pp-ocrv6", "ocr") } { return "pp-ocrv6" }
         { $_ -in @("3", "unlimited", "unlimited-ocr", "uow") } { return "unlimited-ocr" }
         { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } { return "ovisocr2" }
-        default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, or ovisocr2." }
+        { $_ -in @("5", "hpd", "hpd-parsing", "hpdparsing") } { return "hpd-parsing" }
+        default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, or hpd-parsing." }
     }
 }
 
@@ -313,6 +315,7 @@ function Get-ModelDisplayName {
         "pp-ocrv6" { return "PP-OCRv6" }
         "unlimited-ocr" { return "Unlimited-OCR" }
         "ovisocr2" { return "OvisOCR2" }
+        "hpd-parsing" { return "HPD-Parsing" }
         default { return $ModelId }
     }
 }
@@ -325,6 +328,7 @@ function Read-FriendlyDeploymentSelection {
     Write-Host "  2) PP-OCRv6           Fast text OCR"
     Write-Host "  3) Unlimited-OCR      Long-document parsing"
     Write-Host "  4) OvisOCR2           Document parsing with vLLM"
+    Write-Host "  5) HPD-Parsing        High-throughput hierarchical document parsing"
     Write-Host ""
 
     $answer = Read-Host "Select a model [1]"
@@ -436,8 +440,21 @@ function Resolve-DeploymentSelection {
                 $backend = "sglang"
                 continue
             }
+            { $_ -in @("10", "hpd", "hpd-parsing", "hpdparsing") } {
+                Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"
+                continue
+            }
+            { $_ -in @("11", "all-five", "full-five") } {
+                foreach ($modelId in $script:ModelCatalogIds) {
+                    Add-DeploymentModel -Models $selected -ModelId $modelId
+                }
+                if (-not $backendExplicit) {
+                    $backend = "transformers"
+                }
+                continue
+            }
             default {
-                throw "Unknown model selection '$token'. Use 1-9 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2."
+                throw "Unknown model selection '$token'. Use 1-11 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, hpd-parsing."
             }
         }
     }
@@ -565,6 +582,10 @@ function Get-DeployedModelServices {
     if ($script:EnableOvisOcr2) {
         $services.Add("ovisocr2-api")
     }
+    if ($script:EnableHpdParsing) {
+        $services.Add("hpd-parsing-server")
+        $services.Add("hpd-parsing-api")
+    }
     return [string[]]$services.ToArray()
 }
 
@@ -591,6 +612,9 @@ function Get-GpuCheckService {
     }
     if ($script:EnableOvisOcr2) {
         return "ovisocr2-api"
+    }
+    if ($script:EnableHpdParsing) {
+        return "hpd-parsing-server"
     }
     return "pandocr-web"
 }
@@ -622,6 +646,7 @@ function New-RuntimeEnvFile {
     $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_PRELOAD" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_UNLIMITED_OCR" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_OVISOCR2" -Value "1"
+    $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_HPD_PARSING" -Value "1"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_SWITCH_TIMEOUT" -Value "1200"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_UPLOAD_MB" -Value "512"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_CONCURRENT_OCR" -Value "1"
@@ -631,6 +656,7 @@ function New-RuntimeEnvFile {
     $script:ActiveModel = Get-EnvLineValue -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -DefaultValue $script:ActiveModel
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
     $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
+    $script:EnableHpdParsing = $script:DeployModelIds -contains "hpd-parsing"
     $script:UnlimitedOcrBackend = (Get-EnvLineValue -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -DefaultValue "transformers").Trim().ToLowerInvariant()
     Set-Content -Path $runtimeEnv -Value $lines -Encoding ASCII
 
@@ -678,6 +704,9 @@ function Get-ComposeArgs {
     }
     if ($script:EnableOvisOcr2 -or $IncludeOptionalProfiles) {
         $args += @("--profile", "ovisocr2")
+    }
+    if ($script:EnableHpdParsing -or $IncludeOptionalProfiles) {
+        $args += @("--profile", "hpd-parsing")
     }
     return $args + $Arguments
 }
@@ -768,11 +797,14 @@ function Wait-ForServices {
         $uow = if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") { Get-ContainerStatus "unlimited-ocr-sglang" } else { "disabled|none" }
         $uowApi = if ($script:EnableUnlimitedOcr) { Get-ContainerStatus "unlimited-ocr-api" } else { "disabled|none" }
         $ovis = if ($script:EnableOvisOcr2) { Get-ContainerStatus "ovisocr2-api" } else { "disabled|none" }
+        $hpdServer = if ($script:EnableHpdParsing) { Get-ContainerStatus "hpd-parsing-server" } else { "disabled|none" }
+        $hpdApi = if ($script:EnableHpdParsing) { Get-ContainerStatus "hpd-parsing-api" } else { "disabled|none" }
         $web = Get-ContainerStatus "pandocr-web"
         $apiOk = Test-HttpOk "http://localhost:8081/health"
         $ocrOk = Test-HttpOk "http://localhost:8082/health"
         $uowOk = if ($script:EnableUnlimitedOcr) { Test-HttpOk "http://localhost:8083/health" } else { $false }
         $ovisOk = if ($script:EnableOvisOcr2) { Test-HttpOk "http://localhost:8084/health" } else { $false }
+        $hpdOk = if ($script:EnableHpdParsing) { Test-HttpOk "http://localhost:8085/health" } else { $false }
         $webOk = Test-HttpOk "http://localhost:8000/"
         $runtime = if ($webOk) { Get-ModelRuntimePayload } else { $null }
         $activeRuntimeStatus = Get-RuntimeModelStatus -Runtime $runtime -ModelId $script:ActiveModel
@@ -790,6 +822,9 @@ function Wait-ForServices {
         }
         elseif ($script:ActiveModel -eq "ovisocr2") {
             $activeStatuses = @($ovis, $web)
+        }
+        elseif ($script:ActiveModel -eq "hpd-parsing") {
+            $activeStatuses = @($hpdServer, $hpdApi, $web)
         }
         else {
             $activeStatuses = @($vlm, $api, $web)
@@ -818,7 +853,7 @@ function Wait-ForServices {
             }
         }
 
-        $line = "vlm=$vlm api=$api ocr=$ocr uow=$uow uowApi=$uowApi ovis=$ovis web=$web apiHttp=$apiOk ocrHttp=$ocrOk uowHttp=$uowOk ovisHttp=$ovisOk webHttp=$webOk runtime=$runtimeState operation=$operationState"
+        $line = "vlm=$vlm api=$api ocr=$ocr uow=$uow uowApi=$uowApi ovis=$ovis hpdServer=$hpdServer hpdApi=$hpdApi web=$web apiHttp=$apiOk ocrHttp=$ocrOk uowHttp=$uowOk ovisHttp=$ovisOk hpdHttp=$hpdOk webHttp=$webOk runtime=$runtimeState operation=$operationState"
         if ($line -ne $lastLine) {
             Write-Host $line
             $lastLine = $line
@@ -860,6 +895,7 @@ try {
     $script:ActiveModel = Resolve-ActiveModel -RequestedActiveModel $script:RequestedActiveModel -SelectedModels $script:DeployModelIds
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
     $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
+    $script:EnableHpdParsing = $script:DeployModelIds -contains "hpd-parsing"
     $script:UnlimitedOcrBackend = Normalize-UnlimitedOcrBackend $selection.UnlimitedOcrBackend
     $script:UnlimitedOcrBackendExplicit = [bool]$selection.UnlimitedOcrBackendExplicit
     Write-Ok "Selected models to deploy now: $($script:DeployModelIds -join ', ')"
@@ -919,6 +955,9 @@ try {
         if ($script:DeployModelIds -contains "paddleocr-vl-1.6") {
             $pullServices += @("paddleocr-vlm-server", "paddleocr-vl-api")
         }
+        if ($script:EnableHpdParsing) {
+            $pullServices += "hpd-parsing-server"
+        }
         if ($pullServices.Count -gt 0) {
             Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("pull") + $pullServices)) -Description "Pulling official model images"
         }
@@ -939,6 +978,9 @@ try {
         if ($script:EnableOvisOcr2) {
             $buildServices += "ovisocr2-api"
         }
+        if ($script:EnableHpdParsing) {
+            $buildServices += "hpd-parsing-api"
+        }
         Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("build") + $buildServices)) -Description "Building local images"
     }
     else {
@@ -953,7 +995,13 @@ try {
     }
 
     $gpuCheckService = Get-GpuCheckService
-    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("run", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")) -Description "Checking Docker GPU access"
+    $gpuCheckCommand = if ($gpuCheckService -eq "hpd-parsing-server") {
+        @("run", "--rm", "--no-deps", "--entrypoint", "nvidia-smi", $gpuCheckService)
+    }
+    else {
+        @("run", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")
+    }
+    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $gpuCheckCommand) -Description "Checking Docker GPU access"
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("up", "-d", "--no-start", "--force-recreate") + (Get-DeploymentServiceList))) -Description "Creating selected PaddleOCR Local containers"
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("start", "pandocr-web")) -Description "Starting WebUI and model runtime controller"
 
@@ -972,6 +1020,9 @@ try {
     }
     if ($script:EnableOvisOcr2) {
         Write-Host "OvisOCR2 API health: http://localhost:8084/health"
+    }
+    if ($script:EnableHpdParsing) {
+        Write-Host "HPD-Parsing API health: http://localhost:8085/health"
     }
     Write-Host "Active model on startup: $script:ActiveModel. Select another model in the UI to stop this one and start the others."
     Write-Host "Useful logs: docker compose --env-file `"$script:RuntimeEnv`" logs -f"

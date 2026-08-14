@@ -104,6 +104,21 @@ OVISOCR2_MAX_TOKENS = os.getenv("OVISOCR2_MAX_TOKENS", "8192")
 OVISOCR2_PDF_DPI = os.getenv("OVISOCR2_PDF_DPI", "200")
 OVISOCR2_MAX_PAGES_PER_REQUEST = os.getenv("OVISOCR2_MAX_PAGES_PER_REQUEST", "50")
 OVISOCR2_GDN_PREFILL_BACKEND = os.getenv("OVISOCR2_GDN_PREFILL_BACKEND", "triton")
+HPD_PARSING_SERVICE_URL = os.getenv("HPD_PARSING_SERVICE_URL", "http://localhost:8085/ocr")
+HPD_PARSING_MODEL_NAME = os.getenv("HPD_PARSING_MODEL_NAME", "PaddlePaddle/HPD-Parsing")
+HPD_PARSING_IMAGE = os.getenv(
+    "HPD_PARSING_IMAGE",
+    "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu",
+)
+HPD_PARSING_API_PORT = os.getenv("HPD_PARSING_API_PORT", "8085")
+HPD_PARSING_SERVED_MODEL_NAME = os.getenv("HPD_PARSING_SERVED_MODEL_NAME", "HPD-Parsing")
+HPD_PARSING_MAX_TOKENS = os.getenv("HPD_PARSING_MAX_TOKENS", "8000")
+HPD_PARSING_MAX_MODEL_LEN = os.getenv("HPD_PARSING_MAX_MODEL_LEN", "16384")
+HPD_PARSING_GPU_MEMORY_UTILIZATION = os.getenv("HPD_PARSING_GPU_MEMORY_UTILIZATION", "0.9")
+HPD_PARSING_PDF_DPI = os.getenv("HPD_PARSING_PDF_DPI", "200")
+HPD_PARSING_MAX_PAGES_PER_REQUEST = os.getenv("HPD_PARSING_MAX_PAGES_PER_REQUEST", "50")
+HPD_PARSING_MAX_CONCURRENCY = os.getenv("HPD_PARSING_MAX_CONCURRENCY", "4")
+HPD_PARSING_REQUEST_TIMEOUT = os.getenv("HPD_PARSING_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_SGLANG_WHEEL_URL = os.getenv(
     "UNLIMITED_OCR_SGLANG_WHEEL_URL",
     "https://github.com/baidu/Unlimited-OCR/raw/main/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl",
@@ -126,6 +141,7 @@ ENABLE_API_DOCS = parse_bool_env("PANDOCR_ENABLE_API_DOCS", "0")
 ENFORCE_ORIGIN_CHECK = parse_bool_env("PANDOCR_ENFORCE_ORIGIN_CHECK", "1")
 ENABLE_UNLIMITED_OCR = parse_bool_env("PANDOCR_ENABLE_UNLIMITED_OCR", "0")
 ENABLE_OVISOCR2 = parse_bool_env("PANDOCR_ENABLE_OVISOCR2", "0")
+ENABLE_HPD_PARSING = parse_bool_env("PANDOCR_ENABLE_HPD_PARSING", "0")
 MODEL_CATALOG_ENV = os.getenv("PANDOCR_MODEL_CATALOG", "").strip()
 MAX_CONCURRENT_OCR = parse_positive_int_env("PANDOCR_MAX_CONCURRENT_OCR", "1")
 TASK_STORE_MARKER = ".pandocr-task-store"
@@ -168,7 +184,7 @@ def initial_unlimited_ocr_backend() -> str:
 
 
 def parse_model_catalog() -> list[str]:
-    supported = {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2"}
+    supported = {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing"}
     if MODEL_CATALOG_ENV:
         ids = [model_id for model_id in parse_csv_env("PANDOCR_MODEL_CATALOG", "") if model_id in supported]
     else:
@@ -177,6 +193,8 @@ def parse_model_catalog() -> list[str]:
             ids.append("unlimited-ocr")
         if ENABLE_OVISOCR2:
             ids.append("ovisocr2")
+        if ENABLE_HPD_PARSING:
+            ids.append("hpd-parsing")
 
     unique_ids = []
     for model_id in ids:
@@ -188,6 +206,7 @@ def parse_model_catalog() -> list[str]:
 MODEL_CATALOG_IDS = parse_model_catalog()
 ENABLE_UNLIMITED_OCR = ENABLE_UNLIMITED_OCR or "unlimited-ocr" in MODEL_CATALOG_IDS
 ENABLE_OVISOCR2 = ENABLE_OVISOCR2 or "ovisocr2" in MODEL_CATALOG_IDS
+ENABLE_HPD_PARSING = ENABLE_HPD_PARSING or "hpd-parsing" in MODEL_CATALOG_IDS
 
 MODEL_RUNTIME_CONFIG = {
     "paddleocr-vl-1.6": {
@@ -218,6 +237,14 @@ if ENABLE_OVISOCR2:
         "start_order": ["ovisocr2-api"],
         "stop_order": ["ovisocr2-api"],
         "health_url": OVISOCR2_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+    }
+
+if ENABLE_HPD_PARSING:
+    MODEL_RUNTIME_CONFIG["hpd-parsing"] = {
+        "containers": ["hpd-parsing-server", "hpd-parsing-api"],
+        "start_order": ["hpd-parsing-server", "hpd-parsing-api"],
+        "stop_order": ["hpd-parsing-api", "hpd-parsing-server"],
+        "health_url": HPD_PARSING_SERVICE_URL.rsplit("/", 1)[0] + "/health",
     }
 
 DEFAULT_RUNTIME_FALLBACK_MODEL_ID = next(
@@ -287,6 +314,13 @@ def model_catalog() -> list[dict]:
             "label": "OvisOCR2",
             "kind": "document_parsing",
             "endpoint": "/api/ovisocr2",
+        },
+        "hpd-parsing": {
+            "id": "hpd-parsing",
+            "name": HPD_PARSING_MODEL_NAME,
+            "label": "HPD-Parsing",
+            "kind": "document_parsing",
+            "endpoint": "/api/hpd-parsing",
         },
     }
     return [
@@ -368,6 +402,10 @@ def docker_image_name_for(service_name: str) -> str:
         return "pandocr-unlimited-ocr-sglang:latest"
     if service_name == "ovisocr2-api":
         return "pandocr-ovisocr2:latest"
+    if service_name == "hpd-parsing-server":
+        return HPD_PARSING_IMAGE
+    if service_name == "hpd-parsing-api":
+        return "pandocr-hpd-parsing-adapter:latest"
     raise ValueError(f"Unknown service image: {service_name}")
 
 
@@ -405,6 +443,7 @@ def dockerfile_path_for(service_name: str) -> Path:
         "unlimited-ocr-api": "Dockerfile.unlimited-ocr",
         "unlimited-ocr-sglang": "Dockerfile.unlimited-ocr-sglang",
         "ovisocr2-api": "Dockerfile.ovisocr2",
+        "hpd-parsing-api": "Dockerfile.hpd-parsing-adapter",
     }
     dockerfile_name = dockerfile_names.get(service_name)
     if not dockerfile_name:
@@ -435,6 +474,7 @@ def make_docker_build_context(service_name: str) -> bytes:
             "unlimited-ocr-api": "unlimited_ocr_adapter.py",
             "unlimited-ocr-sglang": "unlimited_ocr_adapter.py",
             "ovisocr2-api": "ovisocr2_adapter.py",
+            "hpd-parsing-api": "hpd_parsing_adapter.py",
         }
         if service_name in adapter_names:
             adapter_name = adapter_names[service_name]
@@ -729,11 +769,64 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             ),
             "Healthcheck": healthcheck("curl -f http://localhost:8080/health || exit 1", 900),
         }
+    if service_name == "hpd-parsing-server":
+        return {
+            "Image": image,
+            "User": "root",
+            "Entrypoint": ["/bin/bash"],
+            "Cmd": ["/home/hpd/start-pandocr.sh"],
+            "Env": [
+                "HF_HOME=/home/hpd/.cache/huggingface",
+                "MAX_PATCHES_WITH_RESIZE=true",
+                f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
+                f"HPD_PARSING_MODEL_NAME={HPD_PARSING_MODEL_NAME}",
+                f"HPD_PARSING_SERVED_MODEL_NAME={HPD_PARSING_SERVED_MODEL_NAME}",
+                f"HPD_PARSING_MAX_MODEL_LEN={HPD_PARSING_MAX_MODEL_LEN}",
+                f"HPD_PARSING_GPU_MEMORY_UTILIZATION={HPD_PARSING_GPU_MEMORY_UTILIZATION}",
+            ],
+            "ExposedPorts": {"8118/tcp": {}},
+            "HostConfig": host_config(
+                network_name=network_name,
+                binds=[
+                    bind_path(host_root, "model_cache_hpd_parsing", "/home/hpd/.cache/huggingface"),
+                    bind_path(host_root, "start-hpd-parsing.sh", "/home/hpd/start-pandocr.sh", readonly=True),
+                ],
+                shm_size=34_359_738_368,
+            ),
+            "Healthcheck": healthcheck(
+                "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8118/health')\" || exit 1",
+                900,
+            ),
+        }
+    if service_name == "hpd-parsing-api":
+        return {
+            "Image": image,
+            "Cmd": ["uvicorn", "hpd_parsing_adapter:app", "--host", "0.0.0.0", "--port", "8080"],
+            "Env": [
+                "HPD_PARSING_SERVER_URL=http://hpd-parsing-server:8118",
+                f"HPD_PARSING_SERVED_MODEL_NAME={HPD_PARSING_SERVED_MODEL_NAME}",
+                f"HPD_PARSING_MAX_TOKENS={HPD_PARSING_MAX_TOKENS}",
+                f"HPD_PARSING_PDF_DPI={HPD_PARSING_PDF_DPI}",
+                f"HPD_PARSING_MAX_PAGES_PER_REQUEST={HPD_PARSING_MAX_PAGES_PER_REQUEST}",
+                f"HPD_PARSING_MAX_CONCURRENCY={HPD_PARSING_MAX_CONCURRENCY}",
+                f"HPD_PARSING_REQUEST_TIMEOUT={HPD_PARSING_REQUEST_TIMEOUT}",
+            ],
+            "ExposedPorts": {"8080/tcp": {}},
+            "HostConfig": host_config(
+                network_name=network_name,
+                binds=[],
+                port_bindings={"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": HPD_PARSING_API_PORT}]},
+            ),
+            "Healthcheck": healthcheck(
+                "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1",
+                30,
+            ),
+        }
     raise ValueError(f"Unknown deploy service: {service_name}")
 
 
 async def ensure_runtime_service_created(service_name: str) -> None:
-    if service_name in {"paddleocr-vlm-server", "paddleocr-vl-api"}:
+    if service_name in {"paddleocr-vlm-server", "paddleocr-vl-api", "hpd-parsing-server"}:
         await docker_pull_image(docker_image_name_for(service_name))
     else:
         await docker_build_image(service_name)
@@ -757,6 +850,8 @@ def services_for_model_deploy(model_id: str, backend: str | None = None) -> list
         return services
     if model_id == "ovisocr2":
         return ["ovisocr2-api"]
+    if model_id == "hpd-parsing":
+        return ["hpd-parsing-server", "hpd-parsing-api"]
     raise ValueError(f"Unknown model id: {model_id}")
 
 
@@ -2024,6 +2119,13 @@ def build_ovisocr2_payload(request: OCRRequest, base64_data: str, file_type: int
     }
 
 
+def build_hpd_parsing_payload(base64_data: str, file_type: int) -> dict:
+    return {
+        "file": base64_data,
+        "fileType": file_type,
+    }
+
+
 def parse_pipeline_response(data: dict, image_prefix: str = "") -> dict:
     if "result" not in data or "layoutParsingResults" not in data["result"]:
         logger.warning("Unexpected pipeline response format: %s", data)
@@ -2378,6 +2480,32 @@ async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) 
         await release_ocr_slot()
 
 
+async def run_hpd_parsing_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
+    if not ENABLE_HPD_PARSING:
+        raise HTTPException(status_code=404, detail="HPD-Parsing is not enabled")
+
+    await acquire_ocr_slot(
+        "hpd-parsing",
+        "HPD-Parsing service is not ready. Switch to this model and wait for it to become ready.",
+    )
+    try:
+        base64_data, file_type = prepare_service_input(ocr_request, raw_input)
+        payload = build_hpd_parsing_payload(base64_data, file_type)
+        logger.info("Sending request to HPD-Parsing adapter at %s", HPD_PARSING_SERVICE_URL)
+        timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(HPD_PARSING_SERVICE_URL, json=payload)
+        if response.status_code != 200:
+            logger.warning("HPD-Parsing Service Error (HTTP %s): %s", response.status_code, response.text)
+            raise HTTPException(status_code=response.status_code, detail=f"Upstream HPD-Parsing error: {response.text}")
+        data = response.json()
+        if not isinstance(data, dict) or "layoutParsingResults" not in data:
+            raise HTTPException(status_code=500, detail="Unexpected response format from HPD-Parsing")
+        return data
+    finally:
+        await release_ocr_slot()
+
+
 async def stream_unlimited_ocr_events(ocr_request: OCRRequest, raw_input: RawOCRInput):
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
@@ -2471,6 +2599,21 @@ async def proxy_ovisocr2(request: Request):
         raise
     except Exception as error:
         logger.exception("OvisOCR2 Proxy Error")
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@app.post("/api/hpd-parsing")
+async def proxy_hpd_parsing(request: Request):
+    """Proxy a document to the optional official HPD-Parsing runtime."""
+    try:
+        ocr_request, raw_image = await parse_ocr_input(request)
+        base64_size = validate_proxy_input_size(raw_image)
+        logger.info("Received HPD-Parsing request. Base64 input size: %s bytes", base64_size)
+        return await run_hpd_parsing_request(ocr_request, raw_image)
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("HPD-Parsing Proxy Error")
         raise HTTPException(status_code=500, detail=str(error))
 
 

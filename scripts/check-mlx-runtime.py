@@ -28,28 +28,36 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-if sys.version_info[:2] not in {(3, 12), (3, 13)}:
-    fail(
-        f"Python 3.12 or 3.13 is required, but this environment uses "
-        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}."
-    )
+def check_runtime() -> str:
+    if sys.version_info[:2] not in {(3, 12), (3, 13)}:
+        fail(
+            f"Python 3.12 or 3.13 is required, but this environment uses "
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}."
+        )
 
-for package, expected in required_versions():
-    try:
-        installed = importlib.metadata.version(package)
-    except importlib.metadata.PackageNotFoundError:
-        fail(f"{package} is not installed.")
-    if installed != expected:
-        fail(f"{package}=={expected} is required, but {installed} is installed.")
+    installed_versions: list[tuple[str, str]] = []
+    for package, expected in required_versions():
+        try:
+            installed = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            fail(f"{package} is not installed.")
+        if installed != expected:
+            fail(f"{package}=={expected} is required, but {installed} is installed.")
+        installed_versions.append((package, installed))
 
-for module_name in ("mlx_lm", "mlx_vlm"):
-    try:
-        importlib.import_module(module_name)
-    except Exception as exc:
-        fail(f"cannot import {module_name}: {exc.__class__.__name__}: {exc}")
+    for module_name in ("mlx_lm", "mlx_vlm"):
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            fail(f"cannot import {module_name}: {exc.__class__.__name__}: {exc}")
 
-versions = ", ".join(
-    f"{package}={importlib.metadata.version(package)}"
-    for package, _ in required_versions()
-)
-print(f"MLX runtime check passed ({versions})")
+    return ", ".join(f"{package}={version}" for package, version in installed_versions)
+
+
+def main() -> None:
+    versions = check_runtime()
+    print(f"MLX runtime check passed ({versions})")
+
+
+if __name__ == "__main__":
+    main()

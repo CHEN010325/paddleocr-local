@@ -22,6 +22,13 @@ x-ovisocr2-image: &ovisocr2-image
     dockerfile: Dockerfile.ovisocr2
   image: pandocr-ovisocr2:latest
 
+x-hpd-parsing-adapter-image: &hpd-parsing-adapter-image
+  pull_policy: build
+  build:
+    context: .
+    dockerfile: Dockerfile.hpd-parsing-adapter
+  image: pandocr-hpd-parsing-adapter:latest
+
 services:
   paddleocr-vlm-server:
     image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -250,6 +257,72 @@ services:
     networks:
       - paddleocr-network
 
+  hpd-parsing-server:
+    profiles: ["hpd-parsing"]
+    image: ${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu}
+    container_name: hpd-parsing-server
+    user: root
+    entrypoint: ["/bin/bash"]
+    command: ["/home/hpd/start-pandocr.sh"]
+    environment:
+      - HF_HOME=/home/hpd/.cache/huggingface
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+      - MAX_PATCHES_WITH_RESIZE=true
+      - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
+      - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
+      - HPD_PARSING_SERVED_MODEL_NAME=${HPD_PARSING_SERVED_MODEL_NAME:-HPD-Parsing}
+      - HPD_PARSING_MAX_MODEL_LEN=${HPD_PARSING_MAX_MODEL_LEN:-16384}
+      - HPD_PARSING_GPU_MEMORY_UTILIZATION=${HPD_PARSING_GPU_MEMORY_UTILIZATION:-0.9}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PANDOCR_GPU_DEVICE_ID:-0}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    shm_size: "32gb"
+    volumes:
+      - ./model_cache_hpd_parsing:/home/hpd/.cache/huggingface
+      - ./start-hpd-parsing.sh:/home/hpd/start-pandocr.sh:ro
+    expose:
+      - "8118"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8118/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 900s
+    networks:
+      - paddleocr-network
+
+  hpd-parsing-api:
+    <<: *hpd-parsing-adapter-image
+    profiles: ["hpd-parsing"]
+    container_name: hpd-parsing-api
+    ports:
+      - "127.0.0.1:${HPD_PARSING_API_PORT:-8085}:8080"
+    environment:
+      - HPD_PARSING_SERVER_URL=http://hpd-parsing-server:8118
+      - HPD_PARSING_SERVED_MODEL_NAME=${HPD_PARSING_SERVED_MODEL_NAME:-HPD-Parsing}
+      - HPD_PARSING_MAX_TOKENS=${HPD_PARSING_MAX_TOKENS:-8000}
+      - HPD_PARSING_PDF_DPI=${HPD_PARSING_PDF_DPI:-200}
+      - HPD_PARSING_MAX_PAGES_PER_REQUEST=${HPD_PARSING_MAX_PAGES_PER_REQUEST:-50}
+      - HPD_PARSING_MAX_CONCURRENCY=${HPD_PARSING_MAX_CONCURRENCY:-1}
+      - HPD_PARSING_REQUEST_TIMEOUT=${HPD_PARSING_REQUEST_TIMEOUT:-1200}
+    depends_on:
+      hpd-parsing-server:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - paddleocr-network
+
   pandocr-web:
     pull_policy: build
     build:
@@ -265,6 +338,7 @@ services:
       - PADDLE_OCR_SERVICE_URL=http://paddleocr-ocr-api:8080/ocr
       - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
       - OVISOCR2_SERVICE_URL=http://ovisocr2-api:8080/ocr
+      - HPD_PARSING_SERVICE_URL=http://hpd-parsing-api:8080/ocr
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
       - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -290,8 +364,18 @@ services:
       - OVISOCR2_PDF_DPI=${OVISOCR2_PDF_DPI:-200}
       - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
       - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
+      - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
+      - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu}
+      - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
+      - HPD_PARSING_SERVED_MODEL_NAME=${HPD_PARSING_SERVED_MODEL_NAME:-HPD-Parsing}
+      - HPD_PARSING_MAX_TOKENS=${HPD_PARSING_MAX_TOKENS:-8000}
+      - HPD_PARSING_PDF_DPI=${HPD_PARSING_PDF_DPI:-200}
+      - HPD_PARSING_MAX_PAGES_PER_REQUEST=${HPD_PARSING_MAX_PAGES_PER_REQUEST:-50}
+      - HPD_PARSING_MAX_CONCURRENCY=${HPD_PARSING_MAX_CONCURRENCY:-1}
+      - HPD_PARSING_REQUEST_TIMEOUT=${HPD_PARSING_REQUEST_TIMEOUT:-1200}
       - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
       - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-0}
+      - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-0}
       - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
       - PADDLE_REQUEST_TIMEOUT=${PADDLE_REQUEST_TIMEOUT:-3600}
       - PANDOCR_MODEL_CONTROL=${PANDOCR_MODEL_CONTROL:-docker}
@@ -313,6 +397,9 @@ services:
       - ./Dockerfile.unlimited-ocr-sglang:/app/Dockerfile.unlimited-ocr-sglang:ro
       - ./ovisocr2_adapter.py:/app/ovisocr2_adapter.py:ro
       - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
+      - ./hpd_parsing_adapter.py:/app/hpd_parsing_adapter.py:ro
+      - ./Dockerfile.hpd-parsing-adapter:/app/Dockerfile.hpd-parsing-adapter:ro
+      - ./start-hpd-parsing.sh:/app/start-hpd-parsing.sh:ro
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     security_opt:

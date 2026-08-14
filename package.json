@@ -1,0 +1,13 @@
+{
+  "name": "paddleocr-vl-webui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:frontend": "node --test tests/test_frontend.mjs tests/test_frontend_dom.mjs",
+    "coverage:frontend": "c8 --all --include=static/app.js --check-coverage --lines=95 --branches=95 --functions=95 --statements=95 npm run test:frontend"
+  },
+  "devDependencies": {
+    "c8": "10.1.3",
+    "jsdom": "26.1.0"
+  }
+}

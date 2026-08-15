@@ -2,7 +2,7 @@
 
 ## 服务组成
 
-`docker-compose.yml` 包含常驻 WebUI、PaddleOCR 服务和三个可选 profile：
+`docker-compose.yml` 包含常驻 WebUI、隔离的内部控制/转换服务、PaddleOCR 服务和三个可选 profile：
 
 | 服务 | 作用 | 对外端口 |
 | --- | --- | --- |
@@ -14,9 +14,11 @@
 | `ovisocr2-api` | OvisOCR2 独立 vLLM 推理（可选） | `8084:8080` |
 | `hpd-parsing-server` | HPD-Parsing 官方定制 vLLM 推理（可选） | 无 |
 | `hpd-parsing-api` | HPD-Parsing 图片/PDF 与 Markdown 适配服务（可选） | `8085:8080` |
-| `pandocr-web` | WebUI、FastAPI 代理、Office 转 PDF | `8000:8000` |
+| `pandocr-controller` | 内部白名单模型控制，独占 Docker socket | 无 |
+| `pandocr-office-converter` | 非 root、只读运行的 LibreOffice 转换器 | 无 |
+| `pandocr-web` | WebUI、FastAPI 代理 | `8000:8000` |
 
-单 GPU 部署默认只热加载一个模型：`pandocr-web` 挂载 Docker socket，并通过 Docker Engine API 在五个模型之间切换对应容器。Docker socket 等同于宿主机管理权限，请勿把 WebUI 暴露给不可信网络。
+单 GPU 部署默认只热加载一个模型。WebUI 不再挂载 Docker socket，也不包含 LibreOffice；模型切换由带内部 token 的 `pandocr-controller` 执行，Office 文件由隔离的 `pandocr-office-converter` 转换。控制器仍持有等同宿主机管理权限的 Docker socket，因此不要映射其端口，并应为 `PANDOCR_MODEL_CONTROLLER_TOKEN` 设置随机长值。
 解析历史会通过 `./data:/app/data` 挂载保存到宿主机，默认路径为 `data/tasks/`。
 
 ## 推荐配置
@@ -33,22 +35,31 @@
 
 ```text
 API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
+API_IMAGE_DIGEST=@sha256:0971c409d1cab2b12aa17b76855e36ac8eb9fb1adc97dbeea15e9b09432a4a3b
 VLM_BACKEND=vllm
 VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
+VLM_IMAGE_DIGEST=@sha256:bffd525308facf5dba2f8eca44ab476704a0ae3bfdcba25f77655973e4c0a7ca
 PANDOCR_GPU_DEVICE_ID=0
 PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6-0.9B
 PPOCR_V6_MODEL_NAME=PP-OCRv6_medium
 PANDOCR_MODEL_CONTROL=docker
+PANDOCR_MODEL_CONTROLLER_TOKEN=请替换为随机长值
 PANDOCR_ACTIVE_MODEL_ON_START=paddleocr-vl-1.6
 PANDOCR_MODEL_SWITCH_TIMEOUT=1200
 PADDLE_REQUEST_TIMEOUT=3600
 PANDOCR_CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
 PANDOCR_MAX_UPLOAD_MB=512
+PANDOCR_MAX_HTTP_BODY_MB=0
 PANDOCR_MAX_CONCURRENT_OCR=1
 PANDOCR_ENFORCE_ORIGIN_CHECK=1
 PANDOCR_API_TOKEN=
 PANDOCR_ENABLE_API_DOCS=0
+UNLIMITED_OCR_MODEL_REVISION=07dea832e22aefee32ad281d4b80551282e1c168
+UNLIMITED_OCR_MAX_RENDER_PIXELS=60000000
+OVISOCR2_MODEL_REVISION=65c619d374b55d4152e85150fc1b003700bc1f0c
 ```
+
+`PANDOCR_MAX_UPLOAD_MB` 限制解码后的原文件；JSON 中的 base64 会额外膨胀，`PANDOCR_MAX_HTTP_BODY_MB=0` 表示自动计算安全的请求体上限。Unlimited-OCR 会在渲染 PDF 前按 `UNLIMITED_OCR_MAX_RENDER_PIXELS` 拒绝像素预算过大的文件，OvisOCR2 则逐页渲染和推理。远程模型 revision 与上游 Paddle/CUDA/Python 镜像均锁定到已核验提交或 digest；升级时应同时更新标签和哈希。
 
 RTX 30/40 系列等非 Blackwell NVIDIA GPU 使用 `env.docker`，或把两个镜像标签改为：
 
@@ -85,7 +96,7 @@ HPD-Parsing 默认按约 6.5 GiB 的绝对预算自动计算 vLLM 显存比例�
 
 ## 启动前 GPU 显存预检
 
-`pandocr-web` 会在切换/启动模型前运行短生命周期的 GPU 探测容器。`/api/model-runtime` 的 `gpuPreflight` 字段和 WebUI 顶部提示会列出 GPU 型号、总/空闲显存、可运行模型以及低显存环境变量。PaddleOCR-VL 按官方当前最低成功运行配置 RTX 3060 12 GB 设置 `11264 MiB` 保护下限；RTX 4070 Laptop 8 GB 不会再尝试启动该模型，页面会直接推荐 PP-OCRv6 等兼容模型。依据见 [PaddleOCR-VL 推理部署高频问题](https://github.com/PaddlePaddle/PaddleOCR/discussions/16822)。
+`pandocr-controller` 会在切换/启动模型前运行短生命周期的 GPU 探测容器。`/api/model-runtime` 的 `gpuPreflight` 字段和 WebUI 顶部提示会列出 GPU 型号、总/空闲显存、可运行模型以及低显存环境变量。PaddleOCR-VL 按官方当前最低成功运行配置 RTX 3060 12 GB 设置 `11264 MiB` 保护下限；RTX 4070 Laptop 8 GB 不会再尝试启动该模型，页面会直接推荐 PP-OCRv6 等兼容模型。依据见 [PaddleOCR-VL 推理部署高频问题](https://github.com/PaddlePaddle/PaddleOCR/discussions/16822)。
 
 PaddleOCR-VL 推荐保留以下默认值：
 
@@ -102,7 +113,7 @@ HPD-Parsing 在 8 GB 卡上使用 `HPD_PARSING_GPU_MEMORY_UTILIZATION=auto`；�
 
 ```powershell
 docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
-docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
+docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web pandocr-office-converter
 docker compose --env-file env.txt up -d --no-start
 docker compose --env-file env.txt start pandocr-web
 ```
@@ -128,18 +139,14 @@ curl http://localhost:8081/health
 
 ## 重启 Web 服务
 
-前端、FastAPI 或文档预览逻辑变更后，只需要重建并重启 `pandocr-web`：
+前端或 FastAPI 逻辑变更后，重建并重启 `pandocr-web`；控制或 Office 转换逻辑变更时也重建对应的隔离服务：
 
 ```powershell
-docker compose --env-file env.txt build pandocr-web
-docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-web
+docker compose --env-file env.txt build pandocr-web pandocr-office-converter
+docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-controller pandocr-office-converter pandocr-web
 ```
 
-如果只改了挂载的 `static/` 或 `server.py`，也可以直接重建/重启：
-
-```powershell
-docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-web
-```
+代码以只读方式挂载；生产部署仍建议重建镜像，避免运行内容与镜像版本不一致。
 
 ## 本地任务数据
 
@@ -151,6 +158,7 @@ docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-web
 
 ```powershell
 docker compose --env-file env.txt logs -f pandocr-web
+docker compose --env-file env.txt logs -f pandocr-controller pandocr-office-converter
 docker compose --env-file env.txt logs -f paddleocr-vl-api
 docker compose --env-file env.txt logs -f paddleocr-ocr-api
 docker compose --env-file env.txt logs -f paddleocr-vlm-server

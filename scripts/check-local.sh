@@ -20,6 +20,8 @@ step() {
 step "Checking Python syntax"
 "$PYTHON" -m py_compile \
   server.py \
+  controller.py \
+  office_converter.py \
   hpd_parsing_adapter.py \
   unlimited_ocr_adapter.py \
   ovisocr2_adapter.py \
@@ -29,8 +31,10 @@ step "Running Python unit tests"
 "$PYTHON" -m pytest -q
 
 step "Checking and testing frontend JavaScript"
+node --check static/bootstrap.mjs
 node --check static/i18n.js
 node --check static/app.js
+npm run vendor:check
 npm run test:frontend
 
 step "Checking shell script syntax"

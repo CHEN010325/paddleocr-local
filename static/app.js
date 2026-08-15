@@ -129,7 +129,7 @@ const els = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.mjs';
     initLanguage();
     initPdfBatchSizeSetting();
     setupEventListeners();
@@ -438,7 +438,7 @@ function isLocalApiUrl(url) {
 function authHeaders(headers = {}, url = '') {
     const merged = new Headers(headers);
     if (isLocalApiUrl(url)) {
-        const token = localStorage.getItem(API_TOKEN_STORAGE_KEY);
+        const token = window.sessionStorage?.getItem(API_TOKEN_STORAGE_KEY);
         if (token) merged.set('Authorization', `Bearer ${token}`);
     }
     return merged;
@@ -454,7 +454,7 @@ async function apiFetch(url, options = {}) {
 
     const token = window.prompt(t('请输入 PaddleOCR Local API Token'));
     if (!token) return response;
-    localStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+    window.sessionStorage?.setItem(API_TOKEN_STORAGE_KEY, token.trim());
     response = await fetch(url, {
         ...options,
         headers: authHeaders(options.headers, url)
@@ -1354,7 +1354,7 @@ async function createPdfTask(fileOrBlob, name, extra = {}) {
     const id = createId();
     const arrayBuffer = await fileOrBlob.arrayBuffer();
     const sourceUrl = await uploadTaskSource(id, fileOrBlob, name, 'application/pdf');
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0), isEvalSupported: false }).promise;
     const pageCount = pdf.numPages;
     const thumbnail = await renderPDFPageDataUrl(pdf, 1, 0.35);
     const pdfBatchSize = getConfiguredPdfBatchSize();
@@ -1571,8 +1571,8 @@ async function renderSource(task) {
     currentPage = Math.min(Math.max(currentPage, 1), task.pageCount || 1);
     els.pdfControls.classList.remove('hidden');
     const pdf = task.sourceDataUrl
-        ? await pdfjsLib.getDocument({ data: dataUrlToUint8Array(task.sourceDataUrl) }).promise
-        : await pdfjsLib.getDocument(task.sourceUrl).promise;
+        ? await pdfjsLib.getDocument({ data: dataUrlToUint8Array(task.sourceDataUrl), isEvalSupported: false }).promise
+        : await pdfjsLib.getDocument({ url: task.sourceUrl, isEvalSupported: false }).promise;
     if (renderToken !== sourceRenderToken) return;
     const firstPage = await pdf.getPage(1);
     if (renderToken !== sourceRenderToken) return;
@@ -3754,12 +3754,15 @@ function escapeHtml(value) {
 }
 
 function renderMarkdownHtml(markdown) {
+    if (!window.DOMPurify || typeof window.DOMPurify.sanitize !== 'function') {
+        return `<pre class="sanitizer-unavailable">${escapeHtml(markdown)}</pre>`;
+    }
     const { text, math } = stashMathSegments(markdown);
     let html = marked.parse(text);
     math.forEach((value, index) => {
         html = html.split(mathToken(index)).join(escapeHtml(value));
     });
-    return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    return DOMPurify.sanitize(html);
 }
 
 function stashMathSegments(markdown) {

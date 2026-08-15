@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04@sha256:d02c4310b6d57ca0b16cd80298bdb33a74187baafe2eccd8a6a16180ddc90802
 
 ENV DEBIAN_FRONTEND=noninteractive \
     VIRTUAL_ENV=/opt/venv \
@@ -17,18 +17,18 @@ RUN apt-get update && \
       python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    /root/.local/bin/uv venv /opt/venv && \
-    /root/.local/bin/uv pip install --python /opt/venv/bin/python \
+RUN python3 -m pip install --no-cache-dir uv==0.12.5 && \
+    uv venv /opt/venv && \
+    uv pip install --python /opt/venv/bin/python \
       "vllm==0.22.1" \
       --extra-index-url https://wheels.vllm.ai/0.22.1/cu129 \
       --extra-index-url https://download.pytorch.org/whl/cu129 \
       --index-strategy unsafe-best-match && \
-    /root/.local/bin/uv pip install --python /opt/venv/bin/python \
+    uv pip install --python /opt/venv/bin/python \
       fastapi==0.136.1 \
       uvicorn==0.46.0 \
-      python-multipart==0.0.27 \
-      Pillow==12.1.1 \
+      python-multipart==0.0.32 \
+      Pillow==12.3.0 \
       pymupdf==1.27.2.2
 
 WORKDIR /app

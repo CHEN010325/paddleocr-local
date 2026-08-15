@@ -1,4 +1,4 @@
-ARG CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04
+ARG CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04@sha256:50efab398f76258daa91ceebb33b6467e40217c67ea44fb5a2cebc6be7d9cce3
 FROM ${CUDA_BASE_IMAGE}
 
 ARG UNLIMITED_OCR_SGLANG_WHEEL_URL=https://github.com/baidu/Unlimited-OCR/raw/main/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl
@@ -34,8 +34,8 @@ RUN python -m venv /opt/venv && \
       uvicorn==0.46.0 \
       httpx==0.28.1 \
       pydantic==2.11.10 \
-      python-multipart==0.0.27 \
-      Pillow==12.1.1
+      python-multipart==0.0.32 \
+      Pillow==12.3.0
 
 WORKDIR /app
 COPY unlimited_ocr_adapter.py /app/unlimited_ocr_adapter.py

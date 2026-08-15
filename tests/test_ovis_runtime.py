@@ -169,7 +169,11 @@ class OvisRuntimeTests(unittest.TestCase):
         )
         mlx = SimpleNamespace(load=load, generate=MagicMock(return_value=result))
         prompt = SimpleNamespace(apply_chat_template=apply)
-        with patch.dict(sys.modules, {"mlx_vlm": mlx, "mlx_vlm.prompt_utils": prompt}):
+        hub = SimpleNamespace(snapshot_download=MagicMock(return_value="model"))
+        with patch.dict(
+            sys.modules,
+            {"mlx_vlm": mlx, "mlx_vlm.prompt_utils": prompt, "huggingface_hub": hub},
+        ):
             parser = adapter.MlxOvisOCR2Parser("model")
             self.assertEqual(parser.parse([Image.new("RGB", (4, 3))]), ["MLX result"])
 

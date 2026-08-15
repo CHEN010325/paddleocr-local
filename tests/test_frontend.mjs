@@ -36,6 +36,7 @@ const document = {
     title: 'PaddleOCR Local'
 };
 const window = {
+    sessionStorage: localStorage,
     PANDOCR_I18N: {
         defaultLanguage: 'zh-CN',
         supportedLanguages: ['zh-CN', 'en'],
@@ -101,7 +102,7 @@ test('language normalization and interpolation use safe fallbacks', () => {
 
 
 test('API authentication is attached only to same-origin API URLs', () => {
-    localStorage.setItem('pandocr.apiToken', 'secret-token');
+    window.sessionStorage.setItem('pandocr.apiToken', 'secret-token');
 
     assert.equal(evaluate("isLocalApiUrl('/api/models')"), true);
     assert.equal(evaluate("isLocalApiUrl('http://localhost:8000/api/tasks')"), true);

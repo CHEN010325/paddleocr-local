@@ -1,23 +1,18 @@
-FROM python:3.10-slim
+FROM python:3.10-slim@sha256:a45c323edaa44976ef63b9a85e0d3bd7bbf31676029dccfbc119f88a65311852
 
 WORKDIR /app
 
-# The web container only serves FastAPI, converts Office files to PDF, and
-# proxies requests to the official PaddleOCR-VL containers.
+# The image serves the restricted Web/API process and the isolated model
+# controller. Office conversion lives in its own image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    libreoffice-core \
-    libreoffice-impress \
-    libreoffice-writer \
-    libreoffice-common \
-    default-jre \
-    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
+COPY controller.py .
 COPY unlimited_ocr_adapter.py .
 COPY ovisocr2_adapter.py .
 COPY hpd_parsing_adapter.py .

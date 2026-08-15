@@ -1,5 +1,6 @@
 ARG API_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-offline
-FROM ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX}
+ARG API_IMAGE_DIGEST=
+FROM ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX}${API_IMAGE_DIGEST}
 
 USER root
 

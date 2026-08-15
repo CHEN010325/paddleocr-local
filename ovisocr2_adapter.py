@@ -6,6 +6,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import fitz
@@ -17,6 +18,7 @@ logging.basicConfig(level=os.getenv("OVISOCR2_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("ovisocr2-adapter")
 
 MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
+MODEL_REVISION = os.getenv("OVISOCR2_MODEL_REVISION", "65c619d374b55d4152e85150fc1b003700bc1f0c")
 BACKEND = os.getenv("OVISOCR2_BACKEND", "vllm").strip().lower()
 TRANSFORMERS_DEVICE = os.getenv("OVISOCR2_TRANSFORMERS_DEVICE", "auto").strip().lower()
 TRANSFORMERS_DTYPE = os.getenv("OVISOCR2_TRANSFORMERS_DTYPE", "auto").strip().lower()
@@ -58,6 +60,7 @@ class VllmOvisOCR2Parser:
 
         self.model = LLM(
             model=model_name_or_path,
+            revision=MODEL_REVISION,
             tensor_parallel_size=1,
             # With a fixed KV cache this is vLLM's startup free-memory
             # threshold; it does not size or reserve the KV cache.
@@ -172,9 +175,10 @@ class TransformersOvisOCR2Parser:
             str(dtype).removeprefix("torch."),
         )
         self.device = torch.device(device)
-        self.processor = AutoProcessor.from_pretrained(model_name_or_path)
+        self.processor = AutoProcessor.from_pretrained(model_name_or_path, revision=MODEL_REVISION)
         self.model = AutoModelForMultimodalLM.from_pretrained(
             model_name_or_path,
+            revision=MODEL_REVISION,
             dtype=dtype,
             attn_implementation=ATTENTION_IMPLEMENTATION,
             low_cpu_mem_usage=True,
@@ -290,11 +294,15 @@ class MlxOvisOCR2Parser:
     clean_restarted_document = staticmethod(VllmOvisOCR2Parser.clean_restarted_document)
 
     def __init__(self, model_name_or_path: str):
+        from huggingface_hub import snapshot_download
         from mlx_vlm import load
         from mlx_vlm.prompt_utils import apply_chat_template
 
         logger.info("Loading OvisOCR2 with MLX-VLM")
-        self.model, self.processor = load(model_name_or_path)
+        resolved_model = model_name_or_path
+        if not Path(model_name_or_path).exists():
+            resolved_model = snapshot_download(repo_id=model_name_or_path, revision=MODEL_REVISION)
+        self.model, self.processor = load(resolved_model)
         self.prompt = apply_chat_template(
             self.processor,
             self.model.config,
@@ -448,18 +456,21 @@ def crop_visual_regions(markdown: str, page: Image.Image, page_index: int) -> tu
     return BBOX_IMAGE_RE.sub(replace, markdown), images, blocks
 
 
-def build_response(markdowns: list[str], pages: list[Image.Image], file_type: int) -> dict[str, Any]:
+def build_response(
+    markdowns: list[str], pages: list[Image.Image], file_type: int, *, page_offset: int = 0
+) -> dict[str, Any]:
     all_images: dict[str, str] = {}
     results = []
     rendered_pages = []
     for index, (markdown, page) in enumerate(zip(markdowns, pages)):
-        rendered, images, blocks = crop_visual_regions(markdown, page, index)
+        page_index = page_offset + index
+        rendered, images, blocks = crop_visual_regions(markdown, page, page_index)
         rendered_pages.append(rendered)
         all_images.update(images)
         results.append(
             {
                 "parser": "ovisocr2",
-                "pageIndex": index,
+                "pageIndex": page_index,
                 "width": 1000,
                 "height": 1000,
                 "parsing_res_list": blocks,
@@ -494,10 +505,42 @@ async def health():
 @app.post("/ocr")
 async def ocr(request: Request):
     file_bytes, file_type = await read_input(request)
-    pages, resolved_type = prepare_images(file_bytes, file_type)
-    if not pages:
-        raise HTTPException(status_code=400, detail="No images were produced for OCR")
+    resolved_type = file_type if file_type is not None else (0 if file_bytes.startswith(b"%PDF-") else 1)
+    if resolved_type != 0:
+        pages, resolved_type = prepare_images(file_bytes, resolved_type)
+        if not pages:
+            raise HTTPException(status_code=400, detail="No images were produced for OCR")
+        parser = await get_parser()
+        async with INFERENCE_LOCK:
+            markdowns = await asyncio.to_thread(parser.parse, pages)
+        return build_response(markdowns, pages, resolved_type)
+
     parser = await get_parser()
-    async with INFERENCE_LOCK:
-        markdowns = await asyncio.to_thread(parser.parse, pages)
-    return build_response(markdowns, pages, resolved_type)
+    scale = PDF_DPI / 72
+    markdown_pages: list[str] = []
+    all_images: dict[str, str] = {}
+    all_results: list[dict] = []
+    with fitz.open(stream=file_bytes, filetype="pdf") as document:
+        if len(document) < 1:
+            raise HTTPException(status_code=400, detail="PDF contains no pages")
+        if len(document) > MAX_PAGES:
+            raise HTTPException(status_code=400, detail=f"PDF exceeds the {MAX_PAGES}-page request limit")
+        for page_index in range(len(document)):
+            pixmap = document[page_index].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            page = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("RGB")
+            try:
+                async with INFERENCE_LOCK:
+                    markdown = (await asyncio.to_thread(parser.parse, [page]))[0]
+                chunk = build_response([markdown], [page], resolved_type, page_offset=page_index)
+                markdown_pages.append(chunk["markdown"])
+                all_images.update(chunk["images"])
+                all_results.extend(chunk["layoutParsingResults"])
+            finally:
+                page.close()
+    return {
+        "markdown": "\n\n---\n\n".join(markdown_pages),
+        "images": all_images,
+        "layoutParsingResults": all_results,
+        "model": MODEL_NAME,
+        "fileType": resolved_type,
+    }

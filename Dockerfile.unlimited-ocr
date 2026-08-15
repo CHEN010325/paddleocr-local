@@ -1,4 +1,4 @@
-ARG CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04
+ARG CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04@sha256:50efab398f76258daa91ceebb33b6467e40217c67ea44fb5a2cebc6be7d9cce3
 FROM ${CUDA_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -26,10 +26,10 @@ RUN python -m venv /opt/venv && \
     pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu126 \
-      torch==2.10.0+cu126 \
-      torchvision==0.25.0+cu126 && \
+      torch==2.13.0+cu126 \
+      torchvision==0.28.0+cu126 && \
     pip install --no-cache-dir \
-      transformers==4.57.1 \
+      transformers==5.14.1 \
       matplotlib==3.10.8 \
       einops==0.8.2 \
       addict==2.4.0 \
@@ -40,8 +40,8 @@ RUN python -m venv /opt/venv && \
       uvicorn==0.46.0 \
       httpx==0.28.1 \
       pydantic==2.11.10 \
-      python-multipart==0.0.27 \
-      Pillow==12.1.1
+      python-multipart==0.0.32 \
+      Pillow==12.3.0
 
 WORKDIR /app
 COPY unlimited_ocr_adapter.py /app/unlimited_ocr_adapter.py

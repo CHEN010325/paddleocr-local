@@ -2,7 +2,7 @@
 
 ## 定位
 
-本项目是 PaddleOCR Local 的 WebUI 和代理层，支持 `PaddleOCR-VL 1.6` 文档解析与 `PP-OCRv6` 文字识别。Web 服务负责上传、预览、任务持久化、Office 转 PDF、模型切换和 API 代理，OCR 推理由独立 PaddleOCR 服务完成。
+本项目是 PaddleOCR Local 的 WebUI 和代理层。Web 服务负责上传、预览、任务持久化和 API 代理；Office 转 PDF 与 Docker 模型控制分别由隔离的内部服务完成，OCR 推理由独立模型服务完成。
 
 ## 运行架构
 
@@ -15,7 +15,9 @@ Browser
 
 服务职责：
 
-- `pandocr-web`：提供前端页面、FastAPI 代理、Office 转 PDF、本地任务持久化和结果格式整理。
+- `pandocr-web`：提供前端页面、FastAPI 代理、本地任务持久化和结果格式整理。
+- `pandocr-controller`：内部 token 鉴权的模型生命周期控制器，唯一挂载 Docker socket。
+- `pandocr-office-converter`：非 root、只读运行的 LibreOffice 转换器。
 - `paddleocr-vl-api`：官方 PaddleX layout-parsing 服务。
 - `paddleocr-vlm-server`：官方 VLLM 推理服务，模型为 `PaddleOCR-VL-1.6-0.9B`。
 - `paddleocr-ocr-api`：PP-OCRv6 OCR 服务，默认模型为 `PP-OCRv6_medium`。

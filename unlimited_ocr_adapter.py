@@ -67,9 +67,15 @@ def read_persisted_backend(default: str) -> str:
 DEFAULT_BACKEND = read_persisted_backend(normalize_backend(os.getenv("UNLIMITED_OCR_BACKEND", "transformers")))
 BACKEND = DEFAULT_BACKEND
 MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR")
+DEFAULT_MODEL_REVISIONS = {
+    "baidu/Unlimited-OCR": "07dea832e22aefee32ad281d4b80551282e1c168",
+    "sabafallah/Unlimited-OCR-Universal": "bc00ae36def7fe8d23980adf5a901125fe0040a2",
+}
+MODEL_REVISION = os.getenv("UNLIMITED_OCR_MODEL_REVISION", DEFAULT_MODEL_REVISIONS.get(MODEL_NAME, "main"))
 REQUEST_TIMEOUT = float(os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200"))
 PDF_DPI = int(os.getenv("UNLIMITED_OCR_PDF_DPI", "300"))
 MAX_PAGES_PER_REQUEST = int(os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50"))
+MAX_RENDER_PIXELS = int(os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000"))
 SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
 SINGLE_PROMPT = os.getenv("UNLIMITED_OCR_SINGLE_PROMPT", "document parsing.")
@@ -283,6 +289,18 @@ def pdf_to_png_pages(file_bytes: bytes, dpi: int) -> list[bytes]:
                 detail=f"Unlimited-OCR request has {document.page_count} pages; max is {MAX_PAGES_PER_REQUEST}.",
             )
         matrix = fitz.Matrix(dpi / 72, dpi / 72)
+        estimated_pixels = sum(
+            int(page.rect.width * dpi / 72) * int(page.rect.height * dpi / 72)
+            for page in document
+        )
+        if MAX_RENDER_PIXELS > 0 and estimated_pixels > MAX_RENDER_PIXELS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Rendered PDF would contain about {estimated_pixels:,} pixels; "
+                    f"the request limit is {MAX_RENDER_PIXELS:,}. Reduce the PDF batch size or DPI."
+                ),
+            )
         pages: list[bytes] = []
         for page in document:
             pixmap = page.get_pixmap(matrix=matrix)
@@ -374,13 +392,16 @@ async def get_transformers_components():
             dtype = select_transformers_dtype(torch, device)
             model_kwargs = {
                 "trust_remote_code": True,
+                "revision": MODEL_REVISION,
                 "use_safetensors": True,
                 "torch_dtype": dtype,
             }
             if TRANSFORMERS_ATTENTION_IMPLEMENTATION:
                 model_kwargs["attn_implementation"] = TRANSFORMERS_ATTENTION_IMPLEMENTATION
 
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_NAME, trust_remote_code=True, revision=MODEL_REVISION
+            )
             model = AutoModel.from_pretrained(MODEL_NAME, **model_kwargs)
             model = model.eval()
             if device == "cuda":

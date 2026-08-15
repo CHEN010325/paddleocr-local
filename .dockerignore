@@ -7,6 +7,8 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv*/
+.uv-cache*/
 build/
 develop-eggs/
 dist/
@@ -55,6 +57,10 @@ ocr_results_*.zip
 *.log
 .playwright-cli/
 output/
+node_modules/
+.coverage
+coverage/
+htmlcov/
 
 # Keep only the .gitkeep in ocr_images
 static/ocr_images/*
@@ -65,6 +71,7 @@ Dockerfile
 .dockerignore
 compose.yaml
 env.txt
+package-lock.json
 
 # Documentation
 README.md

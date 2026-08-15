@@ -591,6 +591,8 @@ function Get-DeployedModelServices {
 
 function Get-DeploymentServiceList {
     $services = New-Object System.Collections.Generic.List[string]
+    $services.Add("pandocr-controller")
+    $services.Add("pandocr-office-converter")
     $services.Add("pandocr-web")
     foreach ($service in (Get-DeployedModelServices)) {
         if (-not $services.Contains($service)) {
@@ -639,6 +641,11 @@ function New-RuntimeEnvFile {
     $lines = [string[]](Get-Content -Path $BaseEnvFile -Encoding UTF8)
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_GPU_DEVICE_ID" -Value ([string]$Gpu.Index)
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CONTROL" -Value "docker"
+    $controllerToken = Get-EnvLineValue -Lines $lines -Key "PANDOCR_MODEL_CONTROLLER_TOKEN" -DefaultValue ""
+    if ([string]::IsNullOrWhiteSpace($controllerToken) -or $controllerToken -eq "change-this-to-a-random-long-value") {
+        $controllerToken = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
+    }
+    $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CONTROLLER_TOKEN" -Value $controllerToken
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -Value $script:ActiveModel
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CATALOG" -Value ($script:ModelCatalogIds -join ",")
     $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_MODEL_NAME" -Value "baidu/Unlimited-OCR"
@@ -970,7 +977,7 @@ try {
     }
 
     if (-not $SkipBuild) {
-        $buildServices = @("pandocr-web")
+        $buildServices = @("pandocr-web", "pandocr-office-converter")
         if ($script:DeployModelIds -contains "pp-ocrv6") {
             $buildServices += "paddleocr-ocr-api"
         }
@@ -1003,7 +1010,7 @@ try {
     }
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $gpuCheckCommand) -Description "Checking Docker GPU access"
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("up", "-d", "--no-start", "--force-recreate") + (Get-DeploymentServiceList))) -Description "Creating selected PaddleOCR Local containers"
-    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("start", "pandocr-web")) -Description "Starting WebUI and model runtime controller"
+    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("start", "pandocr-controller", "pandocr-office-converter", "pandocr-web")) -Description "Starting WebUI and isolated support services"
 
     Wait-ForServices -Timeout $TimeoutSeconds
 

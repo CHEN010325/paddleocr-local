@@ -9,9 +9,11 @@ if not exist "env.txt" (
     exit /b 1
 )
 
+for /f %%T in ('powershell -NoProfile -Command "[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()"') do set "PANDOCR_MODEL_CONTROLLER_TOKEN=%%T"
+
 docker compose --env-file env.txt up -d --no-start
-docker compose --env-file env.txt stop pandocr-web paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api >nul 2>&1
-docker compose --env-file env.txt start pandocr-web
+docker compose --env-file env.txt stop pandocr-web pandocr-controller pandocr-office-converter paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api >nul 2>&1
+docker compose --env-file env.txt start pandocr-controller pandocr-office-converter pandocr-web
 
 echo Waiting for services...
 timeout /t 5 /nobreak >nul
@@ -49,7 +51,7 @@ echo Done.
 echo WebUI: http://localhost:8000
 echo VL API:  http://localhost:8081
 echo OCR API: http://localhost:8082
-echo Default model is started by pandocr-web. The other model stays stopped until selected in the UI.
+echo Default model is started by pandocr-controller. Other models stay stopped until selected in the UI.
 echo.
 echo Useful commands:
 echo   docker compose --env-file env.txt logs -f

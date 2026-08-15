@@ -21,7 +21,9 @@ class ServerTaskApiTests(unittest.TestCase):
         os.environ["PANDOCR_MAX_UPLOAD_MB"] = "1"
         os.environ["PANDOCR_MODEL_CONTROL"] = "none"
         os.environ["PANDOCR_API_TOKEN"] = ""
-        cls.server = importlib.import_module("server")
+        # Collection may import the module before this suite installs its
+        # environment. Reload so paths and size limits are order-independent.
+        cls.server = importlib.reload(importlib.import_module("server"))
         cls.client = TestClient(cls.server.app)
 
     @classmethod
@@ -162,7 +164,10 @@ class ServerTaskApiTests(unittest.TestCase):
         )
         self.assertEqual(
             self.server.docker_build_args_for("paddleocr-ocr-api"),
-            {"API_IMAGE_TAG_SUFFIX": self.server.API_IMAGE_TAG_SUFFIX},
+            {
+                "API_IMAGE_TAG_SUFFIX": self.server.API_IMAGE_TAG_SUFFIX,
+                "API_IMAGE_DIGEST": self.server.API_IMAGE_DIGEST,
+            },
         )
 
     def test_ovisocr2_build_context_and_runtime_service(self):

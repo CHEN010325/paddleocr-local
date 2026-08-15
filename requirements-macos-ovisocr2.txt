@@ -7,5 +7,5 @@ pymupdf==1.27.2.2
 fastapi==0.140.0
 uvicorn==0.51.0
 python-multipart==0.0.32
-pypdf==6.9.2
+pypdf==6.15.0
 mlx-vlm==0.6.7

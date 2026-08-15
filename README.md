@@ -97,5 +97,8 @@ Linux、手动 Docker 部署和高级参数请查看 [部署文档](DOCKER_DEPLO
 - [OvisOCR2 部署与参数](OVISOCR2_DEPLOY.md)
 - [Docker 手动部署](DOCKER_DEPLOY.md)
 - [API 说明](api.md)
+- [安全策略](SECURITY.md)
+
+Docker 部署已将 WebUI、Docker 模型控制和 LibreOffice 转换拆分隔离。局域网或公网部署前，请务必设置 `PANDOCR_API_TOKEN`，同时把 `PANDOCR_MODEL_CONTROLLER_TOKEN` 改成随机长值。
 
 项目地址：[https://github.com/CHEN010325/paddleocr-local](https://github.com/CHEN010325/paddleocr-local)

@@ -1,0 +1,25 @@
+FROM python:3.10-slim@sha256:a45c323edaa44976ef63b9a85e0d3bd7bbf31676029dccfbc119f88a65311852
+
+ENV HOME=/tmp/converter-home
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libreoffice-core \
+      libreoffice-impress \
+      libreoffice-writer \
+      libreoffice-common \
+      default-jre \
+      fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 converter
+
+RUN pip install --no-cache-dir \
+      fastapi==0.136.1 \
+      uvicorn==0.46.0 \
+      python-multipart==0.0.32
+
+COPY office_converter.py /app/office_converter.py
+
+USER 10001:10001
+ENTRYPOINT []
+CMD ["uvicorn", "office_converter:app", "--host", "0.0.0.0", "--port", "8080"]

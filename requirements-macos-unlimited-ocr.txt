@@ -1,7 +1,7 @@
-torch==2.10.0
-torchvision==0.25.0
-transformers==4.57.1
-Pillow==12.1.1
+torch==2.13.0
+torchvision==0.28.0
+transformers==5.14.1
+Pillow==12.3.0
 matplotlib==3.10.8
 einops==0.8.2
 addict==2.4.0
@@ -12,5 +12,5 @@ fastapi==0.136.1
 uvicorn==0.46.0
 httpx==0.28.1
 pydantic==2.11.10
-python-multipart==0.0.27
-pypdf==6.9.2
+python-multipart==0.0.32
+pypdf==6.15.0

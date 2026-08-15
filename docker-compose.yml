@@ -30,8 +30,110 @@ x-hpd-parsing-adapter-image: &hpd-parsing-adapter-image
   image: pandocr-hpd-parsing-adapter:latest
 
 services:
+  pandocr-controller:
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pandocr-web:latest
+    container_name: pandocr-controller
+    command: uvicorn controller:app --host 0.0.0.0 --port 8001
+    restart: unless-stopped
+    environment:
+      - PANDOCR_MODEL_CONTROL=docker
+      - PANDOCR_MODEL_CONTROLLER_TOKEN=${PANDOCR_MODEL_CONTROLLER_TOKEN:-}
+      - PANDOCR_TASK_DATA_DIR=/app/data/tasks
+      - PANDOCR_RUNTIME_SETTINGS_FILE=/app/data/runtime-settings.json
+      - PANDOCR_ACTIVE_MODEL_ON_START=${PANDOCR_ACTIVE_MODEL_ON_START:-paddleocr-vl-1.6}
+      - PANDOCR_MODEL_SWITCH_TIMEOUT=${PANDOCR_MODEL_SWITCH_TIMEOUT:-1200}
+      - PANDOCR_GPU_DEVICE_ID=${PANDOCR_GPU_DEVICE_ID:-0}
+      - PADDLE_SERVICE_URL=http://paddleocr-vl-api:8080/layout-parsing
+      - PADDLE_OCR_SERVICE_URL=http://paddleocr-ocr-api:8080/ocr
+      - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
+      - OVISOCR2_SERVICE_URL=http://ovisocr2-api:8080/ocr
+      - HPD_PARSING_SERVICE_URL=http://hpd-parsing-api:8080/ocr
+      - VLM_BACKEND=${VLM_BACKEND:-vllm}
+      - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+      - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+      - VLM_IMAGE_DIGEST=${VLM_IMAGE_DIGEST:-}
+      - API_IMAGE_DIGEST=${API_IMAGE_DIGEST:-}
+      - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
+      - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-0}
+      - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-0}
+      - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
+      - UNLIMITED_OCR_BACKEND=${UNLIMITED_OCR_BACKEND:-transformers}
+      - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
+      - UNLIMITED_OCR_API_PORT=${UNLIMITED_OCR_API_PORT:-8083}
+      - UNLIMITED_OCR_SGLANG_PORT=${UNLIMITED_OCR_SGLANG_PORT:-10000}
+      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
+      - UNLIMITED_OCR_MAX_RENDER_PIXELS=${UNLIMITED_OCR_MAX_RENDER_PIXELS:-60000000}
+      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
+      - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
+      - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
+      - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
+    volumes:
+      - ./static:/app/static:ro
+      - ./server.py:/app/server.py:ro
+      - ./controller.py:/app/controller.py:ro
+      - ./unlimited_ocr_adapter.py:/app/unlimited_ocr_adapter.py:ro
+      - ./Dockerfile.ocr:/app/Dockerfile.ocr:ro
+      - ./Dockerfile.unlimited-ocr:/app/Dockerfile.unlimited-ocr:ro
+      - ./Dockerfile.unlimited-ocr-sglang:/app/Dockerfile.unlimited-ocr-sglang:ro
+      - ./ovisocr2_adapter.py:/app/ovisocr2_adapter.py:ro
+      - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
+      - ./hpd_parsing_adapter.py:/app/hpd_parsing_adapter.py:ro
+      - ./Dockerfile.hpd-parsing-adapter:/app/Dockerfile.hpd-parsing-adapter:ro
+      - ./start-hpd-parsing.sh:/app/start-hpd-parsing.sh:ro
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'X-Pandocr-Controller-Token: $${PANDOCR_MODEL_CONTROLLER_TOKEN}' http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - paddleocr-network
+      - pandocr-control-network
+
+  pandocr-office-converter:
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.office-converter
+    image: pandocr-office-converter:latest
+    container_name: pandocr-office-converter
+    restart: unless-stopped
+    environment:
+      - PANDOCR_MAX_UPLOAD_MB=${PANDOCR_MAX_UPLOAD_MB:-512}
+      - PANDOCR_MAX_HTTP_BODY_MB=${PANDOCR_MAX_HTTP_BODY_MB:-0}
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - pandocr-document-network
+
   paddleocr-vlm-server:
-    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${VLM_BACKEND:-vllm}-server:${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}${VLM_IMAGE_DIGEST:-}
     container_name: paddleocr-vlm-server
     command: /bin/bash /home/paddleocr/start-vlm.sh
     environment:
@@ -64,7 +166,7 @@ services:
       - paddleocr-network
 
   paddleocr-vl-api:
-    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+    image: ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}${API_IMAGE_DIGEST:-}
     container_name: paddleocr-vl-api
     ports:
       - "127.0.0.1:8081:8080"
@@ -104,6 +206,7 @@ services:
       dockerfile: Dockerfile.ocr
       args:
         API_IMAGE_TAG_SUFFIX: ${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+        API_IMAGE_DIGEST: ${API_IMAGE_DIGEST:-}
     image: pandocr-ocr-api:latest
     container_name: paddleocr-ocr-api
     ports:
@@ -157,6 +260,7 @@ services:
     command: >
       python3 -m sglang.launch_server
       --model ${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
+      --revision ${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
       --served-model-name ${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR}
       --attention-backend ${UNLIMITED_OCR_ATTENTION_BACKEND:-flashinfer}
       --page-size ${UNLIMITED_OCR_PAGE_SIZE:-1}
@@ -188,10 +292,12 @@ services:
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
       - UNLIMITED_OCR_SGLANG_URL=http://unlimited-ocr-sglang:10000
       - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
       - UNLIMITED_OCR_SERVED_MODEL_NAME=${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR}
       - UNLIMITED_OCR_REQUEST_TIMEOUT=${UNLIMITED_OCR_REQUEST_TIMEOUT:-1200}
       - UNLIMITED_OCR_PDF_DPI=${UNLIMITED_OCR_PDF_DPI:-300}
       - UNLIMITED_OCR_MAX_PAGES_PER_REQUEST=${UNLIMITED_OCR_MAX_PAGES_PER_REQUEST:-50}
+      - UNLIMITED_OCR_MAX_RENDER_PIXELS=${UNLIMITED_OCR_MAX_RENDER_PIXELS:-60000000}
       - UNLIMITED_OCR_SINGLE_IMAGE_MODE=${UNLIMITED_OCR_SINGLE_IMAGE_MODE:-gundam}
       - UNLIMITED_OCR_MULTI_IMAGE_MODE=${UNLIMITED_OCR_MULTI_IMAGE_MODE:-base}
       - UNLIMITED_OCR_MAX_TOKENS=${UNLIMITED_OCR_MAX_TOKENS:-32768}
@@ -230,6 +336,7 @@ services:
       - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
       - VLLM_USE_FLASHINFER_SAMPLER=0
       - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
       - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
       - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
       - OVISOCR2_MAX_MODEL_LEN=${OVISOCR2_MAX_MODEL_LEN:-32768}
@@ -263,7 +370,7 @@ services:
 
   hpd-parsing-server:
     profiles: ["hpd-parsing"]
-    image: ${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu}
+    image: ${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu@sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2}
     container_name: hpd-parsing-server
     user: root
     entrypoint: ["/bin/bash"]
@@ -335,10 +442,16 @@ services:
       dockerfile: Dockerfile
     image: pandocr-web:latest
     container_name: pandocr-web
+    depends_on:
+      pandocr-controller:
+        condition: service_healthy
+      pandocr-office-converter:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
     environment:
+      - PANDOCR_HOST=0.0.0.0
       - PADDLE_SERVICE_URL=http://paddleocr-vl-api:8080/layout-parsing
       - PADDLE_OCR_SERVICE_URL=http://paddleocr-ocr-api:8080/ocr
       - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
@@ -347,6 +460,8 @@ services:
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
       - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
+      - VLM_IMAGE_DIGEST=${VLM_IMAGE_DIGEST:-}
+      - API_IMAGE_DIGEST=${API_IMAGE_DIGEST:-}
       - PANDOCR_GPU_DEVICE_ID=${PANDOCR_GPU_DEVICE_ID:-0}
       - UNLIMITED_OCR_BACKEND=${UNLIMITED_OCR_BACKEND:-transformers}
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
@@ -363,7 +478,9 @@ services:
       - PANDOCR_VLLM_MAX_RATIO=${PANDOCR_VLLM_MAX_RATIO:-0.88}
       - PPOCR_V6_MODEL_NAME=${PPOCR_V6_MODEL_NAME:-PP-OCRv6_medium}
       - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
       - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
       - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
       - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
       - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
@@ -374,7 +491,7 @@ services:
       - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
       - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
       - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
-      - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu}
+      - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu@sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2}
       - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
       - HPD_PARSING_SERVED_MODEL_NAME=${HPD_PARSING_SERVED_MODEL_NAME:-HPD-Parsing}
       - HPD_PARSING_MAX_TOKENS=${HPD_PARSING_MAX_TOKENS:-8000}
@@ -389,32 +506,31 @@ services:
       - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-0}
       - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
       - PADDLE_REQUEST_TIMEOUT=${PADDLE_REQUEST_TIMEOUT:-3600}
-      - PANDOCR_MODEL_CONTROL=${PANDOCR_MODEL_CONTROL:-docker}
+      - PANDOCR_MODEL_CONTROL=remote
+      - PANDOCR_MODEL_CONTROLLER_URL=http://pandocr-controller:8001
+      - PANDOCR_MODEL_CONTROLLER_TOKEN=${PANDOCR_MODEL_CONTROLLER_TOKEN:-}
+      - PANDOCR_OFFICE_CONVERTER_URL=http://pandocr-office-converter:8080/convert
       - PANDOCR_ACTIVE_MODEL_ON_START=${PANDOCR_ACTIVE_MODEL_ON_START:-paddleocr-vl-1.6}
       - PANDOCR_MODEL_SWITCH_TIMEOUT=${PANDOCR_MODEL_SWITCH_TIMEOUT:-1200}
       - PANDOCR_TASK_DATA_DIR=/app/data/tasks
       - PANDOCR_CORS_ORIGINS=${PANDOCR_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
       - PANDOCR_MAX_UPLOAD_MB=${PANDOCR_MAX_UPLOAD_MB:-512}
+      - PANDOCR_MAX_HTTP_BODY_MB=${PANDOCR_MAX_HTTP_BODY_MB:-0}
       - PANDOCR_MAX_CONCURRENT_OCR=${PANDOCR_MAX_CONCURRENT_OCR:-1}
       - PANDOCR_ENFORCE_ORIGIN_CHECK=${PANDOCR_ENFORCE_ORIGIN_CHECK:-1}
       - PANDOCR_API_TOKEN=${PANDOCR_API_TOKEN:-}
       - PANDOCR_ENABLE_API_DOCS=${PANDOCR_ENABLE_API_DOCS:-0}
     volumes:
-      - ./static:/app/static
-      - ./server.py:/app/server.py
-      - ./unlimited_ocr_adapter.py:/app/unlimited_ocr_adapter.py:ro
-      - ./Dockerfile.ocr:/app/Dockerfile.ocr:ro
-      - ./Dockerfile.unlimited-ocr:/app/Dockerfile.unlimited-ocr:ro
-      - ./Dockerfile.unlimited-ocr-sglang:/app/Dockerfile.unlimited-ocr-sglang:ro
-      - ./ovisocr2_adapter.py:/app/ovisocr2_adapter.py:ro
-      - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
-      - ./hpd_parsing_adapter.py:/app/hpd_parsing_adapter.py:ro
-      - ./Dockerfile.hpd-parsing-adapter:/app/Dockerfile.hpd-parsing-adapter:ro
-      - ./start-hpd-parsing.sh:/app/start-hpd-parsing.sh:ro
+      - ./static:/app/static:ro
+      - ./server.py:/app/server.py:ro
       - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
       interval: 30s
@@ -423,7 +539,15 @@ services:
       start_period: 10s
     networks:
       - paddleocr-network
+      - pandocr-control-network
+      - pandocr-document-network
 
 networks:
   paddleocr-network:
     driver: bridge
+  pandocr-control-network:
+    driver: bridge
+    internal: true
+  pandocr-document-network:
+    driver: bridge
+    internal: true

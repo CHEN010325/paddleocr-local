@@ -9,9 +9,13 @@ if [ ! -f "env.txt" ]; then
     exit 1
 fi
 
+# Avoid shipping a reusable controller credential. This value is shared only
+# by the containers created in this deployment invocation.
+export PANDOCR_MODEL_CONTROLLER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
 docker compose --env-file env.txt up -d --no-start
-docker compose --env-file env.txt stop pandocr-web paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api > /dev/null 2>&1 || true
-docker compose --env-file env.txt start pandocr-web
+docker compose --env-file env.txt stop pandocr-web pandocr-controller pandocr-office-converter paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api > /dev/null 2>&1 || true
+docker compose --env-file env.txt start pandocr-controller pandocr-office-converter pandocr-web
 
 echo "Waiting for services..."
 sleep 5
@@ -46,7 +50,7 @@ echo "Done."
 echo "WebUI: http://localhost:8000"
 echo "VL API:  http://localhost:8081"
 echo "OCR API: http://localhost:8082"
-echo "Default model is started by pandocr-web. The other model stays stopped until selected in the UI."
+echo "Default model is started by pandocr-controller. Other models stay stopped until selected in the UI."
 echo ""
 echo "Useful commands:"
 echo "  docker compose --env-file env.txt logs -f"

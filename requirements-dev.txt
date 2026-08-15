@@ -1,5 +1,6 @@
 -r requirements.txt
 
-pytest==8.4.2
+pytest==9.0.3
 pytest-cov==7.1.0
+pip-audit==2.10.1
 pymupdf==1.27.2.2

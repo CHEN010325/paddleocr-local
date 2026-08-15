@@ -71,6 +71,8 @@ PADDLE_SERVICE_URL = os.getenv("PADDLE_SERVICE_URL", "http://localhost:8081/layo
 VLM_BACKEND = os.getenv("VLM_BACKEND", "vllm")
 VLM_IMAGE_TAG_SUFFIX = os.getenv("VLM_IMAGE_TAG_SUFFIX", "latest-nvidia-gpu-offline")
 API_IMAGE_TAG_SUFFIX = os.getenv("API_IMAGE_TAG_SUFFIX", "latest-nvidia-gpu-offline")
+VLM_IMAGE_DIGEST = os.getenv("VLM_IMAGE_DIGEST", "").strip()
+API_IMAGE_DIGEST = os.getenv("API_IMAGE_DIGEST", "").strip()
 PANDOCR_GPU_DEVICE_ID = os.getenv("PANDOCR_GPU_DEVICE_ID", "0")
 PADDLEOCR_VL_MODEL_NAME = os.getenv("PADDLEOCR_VL_MODEL_NAME", "PaddleOCR-VL-1.6-0.9B")
 PANDOCR_VLLM_MIN_TOTAL_MIB = os.getenv("PANDOCR_VLLM_MIN_TOTAL_MIB", "11264")
@@ -82,6 +84,9 @@ PPOCR_V6_MODEL_NAME = os.getenv("PPOCR_V6_MODEL_NAME", "PP-OCRv6_medium")
 PADDLE_REQUEST_TIMEOUT = float(os.getenv("PADDLE_REQUEST_TIMEOUT", "3600"))
 UNLIMITED_OCR_SERVICE_URL = os.getenv("UNLIMITED_OCR_SERVICE_URL", "http://localhost:8083/ocr")
 UNLIMITED_OCR_MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR")
+UNLIMITED_OCR_MODEL_REVISION = os.getenv(
+    "UNLIMITED_OCR_MODEL_REVISION", "07dea832e22aefee32ad281d4b80551282e1c168"
+)
 UNLIMITED_OCR_SERVED_MODEL_NAME = os.getenv("UNLIMITED_OCR_SERVED_MODEL_NAME", "Unlimited-OCR")
 UNLIMITED_OCR_BACKEND = normalize_unlimited_ocr_backend(os.getenv("UNLIMITED_OCR_BACKEND"), "transformers")
 UNLIMITED_OCR_PRELOAD = os.getenv("UNLIMITED_OCR_PRELOAD", "1")
@@ -94,12 +99,16 @@ UNLIMITED_OCR_CONTEXT_LENGTH = os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "32768"
 UNLIMITED_OCR_REQUEST_TIMEOUT = os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_PDF_DPI = os.getenv("UNLIMITED_OCR_PDF_DPI", "300")
 UNLIMITED_OCR_MAX_PAGES_PER_REQUEST = os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50")
+UNLIMITED_OCR_MAX_RENDER_PIXELS = os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000")
 UNLIMITED_OCR_SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 UNLIMITED_OCR_MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
 UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "32768")
 UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "28672")
 OVISOCR2_SERVICE_URL = os.getenv("OVISOCR2_SERVICE_URL", "http://localhost:8084/ocr")
 OVISOCR2_MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
+OVISOCR2_MODEL_REVISION = os.getenv(
+    "OVISOCR2_MODEL_REVISION", "65c619d374b55d4152e85150fc1b003700bc1f0c"
+)
 OVISOCR2_API_PORT = os.getenv("OVISOCR2_API_PORT", "8084")
 OVISOCR2_KV_CACHE_MEMORY_MB = os.getenv("OVISOCR2_KV_CACHE_MEMORY_MB", "512")
 OVISOCR2_STARTUP_MEMORY_FRACTION = os.getenv("OVISOCR2_STARTUP_MEMORY_FRACTION", "0.50")
@@ -136,9 +145,15 @@ RUNTIME_SETTINGS_FILE = Path(
     os.getenv("PANDOCR_RUNTIME_SETTINGS_FILE", str(DEFAULT_RUNTIME_SETTINGS_DIR / "runtime-settings.json"))
 ).resolve()
 MAX_REQUEST_BYTES = int(float(os.getenv("PANDOCR_MAX_UPLOAD_MB", "512")) * 1024 * 1024)
-PANDOCR_HOST = os.getenv("PANDOCR_HOST", "0.0.0.0")
+MAX_HTTP_BODY_BYTES = int(
+    float(os.getenv("PANDOCR_MAX_HTTP_BODY_MB", "0")) * 1024 * 1024
+) or (int(MAX_REQUEST_BYTES * 4 / 3) + 2 * 1024 * 1024 if MAX_REQUEST_BYTES > 0 else 0)
+PANDOCR_HOST = os.getenv("PANDOCR_HOST", "127.0.0.1")
 PANDOCR_PORT = int(os.getenv("PANDOCR_PORT", "8000"))
 MODEL_CONTROL_MODE = os.getenv("PANDOCR_MODEL_CONTROL", "docker").strip().lower()
+MODEL_CONTROLLER_URL = os.getenv("PANDOCR_MODEL_CONTROLLER_URL", "").rstrip("/")
+MODEL_CONTROLLER_TOKEN = os.getenv("PANDOCR_MODEL_CONTROLLER_TOKEN", "").strip()
+OFFICE_CONVERTER_URL = os.getenv("PANDOCR_OFFICE_CONVERTER_URL", "").strip()
 MODEL_RUNTIME_STARTUP = os.getenv("PANDOCR_ACTIVE_MODEL_ON_START", "paddleocr-vl-1.6").strip()
 DOCKER_SOCKET_PATH = os.getenv("PANDOCR_DOCKER_SOCKET", "/var/run/docker.sock")
 MODEL_SWITCH_TIMEOUT = float(os.getenv("PANDOCR_MODEL_SWITCH_TIMEOUT", "1200"))
@@ -386,6 +401,29 @@ def model_control_available() -> bool:
     return MODEL_CONTROL_MODE == "docker" and Path(DOCKER_SOCKET_PATH).exists()
 
 
+async def controller_api_request(method: str, path: str, **kwargs) -> dict:
+    if MODEL_CONTROL_MODE != "remote" or not MODEL_CONTROLLER_URL:
+        raise HTTPException(status_code=503, detail="Remote model controller is not configured")
+    headers = dict(kwargs.pop("headers", {}))
+    if MODEL_CONTROLLER_TOKEN:
+        headers["X-Pandocr-Controller-Token"] = MODEL_CONTROLLER_TOKEN
+    try:
+        async with httpx.AsyncClient(timeout=MODEL_SWITCH_TIMEOUT) as client:
+            response = await client.request(method, f"{MODEL_CONTROLLER_URL}{path}", headers=headers, **kwargs)
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=503, detail=f"Model controller is unavailable: {error}") from error
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = response.text
+        raise HTTPException(status_code=response.status_code, detail=detail or "Model controller request failed")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Invalid model controller response")
+    return payload
+
+
 async def docker_api_request(method: str, path: str, *, timeout: float = 30, **request_kwargs) -> httpx.Response:
     transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET_PATH)
     async with httpx.AsyncClient(transport=transport, base_url="http://docker", timeout=timeout) as client:
@@ -628,9 +666,9 @@ async def docker_container_action(name: str, action: str) -> None:
 
 def docker_image_name_for(service_name: str) -> str:
     if service_name == "paddleocr-vlm-server":
-        return f"ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-{VLM_BACKEND}-server:{VLM_IMAGE_TAG_SUFFIX}"
+        return f"ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-{VLM_BACKEND}-server:{VLM_IMAGE_TAG_SUFFIX}{VLM_IMAGE_DIGEST}"
     if service_name == "paddleocr-vl-api":
-        return f"ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:{API_IMAGE_TAG_SUFFIX}"
+        return f"ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:{API_IMAGE_TAG_SUFFIX}{API_IMAGE_DIGEST}"
     if service_name == "paddleocr-ocr-api":
         return "pandocr-ocr-api:latest"
     if service_name == "unlimited-ocr-api":
@@ -647,6 +685,8 @@ def docker_image_name_for(service_name: str) -> str:
 
 
 def split_docker_image_ref(image: str) -> tuple[str, str]:
+    if "@sha256:" in image:
+        return image, ""
     last_slash = image.rfind("/")
     last_colon = image.rfind(":")
     if last_colon > last_slash:
@@ -668,7 +708,9 @@ async def docker_pull_image(image: str) -> None:
     if await docker_image_exists(image):
         return
     repository, tag = split_docker_image_ref(image)
-    path = f"/images/create?fromImage={quote(repository, safe='')}&tag={quote(tag, safe='')}"
+    path = f"/images/create?fromImage={quote(repository, safe='')}"
+    if tag:
+        path += f"&tag={quote(tag, safe='')}"
     response = await docker_api_request("POST", path, timeout=3600)
     if response.status_code >= 400:
         raise RuntimeError(f"Docker pull failed for {image}: {response.text}")
@@ -693,7 +735,7 @@ def dockerfile_path_for(service_name: str) -> Path:
 
 def docker_build_args_for(service_name: str) -> dict[str, str]:
     if service_name == "paddleocr-ocr-api":
-        return {"API_IMAGE_TAG_SUFFIX": API_IMAGE_TAG_SUFFIX}
+        return {"API_IMAGE_TAG_SUFFIX": API_IMAGE_TAG_SUFFIX, "API_IMAGE_DIGEST": API_IMAGE_DIGEST}
     if service_name == "unlimited-ocr-sglang":
         return {"UNLIMITED_OCR_SGLANG_WHEEL_URL": UNLIMITED_OCR_SGLANG_WHEEL_URL}
     return {}
@@ -916,10 +958,12 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"UNLIMITED_OCR_PRELOAD={UNLIMITED_OCR_PRELOAD}",
                 "UNLIMITED_OCR_SGLANG_URL=http://unlimited-ocr-sglang:10000",
                 f"UNLIMITED_OCR_MODEL_NAME={UNLIMITED_OCR_MODEL_NAME}",
+                f"UNLIMITED_OCR_MODEL_REVISION={UNLIMITED_OCR_MODEL_REVISION}",
                 f"UNLIMITED_OCR_SERVED_MODEL_NAME={UNLIMITED_OCR_SERVED_MODEL_NAME}",
                 f"UNLIMITED_OCR_REQUEST_TIMEOUT={UNLIMITED_OCR_REQUEST_TIMEOUT}",
                 f"UNLIMITED_OCR_PDF_DPI={UNLIMITED_OCR_PDF_DPI}",
                 f"UNLIMITED_OCR_MAX_PAGES_PER_REQUEST={UNLIMITED_OCR_MAX_PAGES_PER_REQUEST}",
+                f"UNLIMITED_OCR_MAX_RENDER_PIXELS={UNLIMITED_OCR_MAX_RENDER_PIXELS}",
                 f"UNLIMITED_OCR_SINGLE_IMAGE_MODE={UNLIMITED_OCR_SINGLE_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MULTI_IMAGE_MODE={UNLIMITED_OCR_MULTI_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MAX_TOKENS={UNLIMITED_OCR_MAX_TOKENS}",
@@ -947,6 +991,8 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 "sglang.launch_server",
                 "--model",
                 UNLIMITED_OCR_MODEL_NAME,
+                "--revision",
+                UNLIMITED_OCR_MODEL_REVISION,
                 "--served-model-name",
                 UNLIMITED_OCR_SERVED_MODEL_NAME,
                 "--attention-backend",
@@ -988,6 +1034,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
                 "VLLM_USE_FLASHINFER_SAMPLER=0",
                 f"OVISOCR2_MODEL_NAME={OVISOCR2_MODEL_NAME}",
+                f"OVISOCR2_MODEL_REVISION={OVISOCR2_MODEL_REVISION}",
                 f"OVISOCR2_KV_CACHE_MEMORY_MB={OVISOCR2_KV_CACHE_MEMORY_MB}",
                 f"OVISOCR2_STARTUP_MEMORY_FRACTION={OVISOCR2_STARTUP_MEMORY_FRACTION}",
                 f"OVISOCR2_MAX_MODEL_LEN={OVISOCR2_MAX_MODEL_LEN}",
@@ -1154,6 +1201,12 @@ async def enrich_unlimited_ocr_runtime_status(model_id: str, status: dict) -> di
 
 
 async def model_runtime_status(model_id: str) -> dict:
+    if MODEL_CONTROL_MODE == "remote":
+        payload = await controller_api_request("GET", "/model-runtime")
+        status = (payload.get("models") or {}).get(model_id)
+        if not isinstance(status, dict):
+            raise HTTPException(status_code=502, detail=f"Model controller omitted runtime state for {model_id}")
+        return status
     config = MODEL_RUNTIME_CONFIG[model_id]
     containers = [await inspect_container(name) for name in config["containers"]]
     if not model_control_available():
@@ -1196,6 +1249,12 @@ async def model_runtime_status(model_id: str) -> dict:
 
 
 async def build_model_runtime_payload() -> dict:
+    if MODEL_CONTROL_MODE == "remote":
+        payload = await controller_api_request("GET", "/model-runtime")
+        payload["controlMode"] = "remote"
+        payload["ocrActiveCount"] = ocr_active_count
+        payload["maxConcurrentOcr"] = MAX_CONCURRENT_OCR
+        return payload
     models = {
         model_id: await model_runtime_status(model_id)
         for model_id in MODEL_RUNTIME_CONFIG
@@ -1478,8 +1537,6 @@ def normalize_origin(value: str) -> str:
 
 def configured_origins_for_request(request: Request) -> set[str]:
     origins = {normalize_origin(origin) for origin in CORS_ORIGINS if origin != "*"}
-    request_origin = f"{request.url.scheme}://{request.url.netloc}".lower()
-    origins.add(request_origin)
     return {origin for origin in origins if origin}
 
 
@@ -1504,15 +1561,15 @@ async def enforce_request_security(request: Request, call_next):
     if API_TOKEN and request.url.path.startswith("/api/") and not request_is_authenticated(request):
         return JSONResponse(status_code=401, content={"detail": "Missing or invalid API token"})
 
-    if request.method in {"POST", "PUT", "PATCH"} and MAX_REQUEST_BYTES > 0:
+    if request.method in {"POST", "PUT", "PATCH"} and MAX_HTTP_BODY_BYTES > 0:
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > MAX_REQUEST_BYTES:
-                    max_mb = MAX_REQUEST_BYTES / 1024 / 1024
+                if int(content_length) > MAX_HTTP_BODY_BYTES:
+                    max_mb = MAX_HTTP_BODY_BYTES / 1024 / 1024
                     return JSONResponse(
                         status_code=413,
-                        content={"detail": f"Request body is too large. Max upload size is {max_mb:.0f} MB."},
+                        content={"detail": f"Request body is too large. Max HTTP body size is {max_mb:.0f} MB."},
                     )
             except ValueError:
                 pass
@@ -1567,12 +1624,24 @@ async def get_model_runtime():
 
 @app.post("/api/model-runtime/switch")
 async def switch_model_runtime(request: ModelSwitchRequest):
+    if MODEL_CONTROL_MODE == "remote":
+        async with model_runtime_lock:
+            if ocr_active_count > 0:
+                raise HTTPException(status_code=409, detail="OCR is running. Wait before switching models.")
+        await controller_api_request("POST", "/model-runtime/switch", json=request.model_dump())
+        return await build_model_runtime_payload()
     await schedule_model_runtime_activation(request.modelId)
     return await build_model_runtime_payload()
 
 
 @app.post("/api/model-runtime/deploy")
 async def deploy_model_runtime(request: ModelDeployRequest):
+    if MODEL_CONTROL_MODE == "remote":
+        async with model_runtime_lock:
+            if ocr_active_count > 0:
+                raise HTTPException(status_code=409, detail="OCR is running. Wait before deploying models.")
+        await controller_api_request("POST", "/model-runtime/deploy", json=request.model_dump())
+        return await build_model_runtime_payload()
     await schedule_model_runtime_deploy(request.modelId, request.backend)
     return await build_model_runtime_payload()
 
@@ -1581,6 +1650,8 @@ async def deploy_model_runtime(request: ModelDeployRequest):
 async def get_unlimited_ocr_backend():
     if not ENABLE_UNLIMITED_OCR:
         raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+    if MODEL_CONTROL_MODE == "remote":
+        return await controller_api_request("GET", "/unlimited-ocr/backend")
     return {
         "backend": unlimited_ocr_runtime_backend,
         "supportedBackends": sorted(UNLIMITED_OCR_SUPPORTED_BACKENDS),
@@ -1590,6 +1661,12 @@ async def get_unlimited_ocr_backend():
 
 @app.post("/api/unlimited-ocr/backend")
 async def switch_unlimited_ocr_backend(request: UnlimitedOcrBackendRequest):
+    if MODEL_CONTROL_MODE == "remote":
+        async with model_runtime_lock:
+            if ocr_active_count > 0:
+                raise HTTPException(status_code=409, detail="OCR is running. Wait before switching backends.")
+        await controller_api_request("POST", "/unlimited-ocr/backend", json=request.model_dump())
+        return await build_model_runtime_payload()
     await schedule_unlimited_ocr_backend_activation(request.backend)
     return await build_model_runtime_payload()
 
@@ -2069,6 +2146,26 @@ async def clear_tasks():
 async def convert_to_pdf(file: UploadFile = File(...)):
     """Convert PPT/PPTX/DOC/DOCX to PDF using LibreOffice."""
     logger.info("Received conversion request for: %s", file.filename)
+
+    if OFFICE_CONVERTER_URL:
+        filename = Path(file.filename or "upload").name
+        content = await read_upload_bytes(file, MAX_REQUEST_BYTES)
+        timeout = None if PADDLE_REQUEST_TIMEOUT <= 0 else PADDLE_REQUEST_TIMEOUT
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    OFFICE_CONVERTER_URL,
+                    files={"file": (filename, content, file.content_type or "application/octet-stream")},
+                )
+        except httpx.HTTPError as error:
+            raise HTTPException(status_code=503, detail=f"Office converter is unavailable: {error}") from error
+        if response.status_code != 200:
+            try:
+                detail = response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = response.text
+            raise HTTPException(status_code=response.status_code, detail=detail or "Office conversion failed")
+        return Response(content=response.content, media_type="application/pdf")
 
     if not shutil.which("soffice"):
         raise HTTPException(

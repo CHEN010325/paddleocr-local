@@ -74,7 +74,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务和 `pandocr-web`。随后由 WebUI 运行时控制器只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready，避免单 GPU 同时加载多个模型。
+脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务、WebUI 及两个隔离支持服务。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready，避免单 GPU 同时加载多个模型。
 
 只做预检、不启动服务：
 
@@ -136,7 +136,7 @@ docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
 docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
 ```
 
-`pandocr-web` 提供 WebUI、FastAPI 代理和 Office 转 PDF 能力；PaddleOCR-VL 由官方 `paddleocr-vl-api` 和 `paddleocr-vlm-server` 镜像提供，PP-OCRv6 由本地 `paddleocr-ocr-api` 镜像提供。
+`pandocr-web` 提供 WebUI 和 FastAPI 代理，`pandocr-office-converter` 负责 Office 转 PDF，`pandocr-controller` 负责模型切换；PaddleOCR-VL 由官方 `paddleocr-vl-api` 和 `paddleocr-vlm-server` 镜像提供，PP-OCRv6 由本地 `paddleocr-ocr-api` 镜像提供。
 
 ### 3. 启动服务
 
@@ -157,7 +157,7 @@ curl http://localhost:8081/health
 ./test-connection.sh env.txt
 ```
 
-实际容器数量取决于已部署模型和启用的 Compose profile。单 GPU 环境中，`pandocr-web` 与当前活跃模型处于 running/healthy，其他已创建模型处于 created/exited/standby 均属正常。可能出现的模型服务包括：
+实际容器数量取决于已部署模型和启用的 Compose profile。单 GPU 环境中，`pandocr-web`、两个隔离支持服务与当前活跃模型处于 running/healthy，其他已创建模型处于 created/exited/standby 均属正常。可能出现的模型服务包括：
 
 - `paddleocr-vlm-server`
 - `paddleocr-vl-api`
@@ -185,7 +185,7 @@ curl http://localhost:8081/health
 
 - 图片会直接作为图片请求提交。
 - PDF 会按页提交，任务完成后会保留每页原始 JSON，方便和官方在线结果核对。
-- PPT/PPTX/DOC/DOCX 会先由 `pandocr-web` 调 LibreOffice 转 PDF，再进入 PDF 流程。
+- PPT/PPTX/DOC/DOCX 会先由 `pandocr-office-converter` 调 LibreOffice 转 PDF，再进入 PDF 流程。
 - 结果区会渲染 Markdown、表格和 KaTeX 公式，并修正 OCR 结果里字面量 `\n` 导致的不换行问题。
 - 历史任务会保存到本机 `data/tasks/`，侧边栏删除按钮会同时删除对应本地记录。
 

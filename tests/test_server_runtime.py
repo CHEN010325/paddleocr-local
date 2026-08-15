@@ -274,6 +274,8 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.server.split_docker_image_ref("registry:5000/repo/image"),
             ("registry:5000/repo/image", "latest"),
         )
+        digest_ref = "registry/repo/image:tag@sha256:abc"
+        self.assertEqual(self.server.split_docker_image_ref(digest_ref), (digest_ref, ""))
 
         with patch.object(self.server, "model_control_available", return_value=False):
             self.assertFalse(await self.server.docker_image_exists("image"))
@@ -321,6 +323,17 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.server.docker_pull_image("repo/image")
         self.assertIn("fromImage=repo%2Fimage", request_mock.await_args.args[1])
+
+        with (
+            patch.object(self.server, "docker_image_exists", new=AsyncMock(return_value=False)),
+            patch.object(
+                self.server,
+                "docker_api_request",
+                new=AsyncMock(return_value=response(200, text="ok")),
+            ) as request_mock,
+        ):
+            await self.server.docker_pull_image("repo/image:tag@sha256:abc")
+        self.assertNotIn("&tag=", request_mock.await_args.args[1])
 
         with (
             patch.object(self.server, "docker_image_exists", new=AsyncMock(return_value=True)),

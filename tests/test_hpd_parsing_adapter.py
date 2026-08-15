@@ -294,10 +294,15 @@ def test_one_click_and_runtime_include_hpd_parsing():
     script = (root / "scripts" / "windows-one-click.ps1").read_text(encoding="utf-8")
     server = (root / "server.py").read_text(encoding="utf-8")
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    launcher = (root / "start-hpd-parsing.sh").read_text(encoding="utf-8")
     assert '"hpd-parsing"' in script
     assert 'MODEL_RUNTIME_CONFIG["hpd-parsing"]' in server
     assert "hpd-parsing-server:" in compose
     assert "hpd-parsing-api:" in compose
+    assert "HPD_PARSING_GPU_MEMORY_UTILIZATION:-auto" in compose
+    assert "HPD_PARSING_GPU_MEMORY_TARGET_MIB:-6656" in compose
+    assert 'GPU_MEMORY_UTILIZATION="${HPD_PARSING_GPU_MEMORY_UTILIZATION:-auto}"' in launcher
+    assert 'target="$TARGET_GPU_MEMORY_MIB"' in launcher
     legacy_all = re.search(r'\{ \$_ -in @\("8".*?\n\s*\}', script, re.DOTALL)
     legacy_sglang = re.search(r'\{ \$_ -in @\("9".*?\n\s*\}', script, re.DOTALL)
     assert legacy_all and 'Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"' not in legacy_all.group(0)

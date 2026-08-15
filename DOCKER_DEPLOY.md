@@ -81,6 +81,23 @@ HPD-Parsing 可直接一键部署：
 
 该模型使用官方 `hpd-parsing-vllm` 镜像，要求 NVIDIA GPU、Linux x86-64 容器和支持 CUDA 12.8+ 的驱动。在线镜像首次启动会下载 `PaddlePaddle/HPD-Parsing`；缓存保存在 `model_cache_hpd_parsing/`。如需官方离线镜像，可设置 `HPD_PARSING_IMAGE=ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu-offline`。
 
+HPD-Parsing 默认按约 6.5 GiB 的绝对预算自动计算 vLLM 显存比例，而不是预占整张显卡的 90%；16 GiB 显卡约使用 `0.408`，建议至少使用 8 GiB 显卡。可用 `HPD_PARSING_GPU_MEMORY_TARGET_MIB` 调整目标预算，或将 `HPD_PARSING_GPU_MEMORY_UTILIZATION` 设置为明确比例以覆盖自动计算。
+
+## 启动前 GPU 显存预检
+
+`pandocr-web` 会在切换/启动模型前运行短生命周期的 GPU 探测容器。`/api/model-runtime` 的 `gpuPreflight` 字段和 WebUI 顶部提示会列出 GPU 型号、总/空闲显存、可运行模型以及低显存环境变量。PaddleOCR-VL 按官方当前最低成功运行配置 RTX 3060 12 GB 设置 `11264 MiB` 保护下限；RTX 4070 Laptop 8 GB 不会再尝试启动该模型，页面会直接推荐 PP-OCRv6 等兼容模型。依据见 [PaddleOCR-VL 推理部署高频问题](https://github.com/PaddlePaddle/PaddleOCR/discussions/16822)。
+
+PaddleOCR-VL 推荐保留以下默认值：
+
+```dotenv
+PANDOCR_VLLM_MIN_TOTAL_MIB=11264
+PANDOCR_VLLM_MIN_REQUIRED_MIB=6656
+PANDOCR_VLLM_RESERVE_MIB=512
+PANDOCR_MAX_CONCURRENT_OCR=1
+```
+
+HPD-Parsing 在 8 GB 卡上使用 `HPD_PARSING_GPU_MEMORY_UTILIZATION=auto`；若仍接近上限，可将 `HPD_PARSING_GPU_MEMORY_TARGET_MIB` 从 `6656` 降到 `6144`，并配合 `HPD_PARSING_MAX_MODEL_LEN=8192`、`HPD_PARSING_MAX_TOKENS=4096` 和 `HPD_PARSING_MAX_CONCURRENCY=1`。
+
 手动部署命令如下：
 
 ```powershell
@@ -137,7 +154,11 @@ docker compose --env-file env.txt logs -f pandocr-web
 docker compose --env-file env.txt logs -f paddleocr-vl-api
 docker compose --env-file env.txt logs -f paddleocr-ocr-api
 docker compose --env-file env.txt logs -f paddleocr-vlm-server
+docker compose --env-file env.txt logs --tail=200 hpd-parsing-server
+docker compose --env-file env.txt logs --tail=200 hpd-parsing-api
 ```
+
+WebUI 模型启动失败时会从 Docker API 读取对应容器最后 120 行日志并显示在显存提示栏，同时给出等价的 `docker logs --tail 200 <container>` 命令。PaddleOCR-VL 优先检查 `paddleocr-vlm-server`；HPD-Parsing 优先检查 `hpd-parsing-server`，再检查各自的 API/adapter 容器。
 
 ## 端口调整
 

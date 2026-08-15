@@ -83,6 +83,110 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_class.call_args.kwargs["base_url"], "http://docker")
         self.assertEqual(client.calls[0][1:3], ("POST", "/action"))
 
+    async def test_issue_7_8188_mib_gpu_rejects_paddle_vl_and_recommends_ppocr(self):
+        result = self.server.gpu_compatibility(
+            [{"name": "RTX 4070 Laptop GPU", "totalMiB": 8188, "freeMiB": 7800}]
+        )
+        self.assertIn("pp-ocrv6", result["runnableModelIds"])
+        self.assertNotIn("paddleocr-vl-1.6", result["runnableModelIds"])
+        self.assertEqual(result["models"]["paddleocr-vl-1.6"]["level"], "unsupported")
+        self.assertIn(
+            "PANDOCR_VLLM_MIN_REQUIRED_MIB=6656",
+            result["models"]["paddleocr-vl-1.6"]["lowMemoryEnv"],
+        )
+        launcher = (Path(__file__).resolve().parents[1] / "start-vlm.sh").read_text(encoding="utf-8")
+        self.assertIn('PANDOCR_VLLM_MIN_TOTAL_MIB:-11264', launcher)
+        self.assertIn('PANDOCR_VLLM_MIN_REQUIRED_MIB:-6656', launcher)
+
+    async def test_gpu_probe_parses_nvidia_smi_and_removes_probe_container(self):
+        api = AsyncMock(
+            side_effect=[
+                response(201, payload={"Id": "probe"}),
+                response(204),
+                response(200, payload={"StatusCode": 0}),
+                response(204),
+            ]
+        )
+        with (
+            patch.object(self.server, "model_control_available", return_value=True),
+            patch.object(self.server, "gpu_probe_image", new=AsyncMock(return_value="gpu:image")),
+            patch.object(self.server, "docker_api_request", new=api),
+            patch.object(
+                self.server,
+                "docker_container_logs",
+                new=AsyncMock(return_value="0, NVIDIA GeForce RTX 3060, 12288, 11000"),
+            ),
+        ):
+            result = await self.server.probe_gpu_preflight("paddleocr-vl-1.6", refresh=True)
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["gpus"][0]["totalMiB"], 12288)
+        self.assertTrue(result["models"]["paddleocr-vl-1.6"]["supported"])
+        self.assertEqual(api.await_args_list[-1].args[0], "DELETE")
+
+    async def test_gpu_probe_caches_missing_image_and_external_runtime_skips_probe(self):
+        self.server.gpu_preflight_cache = {"updated_at": 0.0, "data": None}
+        image = AsyncMock(return_value=None)
+        with (
+            patch.object(self.server, "model_control_available", return_value=True),
+            patch.object(self.server, "gpu_probe_image", new=image),
+        ):
+            first = await self.server.probe_gpu_preflight("paddleocr-vl-1.6")
+            second = await self.server.probe_gpu_preflight("paddleocr-vl-1.6")
+        self.assertEqual(first["status"], "unavailable")
+        self.assertIs(first, second)
+        image.assert_awaited_once()
+
+        with (
+            patch.object(self.server, "model_control_available", return_value=False),
+            patch.object(self.server, "model_runtime_status", new=AsyncMock(return_value={"ready": False, "running": False})),
+            patch.object(self.server, "probe_gpu_preflight", new=AsyncMock()) as probe,
+        ):
+            payload = await self.server.build_model_runtime_payload()
+        self.assertIsNone(payload["gpuPreflight"])
+        probe.assert_not_awaited()
+
+    async def test_gpu_preflight_rejects_too_small_gpu_before_start(self):
+        preflight = {
+            "status": "ready",
+            "gpus": [{"name": "small GPU", "totalMiB": 4096}],
+            "runnableModelIds": ["pp-ocrv6"],
+            "models": {
+                "hpd-parsing": {
+                    "supported": False,
+                    "minimumMiB": 8192,
+                }
+            },
+        }
+        with patch.object(
+            self.server,
+            "probe_gpu_preflight",
+            new=AsyncMock(return_value=preflight),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Runnable models: pp-ocrv6"):
+                await self.server.ensure_model_gpu_compatible("hpd-parsing")
+
+    async def test_failure_diagnostics_returns_docker_log_commands_and_tail(self):
+        config = {"broken": {"containers": ["model-server", "model-api"]}}
+        with (
+            patch.dict(self.server.MODEL_RUNTIME_CONFIG, config, clear=True),
+            patch.object(
+                self.server,
+                "docker_container_logs",
+                new=AsyncMock(side_effect=["CUDA out of memory", "adapter waiting"]),
+            ),
+        ):
+            diagnostics = await self.server.model_failure_diagnostics(
+                "broken", RuntimeError("startup failed")
+            )
+        self.assertEqual(
+            diagnostics["logCommands"],
+            [
+                "docker logs --tail 200 model-server",
+                "docker logs --tail 200 model-api",
+            ],
+        )
+        self.assertIn("CUDA out of memory", diagnostics["logs"][0]["tail"])
+
     async def test_inspect_container_handles_unavailable_missing_and_running(self):
         with patch.object(self.server, "model_control_available", return_value=False):
             unavailable = await self.server.inspect_container("worker")

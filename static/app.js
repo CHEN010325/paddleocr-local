@@ -94,6 +94,7 @@ const els = {
     languageToggle: document.getElementById('language-toggle'),
     statusDot: document.getElementById('model-status-dot'),
     statusText: document.getElementById('model-status-text'),
+    gpuPreflightPanel: document.getElementById('gpu-preflight-panel'),
     modelSelect: document.getElementById('model-select'),
     unlimitedBackendWrap: document.getElementById('unlimited-backend-wrap'),
     unlimitedBackendSelect: document.getElementById('unlimited-backend-select'),
@@ -845,6 +846,63 @@ function modelRuntimeStatusText(model) {
     return t('{modelName} 未就绪', { modelName });
 }
 
+function modelRuntimeFailureDetail(modelId = selectedModelId) {
+    const operation = modelRuntime?.operation;
+    if (operation?.state !== 'error' || operation.targetModelId !== modelId) return '';
+    const diagnostics = operation.diagnostics || {};
+    const commands = Array.isArray(diagnostics.logCommands) ? diagnostics.logCommands : [];
+    const logs = Array.isArray(diagnostics.logs) ? diagnostics.logs : [];
+    const tail = logs.map((entry) => `${entry.container}:\n${entry.tail || ''}`).join('\n\n');
+    return [operation.message, commands.length ? `${t('查看启动日志')}：${commands.join('；')}` : '', tail]
+        .filter(Boolean)
+        .join('\n')
+        .slice(-5000);
+}
+
+function renderGpuPreflightPanel() {
+    const panel = els.gpuPreflightPanel;
+    if (!panel) return;
+    panel.classList.remove('hidden', 'warning', 'error');
+
+    const failure = modelRuntimeFailureDetail();
+    if (failure) {
+        panel.classList.add('error');
+        panel.textContent = `${t('模型启动失败')}：${failure}`;
+        return;
+    }
+
+    const preflight = modelRuntime?.gpuPreflight;
+    if (!preflight) {
+        panel.classList.add('hidden');
+        panel.textContent = '';
+        return;
+    }
+    if (preflight.status !== 'ready') {
+        panel.classList.add('warning');
+        panel.textContent = `${t('GPU 显存预检不可用')}：${preflight.reason || t('未检测到 NVIDIA GPU')}`;
+        return;
+    }
+
+    const gpu = preflight.gpus?.[0] || {};
+    const compatibility = preflight.models?.[selectedModelId] || {};
+    const runnableNames = (preflight.runnableModelIds || [])
+        .map((id) => availableModels.find((model) => model.id === id))
+        .filter(Boolean)
+        .map(modelDisplayName);
+    const memory = `${gpu.name || 'GPU'} · ${gpu.totalMiB || 0} MiB ${t('显存')} · ${gpu.freeMiB || 0} MiB ${t('当前空闲')}`;
+    const runnable = `${t('可运行模型')}：${runnableNames.join('、') || t('无')}`;
+    const unsupported = compatibility.supported === false
+        ? t('当前模型至少需要 {memory} MiB 显存，不能在此显卡启动', { memory: compatibility.minimumMiB || 0 })
+        : '';
+    const lowMemory = compatibility.supported !== false
+        && Array.isArray(compatibility.lowMemoryEnv)
+        && compatibility.lowMemoryEnv.length
+        ? `${t('低显存参数')}：${compatibility.lowMemoryEnv.join('；')}`
+        : '';
+    if (!compatibility.supported || compatibility.level === 'low-memory') panel.classList.add('warning');
+    panel.textContent = [memory, runnable, unsupported, lowMemory].filter(Boolean).join('  |  ');
+}
+
 function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -885,6 +943,10 @@ async function switchModelRuntime(modelId, { wait = false } = {}) {
         console.error(error);
         els.statusDot.className = 'dot error';
         els.statusText.textContent = t('{modelName} 启动失败', { modelName: modelDisplayName(model) });
+        const detail = modelRuntimeFailureDetail(modelId) || error.message || t('模型启动失败');
+        els.statusText.title = detail;
+        renderGpuPreflightPanel();
+        alert(detail);
         return false;
     } finally {
         modelSwitchInFlight = false;
@@ -920,6 +982,10 @@ async function deployModelRuntime(modelId, { wait = false, backend = null } = {}
         console.error(error);
         els.statusDot.className = 'dot error';
         els.statusText.textContent = t('{modelName} 下载/部署失败', { modelName: modelDisplayName(model) });
+        const detail = modelRuntimeFailureDetail(modelId) || error.message || t('模型启动失败');
+        els.statusText.title = detail;
+        renderGpuPreflightPanel();
+        alert(detail);
         return false;
     } finally {
         modelSwitchInFlight = false;
@@ -984,7 +1050,9 @@ async function ensureModelRuntimeReadyForTask(task, model) {
     }
     const switched = await switchModelRuntime(model.id, { wait: true });
     if (switched && isModelRuntimeReady(model.id)) return true;
-    alert(t('{name} 还没有就绪，请稍后再试。', { name: modelDisplayName(model) }));
+    if (!modelRuntimeFailureDetail(model.id)) {
+        alert(t('{name} 还没有就绪，请稍后再试。', { name: modelDisplayName(model) }));
+    }
     updateActionState(task);
     return false;
 }
@@ -995,7 +1063,9 @@ function updateActiveModelDisplay(task = null) {
     renderUnlimitedOcrBackendSelect();
     els.statusDot.className = modelRuntimeDotClass(selectedModel.id);
     els.statusText.textContent = modelRuntimeStatusText(selectedModel);
+    els.statusText.title = modelRuntimeFailureDetail(selectedModel.id);
     els.activeModelName.textContent = modelShortName(activeModel);
+    renderGpuPreflightPanel();
 }
 
 function applySelectedModelToTask(task) {

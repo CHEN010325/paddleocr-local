@@ -96,6 +96,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 ```
 
 HPD-Parsing 官方运行时要求 NVIDIA GPU、Linux x86-64 容器和支持 CUDA 12.8+ 的驱动；Apple Silicon 一键脚本暂不提供该模型。
+默认部署会自动把 vLLM 显存预算控制在约 6.5 GiB，建议至少使用 8 GiB 显卡；如需手动调整，可设置 `HPD_PARSING_GPU_MEMORY_TARGET_MIB`，或用 `HPD_PARSING_GPU_MEMORY_UTILIZATION` 覆盖自动比例。
 
 ## 手动 Docker 流程
 
@@ -113,6 +114,18 @@ nvidia-smi
 | RTX 30 系列 | `env.docker` | 使用普通 NVIDIA GPU 离线镜像 |
 | RTX 40 系列 | `env.docker` | 使用普通 NVIDIA GPU 离线镜像 |
 | RTX 50 系列 / Blackwell | `env.txt` | 使用 SM120 / Blackwell 专用离线镜像 |
+
+WebUI 会在模型启动前通过一个短生命周期的 `nvidia-smi` 容器读取所选 GPU 的总显存和空闲显存，并显示“可运行模型”和当前模型的低显存参数。PaddleOCR 官方目前给出的最低成功运行配置是 RTX 3060 12 GB，因此 PaddleOCR-VL 使用 12 GB 级别的预检下限；RTX 4070 Laptop 8 GB 会在启动前被明确拦截并推荐 PP-OCRv6，而不是进入容器后只显示“模型启动失败”。参见 [PaddleOCR-VL 推理部署高频问题](https://github.com/PaddlePaddle/PaddleOCR/discussions/16822)。
+
+| 模型 | 项目预检下限 | 低显存建议 |
+| --- | ---: | --- |
+| PaddleOCR-VL 1.6 | 11264 MiB（12 GB 级别） | `PANDOCR_VLLM_MIN_REQUIRED_MIB=6656`、`PANDOCR_VLLM_RESERVE_MIB=512`、并发 1 |
+| PP-OCRv6 | 4096 MiB | `PANDOCR_MAX_CONCURRENT_OCR=1` |
+| Unlimited-OCR | 7680 MiB | 优先 `UNLIMITED_OCR_BACKEND=transformers`、`UNLIMITED_OCR_MAX_TOKENS=8192` |
+| OvisOCR2 | 7680 MiB | `OVISOCR2_KV_CACHE_MEMORY_MB=256`、`OVISOCR2_MAX_TOKENS=4096` |
+| HPD-Parsing | 7680 MiB | `HPD_PARSING_GPU_MEMORY_TARGET_MIB=6144`、`HPD_PARSING_MAX_MODEL_LEN=8192`、`HPD_PARSING_MAX_TOKENS=4096` |
+
+这些是启动兼容性下限，不是性能保证；长页面和高分辨率输入仍建议 12–16 GB。页面显示的“当前空闲”低于预算时，先关闭其他 GPU 进程。
 
 下面命令以 RTX 50 系列的 `env.txt` 为例。RTX 30/40 系列用户请把命令里的 `env.txt` 换成 `env.docker`。
 
@@ -204,6 +217,22 @@ docker compose --env-file env.txt start pandocr-web
 
 ```powershell
 docker compose --env-file env.txt logs --tail=200 paddleocr-vlm-server
+```
+
+Issue #7（Ubuntu 24、RTX 4070 Laptop 8 GB）走的是 PaddleOCR-VL 启动链路，不是 HPD-Parsing。该显卡低于官方当前验证过的 12 GB 最低配置，当前版本会在启动前给出可运行模型建议。PaddleOCR-VL 的保护值为：
+
+```dotenv
+PANDOCR_VLLM_MIN_TOTAL_MIB=11264
+PANDOCR_VLLM_MIN_REQUIRED_MIB=6656
+PANDOCR_VLLM_RESERVE_MIB=512
+```
+
+WebUI 启动失败时会直接显示 Docker 日志尾部。命令行排查路径依次为：
+
+```powershell
+docker logs --tail 200 paddleocr-vlm-server
+docker logs --tail 200 paddleocr-vl-api
+docker logs --tail 200 pandocr-web
 ```
 
 如果你使用 RTX 30/40 系列，命令里的 `env.txt` 要换成 `env.docker`：

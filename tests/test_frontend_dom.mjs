@@ -195,6 +195,61 @@ test('full DOM boot renders models, tasks, language, tabs, and controls', async 
 });
 
 
+test('GPU preflight panel shows runnable models, low-VRAM settings, and startup logs', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`
+      availableModels=[
+        {id:'pp-ocrv6',label:'PP-OCRv6'},
+        {id:'paddleocr-vl-1.6',label:'PaddleOCR-VL 1.6'}
+      ];
+      selectedModelId='paddleocr-vl-1.6';
+      modelRuntime={
+        gpuPreflight:{
+          status:'ready',
+          gpus:[{name:'RTX 4070 Laptop GPU',totalMiB:8188,freeMiB:7100}],
+          runnableModelIds:['pp-ocrv6'],
+          models:{'paddleocr-vl-1.6':{supported:false,level:'unsupported',minimumMiB:11264,lowMemoryEnv:['PANDOCR_MAX_CONCURRENT_OCR=1']}}
+        },
+        models:{'paddleocr-vl-1.6':{ready:false,state:'stopped'}}
+      };
+      renderGpuPreflightPanel();
+    `);
+    const panel = window.document.getElementById('gpu-preflight-panel');
+    assert.match(panel.textContent, /RTX 4070 Laptop GPU/);
+    assert.match(panel.textContent, /PP-OCRv6/);
+    assert.match(panel.textContent, /11264 MiB/);
+    assert.doesNotMatch(panel.textContent, /PANDOCR_MAX_CONCURRENT_OCR=1/);
+    assert.ok(panel.classList.contains('warning'));
+
+    window.eval(`
+      availableModels.push({id:'hpd-parsing',label:'HPD-Parsing'});
+      selectedModelId='hpd-parsing';
+      modelRuntime.gpuPreflight.runnableModelIds.push('hpd-parsing');
+      modelRuntime.gpuPreflight.models['hpd-parsing']={supported:true,level:'low-memory',minimumMiB:7680,lowMemoryEnv:['HPD_PARSING_MAX_MODEL_LEN=8192']};
+      renderGpuPreflightPanel();
+    `);
+    assert.match(panel.textContent, /HPD_PARSING_MAX_MODEL_LEN=8192/);
+
+    window.eval(`
+      selectedModelId='paddleocr-vl-1.6';
+      modelRuntime.operation={
+        state:'error',targetModelId:'paddleocr-vl-1.6',message:'GPU preflight rejected paddleocr-vl-1.6',
+        diagnostics:{
+          logCommands:['docker logs --tail 200 paddleocr-vlm-server'],
+          logs:[{container:'paddleocr-vlm-server',tail:'GPU total memory is below the supported 12 GB class'}]
+        }
+      };
+      renderGpuPreflightPanel();
+    `);
+    assert.match(panel.textContent, /GPU preflight rejected paddleocr-vl-1.6/);
+    assert.match(panel.textContent, /docker logs --tail 200 paddleocr-vlm-server/);
+    assert.match(panel.textContent, /below the supported 12 GB class/);
+    assert.ok(panel.classList.contains('error'));
+    dom.window.close();
+});
+
+
 test('processing orchestration, OCR streaming, PDF rendering, and edit actions execute', async () => {
     const { dom, window, runtime } = createBrowser();
     await boot(window);

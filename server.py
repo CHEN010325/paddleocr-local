@@ -11,6 +11,7 @@ import re
 import logging
 import time
 import secrets
+import uuid
 import contextlib
 import tarfile
 from contextlib import asynccontextmanager
@@ -72,6 +73,10 @@ VLM_IMAGE_TAG_SUFFIX = os.getenv("VLM_IMAGE_TAG_SUFFIX", "latest-nvidia-gpu-offl
 API_IMAGE_TAG_SUFFIX = os.getenv("API_IMAGE_TAG_SUFFIX", "latest-nvidia-gpu-offline")
 PANDOCR_GPU_DEVICE_ID = os.getenv("PANDOCR_GPU_DEVICE_ID", "0")
 PADDLEOCR_VL_MODEL_NAME = os.getenv("PADDLEOCR_VL_MODEL_NAME", "PaddleOCR-VL-1.6-0.9B")
+PANDOCR_VLLM_MIN_TOTAL_MIB = os.getenv("PANDOCR_VLLM_MIN_TOTAL_MIB", "11264")
+PANDOCR_VLLM_MIN_REQUIRED_MIB = os.getenv("PANDOCR_VLLM_MIN_REQUIRED_MIB", "6656")
+PANDOCR_VLLM_RESERVE_MIB = os.getenv("PANDOCR_VLLM_RESERVE_MIB", "512")
+PANDOCR_VLLM_MAX_RATIO = os.getenv("PANDOCR_VLLM_MAX_RATIO", "0.88")
 PADDLE_OCR_SERVICE_URL = os.getenv("PADDLE_OCR_SERVICE_URL", "http://localhost:8082/ocr")
 PPOCR_V6_MODEL_NAME = os.getenv("PPOCR_V6_MODEL_NAME", "PP-OCRv6_medium")
 PADDLE_REQUEST_TIMEOUT = float(os.getenv("PADDLE_REQUEST_TIMEOUT", "3600"))
@@ -114,10 +119,11 @@ HPD_PARSING_API_PORT = os.getenv("HPD_PARSING_API_PORT", "8085")
 HPD_PARSING_SERVED_MODEL_NAME = os.getenv("HPD_PARSING_SERVED_MODEL_NAME", "HPD-Parsing")
 HPD_PARSING_MAX_TOKENS = os.getenv("HPD_PARSING_MAX_TOKENS", "8000")
 HPD_PARSING_MAX_MODEL_LEN = os.getenv("HPD_PARSING_MAX_MODEL_LEN", "16384")
-HPD_PARSING_GPU_MEMORY_UTILIZATION = os.getenv("HPD_PARSING_GPU_MEMORY_UTILIZATION", "0.9")
+HPD_PARSING_GPU_MEMORY_UTILIZATION = os.getenv("HPD_PARSING_GPU_MEMORY_UTILIZATION", "auto")
+HPD_PARSING_GPU_MEMORY_TARGET_MIB = os.getenv("HPD_PARSING_GPU_MEMORY_TARGET_MIB", "6656")
 HPD_PARSING_PDF_DPI = os.getenv("HPD_PARSING_PDF_DPI", "200")
 HPD_PARSING_MAX_PAGES_PER_REQUEST = os.getenv("HPD_PARSING_MAX_PAGES_PER_REQUEST", "50")
-HPD_PARSING_MAX_CONCURRENCY = os.getenv("HPD_PARSING_MAX_CONCURRENCY", "4")
+HPD_PARSING_MAX_CONCURRENCY = os.getenv("HPD_PARSING_MAX_CONCURRENCY", "1")
 HPD_PARSING_REQUEST_TIMEOUT = os.getenv("HPD_PARSING_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_SGLANG_WHEEL_URL = os.getenv(
     "UNLIMITED_OCR_SGLANG_WHEEL_URL",
@@ -136,6 +142,7 @@ MODEL_CONTROL_MODE = os.getenv("PANDOCR_MODEL_CONTROL", "docker").strip().lower(
 MODEL_RUNTIME_STARTUP = os.getenv("PANDOCR_ACTIVE_MODEL_ON_START", "paddleocr-vl-1.6").strip()
 DOCKER_SOCKET_PATH = os.getenv("PANDOCR_DOCKER_SOCKET", "/var/run/docker.sock")
 MODEL_SWITCH_TIMEOUT = float(os.getenv("PANDOCR_MODEL_SWITCH_TIMEOUT", "1200"))
+GPU_PREFLIGHT_CACHE_SECONDS = float(os.getenv("PANDOCR_GPU_PREFLIGHT_CACHE_SECONDS", "300"))
 API_TOKEN = os.getenv("PANDOCR_API_TOKEN", "").strip()
 ENABLE_API_DOCS = parse_bool_env("PANDOCR_ENABLE_API_DOCS", "0")
 ENFORCE_ORIGIN_CHECK = parse_bool_env("PANDOCR_ENFORCE_ORIGIN_CHECK", "1")
@@ -214,12 +221,26 @@ MODEL_RUNTIME_CONFIG = {
         "start_order": ["paddleocr-vlm-server", "paddleocr-vl-api"],
         "stop_order": ["paddleocr-vl-api", "paddleocr-vlm-server"],
         "health_url": PADDLE_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 11264,
+            "recommended_mib": 15360,
+            "low_memory_env": [
+                "PANDOCR_VLLM_MIN_REQUIRED_MIB=6656",
+                "PANDOCR_VLLM_RESERVE_MIB=512",
+                "PANDOCR_MAX_CONCURRENT_OCR=1",
+            ],
+        },
     },
     "pp-ocrv6": {
         "containers": ["paddleocr-ocr-api"],
         "start_order": ["paddleocr-ocr-api"],
         "stop_order": ["paddleocr-ocr-api"],
         "health_url": PADDLE_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 4096,
+            "recommended_mib": 6144,
+            "low_memory_env": ["PANDOCR_MAX_CONCURRENT_OCR=1"],
+        },
     },
 }
 
@@ -229,6 +250,15 @@ if ENABLE_UNLIMITED_OCR:
         "start_order": ["unlimited-ocr-api"],
         "stop_order": ["unlimited-ocr-sglang", "unlimited-ocr-api"],
         "health_url": UNLIMITED_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 7680,
+            "recommended_mib": 11264,
+            "low_memory_env": [
+                "UNLIMITED_OCR_BACKEND=transformers",
+                "UNLIMITED_OCR_MAX_TOKENS=8192",
+                "PANDOCR_MAX_CONCURRENT_OCR=1",
+            ],
+        },
     }
 
 if ENABLE_OVISOCR2:
@@ -237,6 +267,15 @@ if ENABLE_OVISOCR2:
         "start_order": ["ovisocr2-api"],
         "stop_order": ["ovisocr2-api"],
         "health_url": OVISOCR2_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 7680,
+            "recommended_mib": 15360,
+            "low_memory_env": [
+                "OVISOCR2_KV_CACHE_MEMORY_MB=256",
+                "OVISOCR2_MAX_TOKENS=4096",
+                "OVISOCR2_MAX_NUM_SEQS=1",
+            ],
+        },
     }
 
 if ENABLE_HPD_PARSING:
@@ -245,6 +284,17 @@ if ENABLE_HPD_PARSING:
         "start_order": ["hpd-parsing-server", "hpd-parsing-api"],
         "stop_order": ["hpd-parsing-api", "hpd-parsing-server"],
         "health_url": HPD_PARSING_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 7680,
+            "recommended_mib": 11264,
+            "low_memory_env": [
+                "HPD_PARSING_GPU_MEMORY_UTILIZATION=auto",
+                "HPD_PARSING_GPU_MEMORY_TARGET_MIB=6144",
+                "HPD_PARSING_MAX_MODEL_LEN=8192",
+                "HPD_PARSING_MAX_TOKENS=4096",
+                "HPD_PARSING_MAX_CONCURRENCY=1",
+            ],
+        },
     }
 
 DEFAULT_RUNTIME_FALLBACK_MODEL_ID = next(
@@ -265,11 +315,13 @@ model_runtime_operation = {
     "message": "",
     "startedAt": None,
     "updatedAt": None,
+    "diagnostics": None,
 }
 model_runtime_task: asyncio.Task | None = None
 unlimited_ocr_backend_task: asyncio.Task | None = None
 unlimited_ocr_runtime_backend = initial_unlimited_ocr_backend()
 ocr_active_count = 0
+gpu_preflight_cache: dict = {"updated_at": 0.0, "data": None}
 
 
 class ModelSwitchRequest(BaseModel):
@@ -338,6 +390,191 @@ async def docker_api_request(method: str, path: str, *, timeout: float = 30, **r
     transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET_PATH)
     async with httpx.AsyncClient(transport=transport, base_url="http://docker", timeout=timeout) as client:
         return await client.request(method, path, **request_kwargs)
+
+
+def decode_docker_log_stream(content: bytes) -> str:
+    """Decode Docker's multiplexed stdout/stderr stream, falling back to plain text."""
+    chunks: list[bytes] = []
+    offset = 0
+    while offset + 8 <= len(content) and content[offset] in {0, 1, 2}:
+        size = int.from_bytes(content[offset + 4 : offset + 8], "big")
+        end = offset + 8 + size
+        if end > len(content):
+            break
+        chunks.append(content[offset + 8 : end])
+        offset = end
+    raw = b"".join(chunks) if chunks and offset == len(content) else content
+    return raw.decode("utf-8", errors="replace").replace("\x00", "").strip()
+
+
+async def docker_container_logs(name: str, tail: int = 120, *, timestamps: bool = True) -> str:
+    response = await docker_api_request(
+        "GET",
+        f"/containers/{quote(name, safe='')}/logs?stdout=1&stderr=1&tail={max(1, tail)}&timestamps={1 if timestamps else 0}",
+    )
+    if response.status_code == 404:
+        return ""
+    response.raise_for_status()
+    return decode_docker_log_stream(response.content)[-12000:]
+
+
+async def gpu_probe_image(preferred_model_id: str | None = None) -> str | None:
+    model_ids = ([preferred_model_id] if preferred_model_id in MODEL_RUNTIME_CONFIG else []) + [
+        model_id for model_id in MODEL_RUNTIME_CONFIG if model_id != preferred_model_id
+    ]
+    for model_id in model_ids:
+        for service_name in MODEL_RUNTIME_CONFIG[model_id].get("containers", []):
+            image = docker_image_name_for(service_name)
+            if await docker_image_exists(image):
+                return image
+    return None
+
+
+def gpu_compatibility(gpus: list[dict]) -> dict:
+    selected = gpus[0] if gpus else None
+    total_mib = int(selected.get("totalMiB") or 0) if selected else 0
+    models: dict[str, dict] = {}
+    runnable_model_ids: list[str] = []
+    for model_id, config in MODEL_RUNTIME_CONFIG.items():
+        requirement = config.get("gpu_memory") or {}
+        minimum = int(requirement.get("minimum_mib") or 0)
+        recommended = int(requirement.get("recommended_mib") or minimum)
+        supported = bool(selected and total_mib >= minimum)
+        if supported:
+            runnable_model_ids.append(model_id)
+        models[model_id] = {
+            "supported": supported,
+            "level": "recommended" if supported and total_mib >= recommended else ("low-memory" if supported else "unsupported"),
+            "minimumMiB": minimum,
+            "recommendedMiB": recommended,
+            "lowMemoryEnv": list(requirement.get("low_memory_env") or []),
+        }
+    return {"models": models, "runnableModelIds": runnable_model_ids}
+
+
+async def probe_gpu_preflight(preferred_model_id: str | None = None, *, refresh: bool = False) -> dict:
+    now = time.monotonic()
+    cached = gpu_preflight_cache.get("data")
+    if not refresh and cached and now - float(gpu_preflight_cache.get("updated_at") or 0) < GPU_PREFLIGHT_CACHE_SECONDS:
+        return cached
+    if not model_control_available():
+        return {"status": "unavailable", "reason": "Docker model control is not available"}
+
+    image = await gpu_probe_image(preferred_model_id)
+    if not image:
+        data = {
+            "status": "unavailable",
+            "reason": "No deployed GPU image is available for the nvidia-smi preflight probe",
+            "models": gpu_compatibility([])["models"],
+            "runnableModelIds": [],
+        }
+        gpu_preflight_cache.update({"updated_at": now, "data": data})
+        return data
+
+    name = f"pandocr-gpu-preflight-{uuid.uuid4().hex[:10]}"
+    try:
+        create_response = await docker_api_request(
+            "POST",
+            f"/containers/create?name={name}",
+            timeout=60,
+            json={
+                "Image": image,
+                "Entrypoint": ["nvidia-smi"],
+                "Cmd": [
+                    "--query-gpu=index,name,memory.total,memory.free",
+                    "--format=csv,noheader,nounits",
+                ],
+                "HostConfig": {
+                    "NetworkMode": "none",
+                    "DeviceRequests": model_device_requests(),
+                },
+            },
+        )
+        if create_response.status_code >= 400:
+            raise RuntimeError(f"Docker GPU probe create failed: {create_response.text}")
+        start_response = await docker_api_request("POST", f"/containers/{name}/start", timeout=60)
+        if start_response.status_code not in {204, 304}:
+            raise RuntimeError(f"Docker GPU probe start failed: {start_response.text}")
+        wait_response = await docker_api_request("POST", f"/containers/{name}/wait", timeout=60)
+        wait_response.raise_for_status()
+        exit_code = int((wait_response.json() or {}).get("StatusCode", 1))
+        output = await docker_container_logs(name, tail=20, timestamps=False)
+        if exit_code != 0:
+            raise RuntimeError(output or f"nvidia-smi exited with code {exit_code}")
+
+        gpus = []
+        for line in output.splitlines():
+            parts = [part.strip() for part in line.rsplit(",", 3)]
+            if len(parts) != 4 or not parts[0].isdigit():
+                continue
+            try:
+                gpus.append({
+                    "index": int(parts[0]),
+                    "deviceId": PANDOCR_GPU_DEVICE_ID,
+                    "name": parts[1],
+                    "totalMiB": int(float(parts[2])),
+                    "freeMiB": int(float(parts[3])),
+                })
+            except ValueError:
+                continue
+        if not gpus:
+            raise RuntimeError(f"Could not parse nvidia-smi output: {output[-1000:]}")
+        data = {"status": "ready", "probeImage": image, "gpus": gpus, **gpu_compatibility(gpus)}
+        gpu_preflight_cache.update({"updated_at": now, "data": data})
+        return data
+    except Exception as err:
+        data = {
+            "status": "unavailable",
+            "reason": str(err),
+            "models": gpu_compatibility([])["models"],
+            "runnableModelIds": [],
+        }
+        gpu_preflight_cache.update({"updated_at": now, "data": data})
+        return data
+    finally:
+        with contextlib.suppress(Exception):
+            await docker_api_request("DELETE", f"/containers/{name}?force=1", timeout=30)
+
+
+async def ensure_model_gpu_compatible(model_id: str) -> dict:
+    preflight = await probe_gpu_preflight(model_id, refresh=True)
+    if preflight.get("status") != "ready":
+        raise RuntimeError(
+            "GPU preflight failed before model startup: "
+            f"{preflight.get('reason') or 'nvidia-smi is unavailable'}. "
+            "Check NVIDIA Container Toolkit and run: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi"
+        )
+    compatibility = (preflight.get("models") or {}).get(model_id) or {}
+    if not compatibility.get("supported"):
+        gpu = (preflight.get("gpus") or [{}])[0]
+        runnable = ", ".join(preflight.get("runnableModelIds") or []) or "none"
+        raise RuntimeError(
+            f"GPU preflight rejected {model_id}: {gpu.get('name', 'GPU')} has "
+            f"{gpu.get('totalMiB', 0)} MiB VRAM, but this model needs at least "
+            f"{compatibility.get('minimumMiB', 0)} MiB. Runnable models: {runnable}."
+        )
+    return preflight
+
+
+async def model_failure_diagnostics(model_id: str, error: Exception) -> dict:
+    log_entries = []
+    for container_name in MODEL_RUNTIME_CONFIG.get(model_id, {}).get("containers", []):
+        with contextlib.suppress(Exception):
+            content = await docker_container_logs(container_name)
+            if content:
+                log_entries.append({
+                    "container": container_name,
+                    "command": f"docker logs --tail 200 {container_name}",
+                    "tail": content,
+                })
+    return {
+        "error": str(error),
+        "logs": log_entries,
+        "logCommands": [
+            f"docker logs --tail 200 {name}"
+            for name in MODEL_RUNTIME_CONFIG.get(model_id, {}).get("containers", [])
+        ],
+    }
 
 
 async def inspect_container(name: str) -> dict:
@@ -614,6 +851,10 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True",
                 f"PADDLEOCR_VL_MODEL_NAME={PADDLEOCR_VL_MODEL_NAME}",
                 f"PANDOCR_GPU_DEVICE_ID={PANDOCR_GPU_DEVICE_ID}",
+                f"PANDOCR_VLLM_MIN_TOTAL_MIB={PANDOCR_VLLM_MIN_TOTAL_MIB}",
+                f"PANDOCR_VLLM_MIN_REQUIRED_MIB={PANDOCR_VLLM_MIN_REQUIRED_MIB}",
+                f"PANDOCR_VLLM_RESERVE_MIB={PANDOCR_VLLM_RESERVE_MIB}",
+                f"PANDOCR_VLLM_MAX_RATIO={PANDOCR_VLLM_MAX_RATIO}",
             ],
             "User": "root",
             "HostConfig": host_config(
@@ -783,6 +1024,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"HPD_PARSING_SERVED_MODEL_NAME={HPD_PARSING_SERVED_MODEL_NAME}",
                 f"HPD_PARSING_MAX_MODEL_LEN={HPD_PARSING_MAX_MODEL_LEN}",
                 f"HPD_PARSING_GPU_MEMORY_UTILIZATION={HPD_PARSING_GPU_MEMORY_UTILIZATION}",
+                f"HPD_PARSING_GPU_MEMORY_TARGET_MIB={HPD_PARSING_GPU_MEMORY_TARGET_MIB}",
             ],
             "ExposedPorts": {"8118/tcp": {}},
             "HostConfig": host_config(
@@ -961,9 +1203,15 @@ async def build_model_runtime_payload() -> dict:
     ready_models = [model_id for model_id, status in models.items() if status["ready"]]
     running_models = [model_id for model_id, status in models.items() if status["running"]]
     active_model = ready_models[0] if ready_models else (running_models[0] if running_models else None)
+    control_available = model_control_available()
+    gpu_preflight = (
+        await probe_gpu_preflight(active_model or DEFAULT_RUNTIME_MODEL_ID)
+        if control_available
+        else None
+    )
     return {
         "controlMode": MODEL_CONTROL_MODE,
-        "controlAvailable": model_control_available(),
+        "controlAvailable": control_available,
         "activeModelId": active_model,
         "defaultModelId": DEFAULT_RUNTIME_MODEL_ID,
         "unlimitedOcrBackend": unlimited_ocr_runtime_backend,
@@ -971,6 +1219,7 @@ async def build_model_runtime_payload() -> dict:
         "operation": dict(model_runtime_operation),
         "ocrActiveCount": ocr_active_count,
         "maxConcurrentOcr": MAX_CONCURRENT_OCR,
+        "gpuPreflight": gpu_preflight,
         "models": models,
     }
 
@@ -984,6 +1233,7 @@ def set_model_runtime_operation(state: str, message: str = "", target_model_id: 
     model_runtime_operation["updatedAt"] = now
     if state == "switching":
         model_runtime_operation["startedAt"] = now
+        model_runtime_operation["diagnostics"] = None
 
 
 async def wait_model_ready(model_id: str, timeout: float) -> None:
@@ -1072,6 +1322,8 @@ async def activate_model_runtime(model_id: str) -> None:
         set_model_runtime_operation("switching", f"Switching to {model_id}", model_id)
         switch_started_at = time.monotonic()
         try:
+            if MODEL_RUNTIME_CONFIG[model_id].get("gpu_memory"):
+                await ensure_model_gpu_compatible(model_id)
             for other_model_id, config in MODEL_RUNTIME_CONFIG.items():
                 if other_model_id == model_id:
                     continue
@@ -1093,6 +1345,7 @@ async def activate_model_runtime(model_id: str) -> None:
         except Exception as err:
             logger.exception("Model runtime switch failed")
             set_model_runtime_operation("error", str(err), model_id)
+            model_runtime_operation["diagnostics"] = await model_failure_diagnostics(model_id, err)
 
 
 async def schedule_model_runtime_activation(model_id: str) -> None:
@@ -1122,6 +1375,7 @@ async def deploy_and_activate_model_runtime(model_id: str, backend: str | None =
     except Exception as err:
         logger.exception("Model runtime deployment failed")
         set_model_runtime_operation("error", str(err), model_id)
+        model_runtime_operation["diagnostics"] = await model_failure_diagnostics(model_id, err)
 
 
 async def schedule_model_runtime_deploy(model_id: str, backend: str | None = None) -> None:

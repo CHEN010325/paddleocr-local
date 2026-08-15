@@ -203,6 +203,32 @@ svg {
     white-space: nowrap;
 }
 
+.gpu-preflight-panel {
+    flex-shrink: 0;
+    padding: 7px 22px;
+    border-bottom: 1px solid #bfdbfe;
+    color: #1e3a8a;
+    background: #eff6ff;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.gpu-preflight-panel.warning {
+    border-bottom-color: #fde68a;
+    color: #854d0e;
+    background: #fffbeb;
+}
+
+.gpu-preflight-panel.error {
+    max-height: 180px;
+    overflow: auto;
+    border-bottom-color: #fecaca;
+    color: #991b1b;
+    background: #fef2f2;
+}
+
 .dot {
     width: 8px;
     height: 8px;
@@ -1457,6 +1483,10 @@ svg {
         width: 100%;
         justify-content: space-between;
         flex-wrap: wrap;
+    }
+
+    .gpu-preflight-panel {
+        padding: 8px 12px;
     }
 
     .model-select-wrap select {

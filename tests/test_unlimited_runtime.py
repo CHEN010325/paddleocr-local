@@ -611,6 +611,9 @@ class UnlimitedRuntimeTests(unittest.TestCase):
             return [event async for event in events]
 
         async def scenario():
+            async def direct(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
             with patch.object(adapter, "get_transformers_components", new=AsyncMock(return_value=("t", "m"))), patch(
                 "asyncio.to_thread", new=AsyncMock(return_value=("markdown", {"backend": "transformers"}))
             ):
@@ -639,7 +642,9 @@ class UnlimitedRuntimeTests(unittest.TestCase):
 
             with patch.object(adapter, "get_transformers_components", new=AsyncMock(return_value=("t", "m"))), patch.object(
                 adapter, "run_transformers_inference_sync", side_effect=inference
-            ), patch.object(adapter.threading, "Thread", ImmediateThread):
+            ), patch.object(adapter.threading, "Thread", ImmediateThread), patch(
+                "asyncio.to_thread", side_effect=direct
+            ):
                 events = await collect(adapter.stream_transformers_adapter_events([png_bytes()], 1))
             self.assertEqual(events[0]["type"], "status")
             self.assertTrue(any(event["type"] == "progress" for event in events))
@@ -650,6 +655,8 @@ class UnlimitedRuntimeTests(unittest.TestCase):
                 adapter, "run_transformers_inference_sync", side_effect=RuntimeError("out of memory")
             ), patch.object(adapter.threading, "Thread", ImmediateThread), patch.object(
                 adapter, "cleanup_torch_accelerator_cache"
+            ), patch(
+                "asyncio.to_thread", side_effect=direct
             ):
                 events = await collect(adapter.stream_transformers_adapter_events([png_bytes()], 1))
             self.assertEqual(events[-1]["type"], "error")
@@ -725,68 +732,123 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_buffered_sglang_streams_yield_to_health_checks(self):
+        self.assertFalse(adapter.should_render_stream_snapshot("", 0, 0, now=0))
+        self.assertTrue(adapter.should_render_stream_snapshot("complete.", 8, 0, now=0))
+        self.assertTrue(adapter.should_render_stream_snapshot("pending", 0, 0, now=0.25))
+        self.assertFalse(adapter.should_render_stream_snapshot("pending", 0, 0, now=0.24))
+
         async def scenario():
-            lines = [
-                "data: " + json.dumps({"choices": [{"delta": {"content": "token "}}]})
-                for _ in range(64)
-            ]
+            main_thread = adapter.threading.current_thread()
 
-            collect_heartbeat_ran = False
-            collect_observations = []
+            async def health_while_worker_is_blocked(started, release):
+                deadline = asyncio.get_running_loop().time() + 1
+                while not started.is_set():
+                    if asyncio.get_running_loop().time() >= deadline:
+                        release.set()
+                        self.fail("CPU worker did not start")
+                    await asyncio.sleep(0.001)
+                result = await adapter.health()
+                release.set()
+                return result
 
-            async def collect_heartbeat():
-                nonlocal collect_heartbeat_ran
-                collect_heartbeat_ran = True
+            collect_started = adapter.threading.Event()
+            collect_release = adapter.threading.Event()
 
-            collect_task = asyncio.create_task(collect_heartbeat())
-
-            def observe_collect(_text):
-                collect_observations.append(collect_heartbeat_ran)
+            def blocked_detect(_text):
+                self.assertIsNot(adapter.threading.current_thread(), main_thread)
+                collect_started.set()
+                if not collect_release.wait(timeout=1):
+                    raise AssertionError("health coroutine was blocked by repetition detection")
                 return None
 
+            collect_line = "data: " + json.dumps(
+                {"choices": [{"delta": {"content": "token"}}]}
+            )
             with patch.object(
-                adapter, "detect_degenerate_repetition", side_effect=observe_collect
+                adapter, "sglang_health_status", new=AsyncMock(return_value={"ready": True})
+            ), patch.object(
+                adapter, "detect_degenerate_repetition", side_effect=blocked_detect
             ):
-                text = await adapter.collect_streaming_response(StreamResponse(lines=lines))
-            await collect_task
-            self.assertTrue(text)
-            self.assertTrue(collect_observations)
-            self.assertTrue(collect_observations[0])
+                health_task = asyncio.create_task(
+                    health_while_worker_is_blocked(collect_started, collect_release)
+                )
+                text = await adapter.collect_streaming_response(
+                    StreamResponse(lines=[collect_line])
+                )
+                health_result = await health_task
+            self.assertEqual(text, "token")
+            self.assertEqual(health_result["status"], "ok")
 
-            event_heartbeat_ran = False
-            event_observations = []
+            render_started = adapter.threading.Event()
+            render_release = adapter.threading.Event()
 
-            async def event_heartbeat():
-                nonlocal event_heartbeat_ran
-                event_heartbeat_ran = True
+            def blocked_render(*_args):
+                self.assertIsNot(adapter.threading.current_thread(), main_thread)
+                render_started.set()
+                if not render_release.wait(timeout=1):
+                    raise AssertionError("health coroutine was blocked by stream rendering")
+                return "rendered progress long enough", {}
 
-            event_task = asyncio.create_task(event_heartbeat())
-
-            def observe_events(_text):
-                event_observations.append(event_heartbeat_ran)
-                return None
-
+            stream_line = "data: " + json.dumps(
+                {"choices": [{"delta": {"content": "stream token " * 3}}]}
+            )
             with patch.object(
                 adapter.httpx,
                 "AsyncClient",
-                return_value=FakeClient([StreamResponse(lines=lines)]),
+                return_value=FakeClient([StreamResponse(lines=[stream_line])]),
             ), patch.object(
-                adapter, "detect_degenerate_repetition", side_effect=observe_events
+                adapter, "sglang_health_status", new=AsyncMock(return_value={"ready": True})
             ), patch.object(
-                adapter, "render_streaming_markdown", return_value=("", {})
+                adapter, "detect_degenerate_repetition", return_value=None
             ), patch.object(
-                adapter, "should_emit_stream_progress", return_value=False
+                adapter, "render_streaming_markdown", side_effect=blocked_render
             ):
+                health_task = asyncio.create_task(
+                    health_while_worker_is_blocked(render_started, render_release)
+                )
                 events = [
                     event
                     async for event in adapter.stream_sglang_payload_events(
                         {"images_config": {}}, [b"page"], 1
                     )
                 ]
-            await event_task
+                health_result = await health_task
+            self.assertEqual(health_result["status"], "ok")
+            self.assertTrue(any(event["type"] == "progress" for event in events))
             self.assertEqual(events[-1]["type"], "final")
-            self.assertTrue(event_observations)
-            self.assertTrue(event_observations[0])
+
+            tiny_lines = [
+                "data: " + json.dumps({"choices": [{"delta": {"content": "x"}}]})
+                for _ in range(128)
+            ]
+            render_threads = []
+
+            def render_snapshot(*_args):
+                render_threads.append(adapter.threading.current_thread())
+                return "progress text that is long enough", {}
+
+            with patch.object(
+                adapter.httpx,
+                "AsyncClient",
+                return_value=FakeClient([StreamResponse(lines=tiny_lines)]),
+            ), patch.object(
+                adapter, "detect_degenerate_repetition", return_value=None
+            ) as detector, patch.object(
+                adapter, "render_streaming_markdown", side_effect=render_snapshot
+            ) as render, patch.object(
+                adapter, "should_emit_stream_progress", return_value=False
+            ):
+                throttled_events = [
+                    event
+                    async for event in adapter.stream_sglang_payload_events(
+                        {"images_config": {}}, [b"page"], 1
+                    )
+                ]
+            self.assertEqual(throttled_events[-1]["type"], "final")
+            self.assertEqual(detector.call_count, len(tiny_lines))
+            self.assertGreater(render.call_count, 0)
+            self.assertLess(render.call_count, len(tiny_lines) // 4)
+            self.assertTrue(all(thread is not main_thread for thread in render_threads))
 
         asyncio.run(scenario())
 
@@ -1021,19 +1083,26 @@ class UnlimitedRuntimeTests(unittest.TestCase):
                 pass
 
         async def scenario():
+            async def direct(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
             adapter.TRANSFORMERS_MODEL = object()
             with patch.object(adapter, "get_transformers_components", new=AsyncMock(return_value=("t", "m"))), patch.object(
                 adapter.threading, "Thread", WaitingThread
             ), patch.object(adapter.time, "monotonic", side_effect=[0, 2]), patch.object(
                 adapter, "STREAM_HEARTBEAT_SECONDS", 1
-            ), patch("asyncio.sleep", new=AsyncMock()):
+            ), patch("asyncio.sleep", new=AsyncMock()), patch(
+                "asyncio.to_thread", side_effect=direct
+            ):
                 events = await collect(adapter.stream_transformers_adapter_events([png_bytes()], 1))
             self.assertTrue(any(event["type"] == "status" for event in events))
             with patch.object(adapter, "get_transformers_components", new=AsyncMock(return_value=("t", "m"))), patch.object(
                 adapter.threading, "Thread", WaitingThread
             ), patch.object(adapter.time, "monotonic", side_effect=[0, 1]), patch.object(
                 adapter, "STREAM_HEARTBEAT_SECONDS", 0
-            ), patch("asyncio.sleep", new=AsyncMock()):
+            ), patch("asyncio.sleep", new=AsyncMock()), patch(
+                "asyncio.to_thread", side_effect=direct
+            ):
                 await collect(adapter.stream_transformers_adapter_events([png_bytes()], 1))
 
             class ImmediateThread:
@@ -1057,7 +1126,9 @@ class UnlimitedRuntimeTests(unittest.TestCase):
 
             with patch.object(adapter, "get_transformers_components", new=AsyncMock(return_value=("t", "m"))), patch.object(
                 adapter.threading, "Thread", ImmediateThread
-            ), patch.object(adapter, "run_transformers_inference_sync", side_effect=inference):
+            ), patch.object(adapter, "run_transformers_inference_sync", side_effect=inference), patch(
+                "asyncio.to_thread", side_effect=direct
+            ):
                 events = await collect(adapter.stream_transformers_adapter_events([png_bytes()], 1))
             progress = next(event for event in events if event["type"] == "progress")
             self.assertTrue(progress["images"])

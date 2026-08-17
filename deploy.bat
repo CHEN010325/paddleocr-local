@@ -1,26 +1,39 @@
 @echo off
 REM Deploy PaddleOCR Local with Docker Compose (Windows)
+setlocal
+
+cd /d "%~dp0"
 
 echo Deploying PaddleOCR Local...
 
-if not exist "env.txt" (
+set "BASE_ENV=%~dp0env.txt"
+set "RUNTIME_ENV=%~dp0tmp\pandocr-runtime.env"
+
+if not exist "%BASE_ENV%" (
     echo env.txt does not exist. Run build.bat or create the env file first.
     pause
     exit /b 1
 )
 
-for /f %%T in ('powershell -NoProfile -Command "[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()"') do set "PANDOCR_MODEL_CONTROLLER_TOKEN=%%T"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-runtime-env.ps1" -BaseEnvFile "%BASE_ENV%" -RuntimeEnvFile "%RUNTIME_ENV%" >nul
+if errorlevel 1 (
+    echo Failed to prepare the persistent controller credential.
+    pause
+    exit /b 1
+)
+set "PANDOCR_MODEL_CONTROLLER_TOKEN="
+set "COMPOSE=docker compose --env-file "%BASE_ENV%" --env-file "%RUNTIME_ENV%" --profile paddleocr-vl --profile pp-ocrv6"
+set "CORE_SERVICES=pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api"
 
-docker compose --env-file env.txt up -d --no-start
-docker compose --env-file env.txt stop pandocr-web pandocr-controller pandocr-office-converter paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api >nul 2>&1
-docker compose --env-file env.txt start pandocr-controller pandocr-office-converter pandocr-web
+%COMPOSE% up -d --no-start --force-recreate %CORE_SERVICES%
+%COMPOSE% start pandocr-controller pandocr-office-converter pandocr-web
 
 echo Waiting for services...
 timeout /t 5 /nobreak >nul
 
 echo.
 echo Service status:
-docker compose --env-file env.txt ps
+%COMPOSE% ps
 
 echo.
 echo Health checks:
@@ -36,14 +49,14 @@ curl -f http://localhost:8081/health >nul 2>&1
 if not errorlevel 1 (
     echo paddleocr-vl-api ^(8081^) OK
 ) else (
-    echo paddleocr-vl-api ^(8081^) standby or starting
+    echo paddleocr-vl-api ^(8081^) stopped or starting
 )
 
 curl -f http://localhost:8082/health >nul 2>&1
 if not errorlevel 1 (
     echo paddleocr-ocr-api ^(8082^) OK
 ) else (
-    echo paddleocr-ocr-api ^(8082^) standby or starting
+    echo paddleocr-ocr-api ^(8082^) stopped or starting
 )
 
 echo.
@@ -51,12 +64,12 @@ echo Done.
 echo WebUI: http://localhost:8000
 echo VL API:  http://localhost:8081
 echo OCR API: http://localhost:8082
-echo Default model is started by pandocr-controller. Other models stay stopped until selected in the UI.
+echo Only the selected model runs. On a switch, pandocr-controller fully stops the old model and releases GPU memory before starting the new one.
 echo.
 echo Useful commands:
-echo   docker compose --env-file env.txt logs -f
-echo   docker compose --env-file env.txt logs -f pandocr-web
-echo   docker compose --env-file env.txt restart pandocr-web
-echo   docker compose --env-file env.txt down
+echo   docker compose --env-file "%BASE_ENV%" --env-file "%RUNTIME_ENV%" --profile paddleocr-vl --profile pp-ocrv6 logs -f
+echo   docker compose --env-file "%BASE_ENV%" --env-file "%RUNTIME_ENV%" --profile paddleocr-vl --profile pp-ocrv6 logs -f pandocr-web
+echo   docker compose --env-file "%BASE_ENV%" --env-file "%RUNTIME_ENV%" --profile paddleocr-vl --profile pp-ocrv6 restart pandocr-web
+echo   docker compose --env-file "%BASE_ENV%" --env-file "%RUNTIME_ENV%" --profile paddleocr-vl --profile pp-ocrv6 down
 echo.
 pause

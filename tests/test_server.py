@@ -6,6 +6,7 @@ import os
 import tarfile
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -93,13 +94,164 @@ class ServerTaskApiTests(unittest.TestCase):
         ids = [task["id"] for task in response.json()["tasks"]]
         self.assertLess(ids.index("task_sort_numeric"), ids.index("task_sort_iso"))
 
+    def test_task_source_can_be_cloned_for_comparison(self):
+        upload = self.client.post(
+            "/api/tasks/source_123/source",
+            files={"file": ("sample.pdf", b"%PDF-test", "application/pdf")},
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        clone = self.client.post("/api/tasks/source_123/clone-source/target_123")
+        self.assertEqual(clone.status_code, 200)
+        self.assertEqual(clone.json()["url"], "/api/tasks/target_123/source")
+        cloned_source = self.client.get(clone.json()["url"])
+        self.assertEqual(cloned_source.content, b"%PDF-test")
+
+        self.assertEqual(
+            self.client.post("/api/tasks/source_123/clone-source/target_123").status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post("/api/tasks/missing_123/clone-source/other_123").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post("/api/tasks/source_123/clone-source/source_123").status_code,
+            400,
+        )
+
+    def test_unified_parse_endpoint_dispatches_by_model_id(self):
+        runner_names = {
+            "paddleocr-vl-1.6": "run_ocr_request",
+            "pp-ocrv6": "run_ppocrv6_request",
+            "unlimited-ocr": "run_unlimited_ocr_request",
+            "ovisocr2": "run_ovisocr2_request",
+            "hpd-parsing": "run_hpd_parsing_request",
+        }
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(self.server, "MODEL_CATALOG_IDS", list(runner_names)))
+            runners = {
+                model_id: stack.enter_context(
+                    patch.object(
+                        self.server,
+                        runner_name,
+                        new=AsyncMock(return_value={"modelId": model_id}),
+                    )
+                )
+                for model_id, runner_name in runner_names.items()
+            }
+
+            for model_id, expected_runner in runners.items():
+                with self.subTest(model_id=model_id):
+                    response = self.client.post(
+                        "/api/parse",
+                        data={"modelId": model_id, "fileType": "1"},
+                        files={"file": ("sample.png", b"image", "image/png")},
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), {"modelId": model_id})
+                    expected_runner.assert_awaited_once()
+                    ocr_request, raw_input = expected_runner.await_args.args
+                    self.assertEqual(ocr_request.modelId, model_id)
+                    self.assertEqual(raw_input, b"image")
+                    for other_id, other_runner in runners.items():
+                        if other_id != model_id:
+                            other_runner.assert_not_awaited()
+                    for runner in runners.values():
+                        runner.reset_mock()
+
+            json_response = self.client.post(
+                "/api/parse",
+                json={"modelId": "hpd-parsing", "fileType": 1, "image": "aW1hZ2U="},
+            )
+            self.assertEqual(json_response.status_code, 200)
+            self.assertEqual(json_response.json(), {"modelId": "hpd-parsing"})
+            runners["hpd-parsing"].assert_awaited_once()
+
+            unknown = self.client.post(
+                "/api/parse",
+                data={"modelId": "unknown", "fileType": "1"},
+                files={"file": ("sample.png", b"image", "image/png")},
+            )
+            self.assertEqual(unknown.status_code, 400)
+
+    def test_unified_parse_multipart_accepts_repeated_and_json_ignore_labels(self):
+        runner = AsyncMock(return_value={"markdown": "ok"})
+        with patch.object(self.server, "run_ppocrv6_request", new=runner):
+            repeated = self.client.post(
+                "/api/parse",
+                files=[
+                    ("file", ("sample.png", b"image", "image/png")),
+                    ("modelId", (None, "pp-ocrv6")),
+                    ("fileType", (None, "1")),
+                    ("markdownIgnoreLabels", (None, "header")),
+                    ("markdownIgnoreLabels", (None, "footer")),
+                ],
+            )
+            self.assertEqual(repeated.status_code, 200)
+            ocr_request, raw_input = runner.await_args.args
+            self.assertEqual(ocr_request.markdownIgnoreLabels, ["header", "footer"])
+            self.assertEqual(raw_input, b"image")
+
+            runner.reset_mock()
+            encoded_single = self.client.post(
+                "/api/parse",
+                data={
+                    "modelId": "pp-ocrv6",
+                    "fileType": "1",
+                    "markdownIgnoreLabels": '["number", "header"]',
+                },
+                files={"file": ("sample.png", b"image", "image/png")},
+            )
+            self.assertEqual(encoded_single.status_code, 200)
+            ocr_request, _ = runner.await_args.args
+            self.assertEqual(ocr_request.markdownIgnoreLabels, ["number", "header"])
+
+    def test_unified_parse_openapi_documents_both_request_formats_and_all_models(self):
+        response = self.client.get("/api/openapi.json")
+        self.assertEqual(response.status_code, 200)
+        operation = response.json()["paths"]["/api/parse"]["post"]
+        request_body = operation["requestBody"]
+        self.assertTrue(request_body["required"])
+        self.assertEqual(
+            set(request_body["content"]),
+            {"multipart/form-data", "application/json"},
+        )
+        multipart_schema = request_body["content"]["multipart/form-data"]["schema"]
+        self.assertEqual(multipart_schema["required"], ["file"])
+        self.assertEqual(multipart_schema["properties"]["file"]["format"], "binary")
+        self.assertEqual(
+            multipart_schema["properties"]["modelId"]["enum"],
+            self.server.UNIFIED_PARSE_MODEL_IDS,
+        )
+        json_schema = request_body["content"]["application/json"]["schema"]
+        self.assertIn("image", json_schema["required"])
+        self.assertEqual(
+            json_schema["properties"]["modelId"]["enum"],
+            self.server.UNIFIED_PARSE_MODEL_IDS,
+        )
+        self.assertTrue({"400", "409", "413", "503"}.issubset(operation["responses"]))
+
     def test_model_list_includes_vl_and_ppocrv6(self):
         response = self.client.get("/api/models")
         self.assertEqual(response.status_code, 200)
-        model_ids = [model["id"] for model in response.json()["data"]]
+        payload = response.json()
+        model_ids = [model["id"] for model in payload["data"]]
         self.assertIn("paddleocr-vl-1.6", model_ids)
         self.assertIn("pp-ocrv6", model_ids)
         self.assertNotIn("unlimited-ocr", model_ids)
+        self.assertEqual(payload["version"], self.server.APP_VERSION)
+        self.assertEqual(payload["commit"], self.server.APP_COMMIT or None)
+        self.assertEqual(payload["apiDocsEnabled"], self.server.ENABLE_API_DOCS)
+        self.assertEqual(payload["openapiUrl"], "/api/openapi.json")
+        self.assertEqual(
+            self.server.app.docs_url,
+            "/docs" if self.server.ENABLE_API_DOCS else None,
+        )
+        self.assertEqual(
+            self.server.app.redoc_url,
+            "/redoc" if self.server.ENABLE_API_DOCS else None,
+        )
 
     def test_model_runtime_reports_both_models(self):
         with patch.object(self.server, "fetch_http_health", new=AsyncMock(return_value=(False, {}))):
@@ -181,6 +333,9 @@ class ServerTaskApiTests(unittest.TestCase):
         web_dockerfile = (self.server.PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY ovisocr2_adapter.py .", web_dockerfile)
         self.assertIn("COPY Dockerfile.ovisocr2 ./", web_dockerfile)
+        ovis_dockerfile = (self.server.PROJECT_ROOT / "Dockerfile.ovisocr2").read_text(encoding="utf-8")
+        self.assertIn("python3 -m venv /opt/venv", ovis_dockerfile)
+        self.assertNotIn("python3 -m pip install", ovis_dockerfile)
         container_config = self.server.container_payload_for(
             "ovisocr2-api",
             host_root=str(self.server.PROJECT_ROOT),

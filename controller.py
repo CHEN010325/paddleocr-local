@@ -20,7 +20,18 @@ UNSAFE_CONTROLLER_TOKENS = {
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     server.ensure_task_data_dir()
-    if server.model_control_available():
+    lease_store_ready = server.load_controller_ocr_leases()
+    active_lease_count = server.controller_ocr_lease_count()
+    if not lease_store_ready:
+        server.logger.error(
+            "Controller startup model scheduling is disabled because the OCR lease store is unhealthy"
+        )
+    elif active_lease_count:
+        server.logger.warning(
+            "Recovered %d active OCR lease(s); skipping startup model scheduling",
+            active_lease_count,
+        )
+    elif server.model_control_available():
         await server.schedule_model_runtime_activation(server.DEFAULT_RUNTIME_MODEL_ID)
     yield
 
@@ -40,12 +51,28 @@ async def authenticate_controller(request: Request, call_next):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "controlAvailable": server.model_control_available()}
+    lease_store = server.controller_ocr_lease_store_status()
+    return {
+        "status": "ok" if lease_store["healthy"] else "degraded",
+        "controlAvailable": server.model_control_available(),
+        "controllerOcrLeaseStore": lease_store,
+    }
 
 
 @app.get("/model-runtime")
 async def model_runtime():
     return await server.build_model_runtime_payload()
+
+
+@app.post("/ocr-leases/acquire")
+async def acquire_ocr_lease(request: server.OCRLeaseRequest):
+    return await server.acquire_controller_ocr_lease(request.modelId)
+
+
+@app.delete("/ocr-leases/{lease_id}")
+async def release_ocr_lease(lease_id: str):
+    released = await server.release_controller_ocr_lease(lease_id)
+    return {"ok": True, "released": released}
 
 
 @app.post("/model-runtime/switch")

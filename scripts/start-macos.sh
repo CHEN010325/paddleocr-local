@@ -15,10 +15,78 @@ truthy() {
 VENV_DIR="${PANDOCR_MACOS_VENV:-.venv-macos}"
 UNLIMITED_OCR_MACOS_VENV="${UNLIMITED_OCR_MACOS_VENV:-.venv-unlimited-ocr-macos}"
 OVISOCR2_MACOS_VENV="${OVISOCR2_MACOS_VENV:-.venv-ovisocr2-macos}"
-PANDOCR_ENABLE_PADDLEOCR_VL="${PANDOCR_ENABLE_PADDLEOCR_VL:-1}"
-PANDOCR_ENABLE_PPOCRV6="${PANDOCR_ENABLE_PPOCRV6:-1}"
+MODEL_ENABLE_FLAGS_EXPLICIT=0
+if [[ -n "${PANDOCR_ENABLE_PADDLEOCR_VL+x}${PANDOCR_ENABLE_PPOCRV6+x}${PANDOCR_ENABLE_UNLIMITED_OCR+x}${PANDOCR_ENABLE_OVISOCR2+x}" ]]; then
+  MODEL_ENABLE_FLAGS_EXPLICIT=1
+fi
+ACTIVE_MODEL_EXPLICIT=0
+if [[ -n "${PANDOCR_ACTIVE_MODEL_ON_START+x}" ]]; then
+  ACTIVE_MODEL_EXPLICIT=1
+fi
+
+PANDOCR_ACTIVE_MODEL_ON_START="${PANDOCR_ACTIVE_MODEL_ON_START:-paddleocr-vl-1.6}"
+PANDOCR_ENABLE_PADDLEOCR_VL="${PANDOCR_ENABLE_PADDLEOCR_VL:-0}"
+PANDOCR_ENABLE_PPOCRV6="${PANDOCR_ENABLE_PPOCRV6:-0}"
 PANDOCR_ENABLE_UNLIMITED_OCR="${PANDOCR_ENABLE_UNLIMITED_OCR:-0}"
 PANDOCR_ENABLE_OVISOCR2="${PANDOCR_ENABLE_OVISOCR2:-0}"
+
+if (( MODEL_ENABLE_FLAGS_EXPLICIT == 0 )); then
+  case "$PANDOCR_ACTIVE_MODEL_ON_START" in
+    paddleocr-vl-1.6) PANDOCR_ENABLE_PADDLEOCR_VL=1 ;;
+    pp-ocrv6) PANDOCR_ENABLE_PPOCRV6=1 ;;
+    unlimited-ocr) PANDOCR_ENABLE_UNLIMITED_OCR=1 ;;
+    ovisocr2) PANDOCR_ENABLE_OVISOCR2=1 ;;
+    *)
+      echo "Unsupported macOS model: $PANDOCR_ACTIVE_MODEL_ON_START"
+      echo "Supported values: paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2"
+      exit 1
+      ;;
+  esac
+fi
+
+ENABLED_MODEL_COUNT=0
+ENABLED_MODEL_ID=""
+if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL"; then
+  ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
+  ENABLED_MODEL_ID="paddleocr-vl-1.6"
+fi
+if truthy "$PANDOCR_ENABLE_PPOCRV6"; then
+  ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
+  ENABLED_MODEL_ID="pp-ocrv6"
+fi
+if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
+  ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
+  ENABLED_MODEL_ID="unlimited-ocr"
+fi
+if truthy "$PANDOCR_ENABLE_OVISOCR2"; then
+  ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
+  ENABLED_MODEL_ID="ovisocr2"
+fi
+
+if (( ENABLED_MODEL_COUNT != 1 )); then
+  echo "Exactly one macOS logical model must be enabled; found $ENABLED_MODEL_COUNT."
+  echo "Set exactly one PANDOCR_ENABLE_* model flag to 1."
+  exit 1
+fi
+if (( ACTIVE_MODEL_EXPLICIT == 1 )) && [[ "$PANDOCR_ACTIVE_MODEL_ON_START" != "$ENABLED_MODEL_ID" ]]; then
+  echo "PANDOCR_ACTIVE_MODEL_ON_START=$PANDOCR_ACTIVE_MODEL_ON_START does not match enabled model $ENABLED_MODEL_ID."
+  exit 1
+fi
+
+PANDOCR_ACTIVE_MODEL_ON_START="$ENABLED_MODEL_ID"
+PANDOCR_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG:-$ENABLED_MODEL_ID}"
+NORMALIZED_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG//[[:space:]]/}"
+if [[ "$NORMALIZED_MODEL_CATALOG" != "$ENABLED_MODEL_ID" ]]; then
+  echo "PANDOCR_MODEL_CATALOG must contain only the enabled macOS model: $ENABLED_MODEL_ID"
+  exit 1
+fi
+
+echo "Selected macOS logical model: $ENABLED_MODEL_ID"
+
+if truthy "${PANDOCR_MODEL_SELECTION_CHECK_ONLY:-0}"; then
+  echo "macOS model selection is valid; no services were changed."
+  exit 0
+fi
 
 if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" || truthy "$PANDOCR_ENABLE_PPOCRV6"; then
   if [[ ! -f "$VENV_DIR/bin/activate" ]]; then
@@ -100,8 +168,6 @@ PPOCR_V6_MODEL_NAME="${PPOCR_V6_MODEL_NAME:-PP-OCRv6_medium}"
 PANDOCR_CORS_ORIGINS="${PANDOCR_CORS_ORIGINS:-http://localhost:${PANDOCR_PORT},http://127.0.0.1:${PANDOCR_PORT}}"
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}"
 STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-900}"
-PANDOCR_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG:-paddleocr-vl-1.6,pp-ocrv6}"
-PANDOCR_ACTIVE_MODEL_ON_START="${PANDOCR_ACTIVE_MODEL_ON_START:-paddleocr-vl-1.6}"
 PADDLEX_PIPELINE_IS_CUSTOM=0
 if [[ -n "${PADDLEX_PIPELINE:-}" ]]; then
   PADDLEX_PIPELINE_IS_CUSTOM=1
@@ -222,6 +288,35 @@ has_running_service() {
   is_running run/pandocr-web.pid || is_running run/paddlex.pid || is_running run/ppocrv6.pid || is_running run/mlx-vlm.pid || is_running run/unlimited-ocr.pid || is_running run/ovisocr2.pid
 }
 
+has_running_non_target_model() {
+  case "$ENABLED_MODEL_ID" in
+    paddleocr-vl-1.6)
+      is_expected_process run/ppocrv6.pid "paddlex --serve" ||
+        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app" ||
+        is_expected_process run/ovisocr2.pid "ovisocr2_adapter:app" ||
+        { [[ "$PANDOCR_MACOS_BACKEND" != "mlx" ]] && is_expected_process run/mlx-vlm.pid "mlx_vlm.server"; }
+      ;;
+    pp-ocrv6)
+      is_expected_process run/paddlex.pid "paddlex --serve" ||
+        is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
+        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app" ||
+        is_expected_process run/ovisocr2.pid "ovisocr2_adapter:app"
+      ;;
+    unlimited-ocr)
+      is_expected_process run/paddlex.pid "paddlex --serve" ||
+        is_expected_process run/ppocrv6.pid "paddlex --serve" ||
+        is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
+        is_expected_process run/ovisocr2.pid "ovisocr2_adapter:app"
+      ;;
+    ovisocr2)
+      is_expected_process run/paddlex.pid "paddlex --serve" ||
+        is_expected_process run/ppocrv6.pid "paddlex --serve" ||
+        is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
+        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app"
+      ;;
+  esac
+}
+
 wait_for_http() {
   local url="$1"
   local name="$2"
@@ -272,6 +367,15 @@ write_expected_state
 
 if has_running_service && ! cmp -s "$STATE_FILE" "$EXPECTED_STATE_FILE"; then
   echo "Existing macOS services use a different configuration; restarting them."
+  bash scripts/stop-macos.sh
+  if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" && "$PADDLEX_PIPELINE_IS_CUSTOM" == "0" ]]; then
+    generate_mlx_pipeline_config
+  fi
+  write_expected_state
+fi
+
+if has_running_non_target_model; then
+  echo "A non-selected macOS model is still running; stopping and verifying all old model processes before starting $ENABLED_MODEL_ID."
   bash scripts/stop-macos.sh
   if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" && "$PADDLEX_PIPELINE_IS_CUSTOM" == "0" ]]; then
     generate_mlx_pipeline_config

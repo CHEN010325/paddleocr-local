@@ -148,6 +148,41 @@ test('model and task normalization preserve the newest meaningful state', () => 
 });
 
 
+test('runtime readiness requires the selected model to be uniquely running and ready', () => {
+    evaluate(`
+      availableModels=[
+        {id:'pp-ocrv6',label:'PP-OCRv6'},
+        {id:'ovisocr2',label:'OvisOCR2'}
+      ];
+      selectedModelId='pp-ocrv6';
+      modelRuntime={
+        controlAvailable:true,
+        activeModelId:'pp-ocrv6',
+        runningModelIds:['pp-ocrv6','ovisocr2'],
+        readyModelIds:['pp-ocrv6','ovisocr2'],
+        exclusivityViolation:true,
+        models:{'pp-ocrv6':{ready:true},ovisocr2:{ready:true}}
+      };
+    `);
+
+    assert.equal(evaluate("isModelRuntimeReady('pp-ocrv6')"), false);
+    assert.equal(evaluate("modelRuntimeDotClass('pp-ocrv6')"), 'dot error');
+    assert.match(evaluate("modelRuntimeStatusText(availableModels[0])"), /互斥异常/);
+    assert.match(evaluate("modelRuntimeFailureDetail('pp-ocrv6')"), /pp-ocrv6, ovisocr2/);
+    assert.equal(evaluate('syncSelectedModelWithRuntime()'), false);
+
+    evaluate(`
+      modelRuntime.runningModelIds=['pp-ocrv6'];
+      modelRuntime.readyModelIds=['pp-ocrv6'];
+      modelRuntime.exclusivityViolation=false;
+    `);
+    assert.equal(evaluate("isModelRuntimeReady('pp-ocrv6')"), true);
+
+    evaluate(`modelRuntime={activeModelId:'pp-ocrv6',models:{'pp-ocrv6':{ready:true}}}`);
+    assert.equal(evaluate("isModelRuntimeReady('pp-ocrv6')"), true);
+});
+
+
 test('PDF batching covers every page without oversized final ranges', () => {
     const batches = plain(evaluate('createPdfBatchDescriptors(5, 2)'));
     assert.deepEqual(

@@ -7,6 +7,7 @@ import tempfile
 import shutil
 import io
 import json
+import math
 import re
 import logging
 import time
@@ -67,6 +68,27 @@ def parse_positive_int_env(name: str, default: str) -> int:
         return max(1, int(default))
 
 
+def parse_nonnegative_int_env(name: str, default: str) -> int:
+    try:
+        return max(0, int(os.getenv(name, default)))
+    except ValueError:
+        return max(0, int(default))
+
+
+def parse_positive_float_env(name: str, default: str) -> float:
+    try:
+        return max(0.001, float(os.getenv(name, default)))
+    except ValueError:
+        return max(0.001, float(default))
+
+
+def parse_nonnegative_float_env(name: str, default: str) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, default)))
+    except ValueError:
+        return max(0.0, float(default))
+
+
 PADDLE_SERVICE_URL = os.getenv("PADDLE_SERVICE_URL", "http://localhost:8081/layout-parsing")
 VLM_BACKEND = os.getenv("VLM_BACKEND", "vllm")
 VLM_IMAGE_TAG_SUFFIX = os.getenv("VLM_IMAGE_TAG_SUFFIX", "latest-nvidia-gpu-offline")
@@ -122,7 +144,9 @@ HPD_PARSING_SERVICE_URL = os.getenv("HPD_PARSING_SERVICE_URL", "http://localhost
 HPD_PARSING_MODEL_NAME = os.getenv("HPD_PARSING_MODEL_NAME", "PaddlePaddle/HPD-Parsing")
 HPD_PARSING_IMAGE = os.getenv(
     "HPD_PARSING_IMAGE",
-    "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu",
+    "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/"
+    "hpd-parsing-vllm:latest-nvidia-gpu@"
+    "sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2",
 )
 HPD_PARSING_API_PORT = os.getenv("HPD_PARSING_API_PORT", "8085")
 HPD_PARSING_SERVED_MODEL_NAME = os.getenv("HPD_PARSING_SERVED_MODEL_NAME", "HPD-Parsing")
@@ -136,7 +160,7 @@ HPD_PARSING_MAX_CONCURRENCY = os.getenv("HPD_PARSING_MAX_CONCURRENCY", "1")
 HPD_PARSING_REQUEST_TIMEOUT = os.getenv("HPD_PARSING_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_SGLANG_WHEEL_URL = os.getenv(
     "UNLIMITED_OCR_SGLANG_WHEEL_URL",
-    "https://github.com/baidu/Unlimited-OCR/raw/main/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl",
+    "https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5",
 )
 PROJECT_ROOT = Path(__file__).resolve().parent
 TASK_DATA_DIR = Path(os.getenv("PANDOCR_TASK_DATA_DIR", "data/tasks")).resolve()
@@ -144,12 +168,24 @@ DEFAULT_RUNTIME_SETTINGS_DIR = TASK_DATA_DIR.parent if TASK_DATA_DIR.name == "ta
 RUNTIME_SETTINGS_FILE = Path(
     os.getenv("PANDOCR_RUNTIME_SETTINGS_FILE", str(DEFAULT_RUNTIME_SETTINGS_DIR / "runtime-settings.json"))
 ).resolve()
+CONTROLLER_OCR_LEASE_STORE_ENABLED = parse_bool_env(
+    "PANDOCR_CONTROLLER_OCR_LEASE_STORE_ENABLED", "0"
+)
+CONTROLLER_OCR_LEASE_STORE_FILE = Path(
+    os.getenv(
+        "PANDOCR_CONTROLLER_OCR_LEASE_STORE_FILE",
+        str(DEFAULT_RUNTIME_SETTINGS_DIR / "controller-ocr-leases.json"),
+    )
+).resolve()
+CONTROLLER_OCR_LEASE_STORE_VERSION = 1
 MAX_REQUEST_BYTES = int(float(os.getenv("PANDOCR_MAX_UPLOAD_MB", "512")) * 1024 * 1024)
 MAX_HTTP_BODY_BYTES = int(
     float(os.getenv("PANDOCR_MAX_HTTP_BODY_MB", "0")) * 1024 * 1024
 ) or (int(MAX_REQUEST_BYTES * 4 / 3) + 2 * 1024 * 1024 if MAX_REQUEST_BYTES > 0 else 0)
 PANDOCR_HOST = os.getenv("PANDOCR_HOST", "127.0.0.1")
 PANDOCR_PORT = int(os.getenv("PANDOCR_PORT", "8000"))
+APP_VERSION = os.getenv("PANDOCR_APP_VERSION", "0.2.0").strip() or "0.2.0"
+APP_COMMIT = os.getenv("PANDOCR_GIT_COMMIT", "").strip()
 MODEL_CONTROL_MODE = os.getenv("PANDOCR_MODEL_CONTROL", "docker").strip().lower()
 MODEL_CONTROLLER_URL = os.getenv("PANDOCR_MODEL_CONTROLLER_URL", "").rstrip("/")
 MODEL_CONTROLLER_TOKEN = os.getenv("PANDOCR_MODEL_CONTROLLER_TOKEN", "").strip()
@@ -158,6 +194,12 @@ MODEL_RUNTIME_STARTUP = os.getenv("PANDOCR_ACTIVE_MODEL_ON_START", "paddleocr-vl
 DOCKER_SOCKET_PATH = os.getenv("PANDOCR_DOCKER_SOCKET", "/var/run/docker.sock")
 MODEL_SWITCH_TIMEOUT = float(os.getenv("PANDOCR_MODEL_SWITCH_TIMEOUT", "1200"))
 GPU_PREFLIGHT_CACHE_SECONDS = float(os.getenv("PANDOCR_GPU_PREFLIGHT_CACHE_SECONDS", "300"))
+GPU_RELEASE_TIMEOUT = parse_positive_float_env("PANDOCR_GPU_RELEASE_TIMEOUT", "60")
+GPU_RELEASE_STABLE_SAMPLES = parse_positive_int_env("PANDOCR_GPU_RELEASE_STABLE_SAMPLES", "3")
+GPU_RELEASE_SAMPLE_INTERVAL_SECONDS = (
+    parse_nonnegative_float_env("PANDOCR_GPU_RELEASE_SAMPLE_INTERVAL_MS", "500") / 1000.0
+)
+GPU_RELEASE_TOLERANCE_MIB = parse_nonnegative_int_env("PANDOCR_GPU_RELEASE_TOLERANCE_MIB", "128")
 API_TOKEN = os.getenv("PANDOCR_API_TOKEN", "").strip()
 ENABLE_API_DOCS = parse_bool_env("PANDOCR_ENABLE_API_DOCS", "0")
 ENFORCE_ORIGIN_CHECK = parse_bool_env("PANDOCR_ENFORCE_ORIGIN_CHECK", "1")
@@ -166,6 +208,9 @@ ENABLE_OVISOCR2 = parse_bool_env("PANDOCR_ENABLE_OVISOCR2", "0")
 ENABLE_HPD_PARSING = parse_bool_env("PANDOCR_ENABLE_HPD_PARSING", "0")
 MODEL_CATALOG_ENV = os.getenv("PANDOCR_MODEL_CATALOG", "").strip()
 MAX_CONCURRENT_OCR = parse_positive_int_env("PANDOCR_MAX_CONCURRENT_OCR", "1")
+CONTROLLER_OCR_LEASE_TTL_SECONDS = parse_nonnegative_int_env(
+    "PANDOCR_CONTROLLER_OCR_LEASE_TTL_SECONDS", "0"
+)
 TASK_STORE_MARKER = ".pandocr-task-store"
 TASK_RESULT_FILE = "result.json"
 TASK_SUMMARY_FILE = "summary.json"
@@ -230,6 +275,46 @@ ENABLE_UNLIMITED_OCR = ENABLE_UNLIMITED_OCR or "unlimited-ocr" in MODEL_CATALOG_
 ENABLE_OVISOCR2 = ENABLE_OVISOCR2 or "ovisocr2" in MODEL_CATALOG_IDS
 ENABLE_HPD_PARSING = ENABLE_HPD_PARSING or "hpd-parsing" in MODEL_CATALOG_IDS
 
+# Keep the complete five-model container universe independent from the enabled
+# catalog.  A container left behind by an older or differently configured
+# deployment still consumes the same GPU and must participate in exclusivity
+# checks and switch cleanup.
+MODEL_RUNTIME_CONTAINER_GROUPS = {
+    "paddleocr-vl-1.6": {
+        "containers": ["paddleocr-vlm-server", "paddleocr-vl-api"],
+        "start_order": ["paddleocr-vlm-server", "paddleocr-vl-api"],
+        "stop_order": ["paddleocr-vl-api", "paddleocr-vlm-server"],
+    },
+    "pp-ocrv6": {
+        "containers": ["paddleocr-ocr-api"],
+        "start_order": ["paddleocr-ocr-api"],
+        "stop_order": ["paddleocr-ocr-api"],
+    },
+    "unlimited-ocr": {
+        "containers": ["unlimited-ocr-api", "unlimited-ocr-sglang"],
+        "start_order": ["unlimited-ocr-api"],
+        "stop_order": ["unlimited-ocr-sglang", "unlimited-ocr-api"],
+    },
+    "ovisocr2": {
+        "containers": ["ovisocr2-api"],
+        "start_order": ["ovisocr2-api"],
+        "stop_order": ["ovisocr2-api"],
+    },
+    "hpd-parsing": {
+        "containers": ["hpd-parsing-server", "hpd-parsing-api"],
+        "start_order": ["hpd-parsing-server", "hpd-parsing-api"],
+        "stop_order": ["hpd-parsing-api", "hpd-parsing-server"],
+    },
+}
+
+MODEL_MINIMUM_FREE_MIB = {
+    "paddleocr-vl-1.6": 6656,
+    "pp-ocrv6": 4096,
+    "unlimited-ocr": 6656,
+    "ovisocr2": 6656,
+    "hpd-parsing": 6656,
+}
+
 MODEL_RUNTIME_CONFIG = {
     "paddleocr-vl-1.6": {
         "containers": ["paddleocr-vlm-server", "paddleocr-vl-api"],
@@ -238,6 +323,7 @@ MODEL_RUNTIME_CONFIG = {
         "health_url": PADDLE_SERVICE_URL.rsplit("/", 1)[0] + "/health",
         "gpu_memory": {
             "minimum_mib": 11264,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["paddleocr-vl-1.6"],
             "recommended_mib": 15360,
             "low_memory_env": [
                 "PANDOCR_VLLM_MIN_REQUIRED_MIB=6656",
@@ -253,6 +339,7 @@ MODEL_RUNTIME_CONFIG = {
         "health_url": PADDLE_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/health",
         "gpu_memory": {
             "minimum_mib": 4096,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["pp-ocrv6"],
             "recommended_mib": 6144,
             "low_memory_env": ["PANDOCR_MAX_CONCURRENT_OCR=1"],
         },
@@ -267,6 +354,7 @@ if ENABLE_UNLIMITED_OCR:
         "health_url": UNLIMITED_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/health",
         "gpu_memory": {
             "minimum_mib": 7680,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["unlimited-ocr"],
             "recommended_mib": 11264,
             "low_memory_env": [
                 "UNLIMITED_OCR_BACKEND=transformers",
@@ -284,6 +372,7 @@ if ENABLE_OVISOCR2:
         "health_url": OVISOCR2_SERVICE_URL.rsplit("/", 1)[0] + "/health",
         "gpu_memory": {
             "minimum_mib": 7680,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["ovisocr2"],
             "recommended_mib": 15360,
             "low_memory_env": [
                 "OVISOCR2_KV_CACHE_MEMORY_MB=256",
@@ -301,6 +390,7 @@ if ENABLE_HPD_PARSING:
         "health_url": HPD_PARSING_SERVICE_URL.rsplit("/", 1)[0] + "/health",
         "gpu_memory": {
             "minimum_mib": 7680,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["hpd-parsing"],
             "recommended_mib": 11264,
             "low_memory_env": [
                 "HPD_PARSING_GPU_MEMORY_UTILIZATION=auto",
@@ -336,6 +426,9 @@ model_runtime_task: asyncio.Task | None = None
 unlimited_ocr_backend_task: asyncio.Task | None = None
 unlimited_ocr_runtime_backend = initial_unlimited_ocr_backend()
 ocr_active_count = 0
+controller_ocr_leases: dict[str, dict] = {}
+controller_ocr_lease_store_loaded = not CONTROLLER_OCR_LEASE_STORE_ENABLED
+controller_ocr_lease_store_error: str | None = None
 gpu_preflight_cache: dict = {"updated_at": 0.0, "data": None}
 
 
@@ -350,6 +443,10 @@ class ModelDeployRequest(BaseModel):
 
 class UnlimitedOcrBackendRequest(BaseModel):
     backend: str
+
+
+class OCRLeaseRequest(BaseModel):
+    modelId: str
 
 
 def model_catalog() -> list[dict]:
@@ -476,6 +573,7 @@ def gpu_compatibility(gpus: list[dict]) -> dict:
     for model_id, config in MODEL_RUNTIME_CONFIG.items():
         requirement = config.get("gpu_memory") or {}
         minimum = int(requirement.get("minimum_mib") or 0)
+        minimum_free = int(requirement.get("minimum_free_mib") or minimum)
         recommended = int(requirement.get("recommended_mib") or minimum)
         supported = bool(selected and total_mib >= minimum)
         if supported:
@@ -484,6 +582,7 @@ def gpu_compatibility(gpus: list[dict]) -> dict:
             "supported": supported,
             "level": "recommended" if supported and total_mib >= recommended else ("low-memory" if supported else "unsupported"),
             "minimumMiB": minimum,
+            "minimumFreeMiB": minimum_free,
             "recommendedMiB": recommended,
             "lowMemoryEnv": list(requirement.get("low_memory_env") or []),
         }
@@ -592,6 +691,119 @@ async def ensure_model_gpu_compatible(model_id: str) -> dict:
             f"{compatibility.get('minimumMiB', 0)} MiB. Runnable models: {runnable}."
         )
     return preflight
+
+
+def selected_gpu_from_preflight(preflight: dict) -> dict:
+    """Resolve the GPU exposed to the probe without silently choosing another device."""
+    gpus = preflight.get("gpus")
+    if not isinstance(gpus, list) or not gpus:
+        raise RuntimeError("GPU release gate could not identify the selected GPU")
+
+    requested_device = str(PANDOCR_GPU_DEVICE_ID).strip()
+    for gpu in gpus:
+        if not isinstance(gpu, dict):
+            continue
+        if str(gpu.get("deviceId", "")).strip() == requested_device:
+            return gpu
+        if str(gpu.get("index", "")).strip() == requested_device:
+            return gpu
+
+    # Docker's DeviceRequests normally exposes exactly one selected GPU and
+    # remaps it to index 0 inside the probe container.  Accept that unambiguous
+    # result, but never guess when multiple devices are visible.
+    if len(gpus) == 1 and isinstance(gpus[0], dict):
+        return gpus[0]
+    raise RuntimeError(
+        f"GPU release gate did not return selected device {PANDOCR_GPU_DEVICE_ID}; "
+        f"visible devices={len(gpus)}"
+    )
+
+
+async def wait_for_stable_gpu_release(model_id: str, timeout: float | None = None) -> dict:
+    """Fail closed until selected-GPU free VRAM is high and stable.
+
+    Every accepted window contains consecutive fresh nvidia-smi probes.  A low
+    sample resets the window; a high but unstable sample starts a new window.
+    Probe errors or malformed data fail immediately instead of allowing a model
+    start without evidence that the previous runtime released its VRAM.
+    """
+    config = MODEL_RUNTIME_CONFIG.get(model_id) or {}
+    requirement = config.get("gpu_memory") or {}
+    minimum_free_mib = int(requirement.get("minimum_free_mib") or 0)
+    if minimum_free_mib <= 0:
+        raise RuntimeError(f"GPU release gate has no minimum_free_mib configured for {model_id}")
+
+    requested_timeout = GPU_RELEASE_TIMEOUT if timeout is None else float(timeout)
+    effective_timeout = min(requested_timeout, GPU_RELEASE_TIMEOUT, MODEL_SWITCH_TIMEOUT)
+    if effective_timeout <= 0:
+        raise RuntimeError(f"GPU release gate has no remaining timeout for {model_id}")
+
+    required_samples = max(1, int(GPU_RELEASE_STABLE_SAMPLES))
+    tolerance_mib = max(0, int(GPU_RELEASE_TOLERANCE_MIB))
+    deadline = time.monotonic() + effective_timeout
+    stable_samples: list[int] = []
+    observed_samples: list[int] = []
+    selected_gpu: dict = {}
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            preflight = await asyncio.wait_for(
+                probe_gpu_preflight(model_id, refresh=True),
+                timeout=remaining,
+            )
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"GPU release gate timed out while probing selected GPU {PANDOCR_GPU_DEVICE_ID} "
+                f"for {model_id}"
+            ) from error
+        if preflight.get("status") != "ready":
+            raise RuntimeError(
+                "GPU release gate failed closed before model startup: "
+                f"{preflight.get('reason') or 'fresh nvidia-smi probe is unavailable'}"
+            )
+        selected_gpu = selected_gpu_from_preflight(preflight)
+        free_value = selected_gpu.get("freeMiB")
+        try:
+            free_mib = int(float(free_value))
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "GPU release gate failed closed because selected-GPU freeMiB is missing or invalid"
+            ) from error
+
+        observed_samples.append(free_mib)
+        if free_mib < minimum_free_mib:
+            stable_samples = []
+        else:
+            candidate = [*stable_samples, free_mib]
+            if max(candidate) - min(candidate) <= tolerance_mib:
+                stable_samples = candidate[-required_samples:]
+            else:
+                stable_samples = [free_mib]
+
+        if len(stable_samples) >= required_samples:
+            return {
+                "modelId": model_id,
+                "deviceId": selected_gpu.get("deviceId", PANDOCR_GPU_DEVICE_ID),
+                "minimumFreeMiB": minimum_free_mib,
+                "stableSamples": stable_samples,
+                "observedSamples": observed_samples,
+                "toleranceMiB": tolerance_mib,
+            }
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(GPU_RELEASE_SAMPLE_INTERVAL_SECONDS, remaining))
+
+    last_free_mib = observed_samples[-1] if observed_samples else "unknown"
+    raise TimeoutError(
+        f"GPU release gate timed out for {model_id}: selected GPU {PANDOCR_GPU_DEVICE_ID} "
+        f"needs {minimum_free_mib} MiB free in {required_samples} stable samples "
+        f"(tolerance {tolerance_mib} MiB); last free={last_free_mib} MiB"
+    )
 
 
 async def model_failure_diagnostics(model_id: str, error: Exception) -> dict:
@@ -820,6 +1032,11 @@ async def docker_host_repo_root() -> str:
         if mount.get("Destination") == "/app/static" and mount.get("Source"):
             return str(Path(mount["Source"]).parent)
         if mount.get("Destination") == "/app/server.py" and mount.get("Source"):
+            return str(Path(mount["Source"]).parent)
+        if mount.get("Destination") == "/app/data" and mount.get("Source"):
+            # Release images only bind the repository's data directory into
+            # the WebUI container.  Its host-side parent is still the checkout
+            # root needed when the controller creates model containers.
             return str(Path(mount["Source"]).parent)
     return str(PROJECT_ROOT)
 
@@ -1196,7 +1413,16 @@ async def enrich_unlimited_ocr_runtime_status(model_id: str, status: dict) -> di
     status["unlimitedOcrBackend"] = unlimited_ocr_runtime_backend
     status["unlimitedOcrSupportedBackends"] = sorted(UNLIMITED_OCR_SUPPORTED_BACKENDS)
     if model_control_available():
-        status["sglangContainer"] = await inspect_container("unlimited-ocr-sglang")
+        sglang_container = await inspect_container("unlimited-ocr-sglang")
+        status["sglangContainer"] = sglang_container
+        # The SGLang worker is intentionally not part of the adapter's required
+        # container list because the Transformers backend does not need it.  It
+        # still represents a running Unlimited-OCR runtime and must not be
+        # hidden if the adapter stopped unexpectedly.
+        if sglang_container.get("running") and not status.get("running"):
+            status["running"] = True
+            status["ready"] = False
+            status["state"] = "partial"
     return status
 
 
@@ -1248,20 +1474,76 @@ async def model_runtime_status(model_id: str) -> dict:
     })
 
 
+async def runtime_exclusivity_snapshot(statuses: dict[str, dict] | None = None) -> dict:
+    """Return logical running/ready models, including disabled residual containers."""
+    resolved_statuses = statuses
+    if resolved_statuses is None:
+        resolved_statuses = {
+            model_id: await model_runtime_status(model_id)
+            for model_id in MODEL_RUNTIME_CONFIG
+        }
+
+    running_model_ids = [
+        model_id
+        for model_id, status in resolved_statuses.items()
+        if isinstance(status, dict) and status.get("running")
+    ]
+    ready_model_ids = [
+        model_id
+        for model_id, status in resolved_statuses.items()
+        if isinstance(status, dict) and status.get("ready")
+    ]
+
+    # model_runtime_status already covers enabled groups.  Inspect only static
+    # groups omitted from the current catalog so old deployments cannot evade
+    # the logical-model exclusivity invariant.
+    if model_control_available():
+        for model_id in MODEL_RUNTIME_CONTAINER_GROUPS:
+            if model_id in resolved_statuses:
+                continue
+            for container_name in model_runtime_container_names(model_id):
+                if (await inspect_container(container_name)).get("running"):
+                    running_model_ids.append(model_id)
+                    break
+
+    return {
+        "runningModelIds": running_model_ids,
+        "readyModelIds": ready_model_ids,
+        "exclusivityViolation": len(running_model_ids) > 1 or len(ready_model_ids) > 1,
+    }
+
+
 async def build_model_runtime_payload() -> dict:
     if MODEL_CONTROL_MODE == "remote":
         payload = await controller_api_request("GET", "/model-runtime")
         payload["controlMode"] = "remote"
-        payload["ocrActiveCount"] = ocr_active_count
+        models = payload.get("models") if isinstance(payload.get("models"), dict) else {}
+        payload.setdefault(
+            "readyModelIds",
+            [model_id for model_id, status in models.items() if isinstance(status, dict) and status.get("ready")],
+        )
+        payload.setdefault(
+            "runningModelIds",
+            [model_id for model_id, status in models.items() if isinstance(status, dict) and status.get("running")],
+        )
+        payload.setdefault(
+            "exclusivityViolation",
+            len(payload["runningModelIds"]) > 1 or len(payload["readyModelIds"]) > 1,
+        )
+        controller_lease_count = int(payload.get("controllerOcrLeaseCount") or 0)
+        payload["controllerOcrLeaseCount"] = controller_lease_count
+        payload["ocrActiveCount"] = max(ocr_active_count, controller_lease_count)
         payload["maxConcurrentOcr"] = MAX_CONCURRENT_OCR
         return payload
     models = {
         model_id: await model_runtime_status(model_id)
         for model_id in MODEL_RUNTIME_CONFIG
     }
-    ready_models = [model_id for model_id, status in models.items() if status["ready"]]
-    running_models = [model_id for model_id, status in models.items() if status["running"]]
+    exclusivity = await runtime_exclusivity_snapshot(models)
+    ready_models = exclusivity["readyModelIds"]
+    running_models = exclusivity["runningModelIds"]
     active_model = ready_models[0] if ready_models else (running_models[0] if running_models else None)
+    controller_lease_count = controller_ocr_lease_count()
     control_available = model_control_available()
     gpu_preflight = (
         await probe_gpu_preflight(active_model or DEFAULT_RUNTIME_MODEL_ID)
@@ -1276,8 +1558,13 @@ async def build_model_runtime_payload() -> dict:
         "unlimitedOcrBackend": unlimited_ocr_runtime_backend,
         "unlimitedOcrSupportedBackends": sorted(UNLIMITED_OCR_SUPPORTED_BACKENDS),
         "operation": dict(model_runtime_operation),
-        "ocrActiveCount": ocr_active_count,
+        "ocrActiveCount": ocr_active_count + controller_lease_count,
+        "controllerOcrLeaseCount": controller_lease_count,
+        "controllerOcrLeaseStore": controller_ocr_lease_store_status(),
         "maxConcurrentOcr": MAX_CONCURRENT_OCR,
+        "runningModelIds": running_models,
+        "readyModelIds": ready_models,
+        "exclusivityViolation": exclusivity["exclusivityViolation"],
         "gpuPreflight": gpu_preflight,
         "models": models,
     }
@@ -1293,6 +1580,307 @@ def set_model_runtime_operation(state: str, message: str = "", target_model_id: 
     if state == "switching":
         model_runtime_operation["startedAt"] = now
         model_runtime_operation["diagnostics"] = None
+
+
+def controller_ocr_lease_store_status() -> dict:
+    if not CONTROLLER_OCR_LEASE_STORE_ENABLED:
+        state = "disabled"
+    elif not controller_ocr_lease_store_loaded:
+        state = "error" if controller_ocr_lease_store_error else "not-loaded"
+    elif controller_ocr_lease_store_error:
+        state = "error"
+    else:
+        state = "ready"
+    return {
+        "enabled": CONTROLLER_OCR_LEASE_STORE_ENABLED,
+        "state": state,
+        "healthy": state in {"disabled", "ready"},
+        "error": controller_ocr_lease_store_error,
+    }
+
+
+def _reject_duplicate_controller_lease_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key in lease store: {key!r}")
+        result[key] = value
+    return result
+
+
+def _validate_controller_ocr_lease(lease_id: str, raw_lease: object) -> dict:
+    if not isinstance(lease_id, str) or not lease_id:
+        raise ValueError("lease id must be a non-empty string")
+    if not isinstance(raw_lease, dict):
+        raise ValueError(f"lease {lease_id!r} must be an object")
+    if raw_lease.get("leaseId") != lease_id:
+        raise ValueError(f"lease {lease_id!r} has a mismatched leaseId")
+    model_id = raw_lease.get("modelId")
+    if not isinstance(model_id, str) or not model_id:
+        raise ValueError(f"lease {lease_id!r} has an invalid modelId")
+
+    created_at = raw_lease.get("createdAt")
+    if (
+        isinstance(created_at, bool)
+        or not isinstance(created_at, (int, float))
+        or not math.isfinite(float(created_at))
+    ):
+        raise ValueError(f"lease {lease_id!r} has an invalid createdAt")
+    expires_at = raw_lease.get("expiresAt")
+    if expires_at is not None and (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or not math.isfinite(float(expires_at))
+    ):
+        raise ValueError(f"lease {lease_id!r} has an invalid expiresAt")
+    if expires_at is not None and float(expires_at) < float(created_at):
+        raise ValueError(f"lease {lease_id!r} expires before it was created")
+
+    return {
+        "leaseId": lease_id,
+        "modelId": model_id,
+        "createdAt": float(created_at),
+        "expiresAt": float(expires_at) if expires_at is not None else None,
+    }
+
+
+def _controller_ocr_lease_store_payload(leases: dict[str, dict]) -> dict:
+    return {
+        "version": CONTROLLER_OCR_LEASE_STORE_VERSION,
+        "leases": {lease_id: dict(lease) for lease_id, lease in leases.items()},
+    }
+
+
+def _persist_controller_ocr_leases(leases: dict[str, dict]) -> None:
+    """Durably replace the controller-only lease snapshot before publishing it in memory."""
+    global controller_ocr_lease_store_error
+    if not CONTROLLER_OCR_LEASE_STORE_ENABLED:
+        return
+    if not controller_ocr_lease_store_loaded:
+        raise RuntimeError("controller OCR lease store was not loaded successfully")
+
+    path = CONTROLLER_OCR_LEASE_STORE_FILE
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            _controller_ocr_lease_store_payload(leases),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            with contextlib.suppress(OSError):
+                os.chmod(temp_path, 0o600)
+        os.replace(temp_path, path)
+        controller_ocr_lease_store_error = None
+    except Exception as error:
+        controller_ocr_lease_store_error = (
+            f"Failed to persist controller OCR leases: {type(error).__name__}: {error}"
+        )
+        with contextlib.suppress(OSError):
+            temp_path.unlink()
+        raise
+
+
+def _commit_controller_ocr_leases(leases: dict[str, dict]) -> None:
+    next_leases = {lease_id: dict(lease) for lease_id, lease in leases.items()}
+    _persist_controller_ocr_leases(next_leases)
+    controller_ocr_leases.clear()
+    controller_ocr_leases.update(next_leases)
+
+
+def load_controller_ocr_leases() -> bool:
+    """Restore controller leases before any startup model scheduling is allowed."""
+    global controller_ocr_lease_store_error, controller_ocr_lease_store_loaded
+    if not CONTROLLER_OCR_LEASE_STORE_ENABLED:
+        controller_ocr_lease_store_loaded = True
+        controller_ocr_lease_store_error = None
+        return True
+
+    try:
+        if CONTROLLER_OCR_LEASE_STORE_FILE.exists():
+            raw_store = json.loads(
+                CONTROLLER_OCR_LEASE_STORE_FILE.read_text(encoding="utf-8-sig"),
+                object_pairs_hook=_reject_duplicate_controller_lease_json_keys,
+            )
+            if not isinstance(raw_store, dict):
+                raise ValueError("lease store root must be an object")
+            if (
+                isinstance(raw_store.get("version"), bool)
+                or raw_store.get("version") != CONTROLLER_OCR_LEASE_STORE_VERSION
+            ):
+                raise ValueError("unsupported controller OCR lease store version")
+            raw_leases = raw_store.get("leases")
+            if not isinstance(raw_leases, dict):
+                raise ValueError("lease store leases must be an object")
+            restored = {
+                lease_id: _validate_controller_ocr_lease(lease_id, raw_lease)
+                for lease_id, raw_lease in raw_leases.items()
+            }
+        else:
+            restored = {}
+    except Exception as error:
+        controller_ocr_lease_store_loaded = False
+        controller_ocr_lease_store_error = (
+            f"Failed to load controller OCR leases: {type(error).__name__}: {error}"
+        )
+        logger.error(
+            "Controller OCR lease store is unavailable; model operations remain fail-closed: %s",
+            CONTROLLER_OCR_LEASE_STORE_FILE,
+            exc_info=True,
+        )
+        return False
+
+    controller_ocr_leases.clear()
+    controller_ocr_leases.update(restored)
+    controller_ocr_lease_store_loaded = True
+    controller_ocr_lease_store_error = None
+    if not prune_controller_ocr_leases():
+        return False
+    logger.info("Restored %d controller OCR lease(s)", len(controller_ocr_leases))
+    return True
+
+
+def require_controller_ocr_lease_store_ready() -> None:
+    if CONTROLLER_OCR_LEASE_STORE_ENABLED and not controller_ocr_lease_store_loaded:
+        detail = controller_ocr_lease_store_error or "Controller OCR lease store is not loaded"
+        raise HTTPException(
+            status_code=503,
+            detail=f"{detail}. Model operations are fail-closed until the store is repaired.",
+        )
+
+
+def prune_controller_ocr_leases(now: float | None = None) -> bool:
+    if CONTROLLER_OCR_LEASE_STORE_ENABLED and not controller_ocr_lease_store_loaded:
+        return False
+    current = time.time() if now is None else now
+    expired = [
+        lease_id
+        for lease_id, lease in controller_ocr_leases.items()
+        if lease.get("expiresAt") is not None and float(lease["expiresAt"]) <= current
+    ]
+    if not expired:
+        return True
+    next_leases = {
+        lease_id: lease
+        for lease_id, lease in controller_ocr_leases.items()
+        if lease_id not in expired
+    }
+    try:
+        _commit_controller_ocr_leases(next_leases)
+    except Exception:
+        logger.exception(
+            "Failed to persist pruning of %d expired controller OCR lease(s); retaining them fail-closed",
+            len(expired),
+        )
+        return False
+    logger.warning("Expired %d stale controller OCR lease(s)", len(expired))
+    return True
+
+
+def controller_ocr_lease_count() -> int:
+    prune_controller_ocr_leases()
+    return len(controller_ocr_leases)
+
+
+async def acquire_controller_ocr_lease(model_id: str) -> dict:
+    """Atomically reserve the active model against controller switches."""
+    if model_id not in MODEL_RUNTIME_CONFIG:
+        raise HTTPException(status_code=400, detail="Unknown model id")
+
+    async with model_runtime_lock:
+        require_controller_ocr_lease_store_ready()
+        if not prune_controller_ocr_leases():
+            raise HTTPException(
+                status_code=503,
+                detail="Controller OCR lease cleanup could not be persisted; OCR remains fail-closed.",
+            )
+        if model_runtime_task and not model_runtime_task.done():
+            raise HTTPException(status_code=409, detail="Model runtime is switching. Wait before starting OCR.")
+        if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
+            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait before starting OCR.")
+        if model_runtime_operation.get("state") == "switching":
+            raise HTTPException(status_code=409, detail="Model runtime is switching. Wait before starting OCR.")
+        leased_model_ids = {str(lease.get("modelId") or "") for lease in controller_ocr_leases.values()}
+        if leased_model_ids and leased_model_ids != {model_id}:
+            raise HTTPException(status_code=409, detail="Another model has active OCR work.")
+        if len(controller_ocr_leases) >= MAX_CONCURRENT_OCR:
+            raise HTTPException(status_code=429, detail="The controller OCR concurrency limit is reached.")
+
+        statuses = {
+            runtime_model_id: await model_runtime_status(runtime_model_id)
+            for runtime_model_id in MODEL_RUNTIME_CONFIG
+        }
+        exclusivity = await runtime_exclusivity_snapshot(statuses)
+        if exclusivity["exclusivityViolation"]:
+            running = ", ".join(exclusivity["runningModelIds"]) or "none"
+            ready = ", ".join(exclusivity["readyModelIds"]) or "none"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Model exclusivity violation: running={running}; ready={ready}",
+            )
+        status = statuses[model_id]
+        if not status.get("ready"):
+            raise HTTPException(status_code=503, detail=f"{model_id} is not ready")
+        if exclusivity["runningModelIds"] != [model_id] or exclusivity["readyModelIds"] != [model_id]:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{model_id} is not the unique running and ready model",
+            )
+
+        lease_id = uuid.uuid4().hex
+        created_at = time.time()
+        expires_at = (
+            created_at + CONTROLLER_OCR_LEASE_TTL_SECONDS
+            if CONTROLLER_OCR_LEASE_TTL_SECONDS > 0
+            else None
+        )
+        lease = {
+            "leaseId": lease_id,
+            "modelId": model_id,
+            "createdAt": created_at,
+            "expiresAt": expires_at,
+        }
+        next_leases = dict(controller_ocr_leases)
+        next_leases[lease_id] = lease
+        try:
+            _commit_controller_ocr_leases(next_leases)
+        except Exception as error:
+            logger.exception("Failed to persist controller OCR lease acquisition")
+            raise HTTPException(
+                status_code=503,
+                detail="Controller OCR lease could not be persisted; OCR did not start.",
+            ) from error
+        return dict(lease)
+
+
+async def release_controller_ocr_lease(lease_id: str) -> bool:
+    async with model_runtime_lock:
+        require_controller_ocr_lease_store_ready()
+        if not prune_controller_ocr_leases():
+            raise HTTPException(
+                status_code=503,
+                detail="Controller OCR lease cleanup could not be persisted; release remains fail-closed.",
+            )
+        if lease_id not in controller_ocr_leases:
+            return False
+        next_leases = dict(controller_ocr_leases)
+        next_leases.pop(lease_id)
+        try:
+            _commit_controller_ocr_leases(next_leases)
+        except Exception as error:
+            logger.exception("Failed to persist controller OCR lease release")
+            raise HTTPException(
+                status_code=503,
+                detail="Controller OCR lease release could not be persisted; the lease remains active.",
+            ) from error
+        return True
 
 
 async def wait_model_ready(model_id: str, timeout: float) -> None:
@@ -1354,24 +1942,192 @@ async def wait_unlimited_ocr_adapter_http(timeout: float) -> None:
     raise TimeoutError("Timed out waiting for Unlimited-OCR adapter API")
 
 
-async def ensure_unlimited_ocr_backend_runtime(backend: str, timeout: float) -> None:
+async def ensure_unlimited_ocr_backend_runtime(
+    backend: str,
+    timeout: float,
+    *,
+    gpu_release_gate_passed: bool = False,
+) -> None:
     await wait_unlimited_ocr_adapter_http(timeout)
+    docker_control = model_control_available()
+    if docker_control:
+        # Backend changes can be requested independently of a logical-model
+        # switch.  Refuse to start either Unlimited worker if any other model
+        # group is resident, even when free VRAM would otherwise look adequate.
+        await assert_non_target_model_containers_stopped("unlimited-ocr")
     if backend == "sglang":
         await call_unlimited_ocr_adapter_control("/backend/transformers/unload", timeout=min(180, timeout))
-        if model_control_available():
+        if docker_control:
             await ensure_runtime_service_created("unlimited-ocr-sglang")
+            # The Transformers unload happened after any outer model-switch
+            # gate, so SGLang always needs fresh release evidence of its own.
+            await wait_for_stable_gpu_release("unlimited-ocr", timeout=timeout)
             await docker_container_action("unlimited-ocr-sglang", "start")
             await wait_container_runtime_ready("unlimited-ocr-sglang", timeout)
         await wait_unlimited_ocr_backend_ready("sglang", timeout)
         return
 
-    if model_control_available():
+    if docker_control:
         await docker_container_action("unlimited-ocr-sglang", "stop")
+        await assert_containers_stopped_twice(
+            [("unlimited-ocr:unlimited-ocr-sglang", "unlimited-ocr-sglang")],
+            context="Unlimited-OCR backend release check failed; SGLang is still running",
+        )
+        if not gpu_release_gate_passed:
+            await wait_for_stable_gpu_release("unlimited-ocr", timeout=timeout)
     await call_unlimited_ocr_adapter_control("/backend/transformers/preload", timeout=timeout)
     await wait_unlimited_ocr_backend_ready("transformers", timeout)
 
 
-async def activate_model_runtime(model_id: str) -> None:
+def model_runtime_container_names(model_id: str) -> list[str]:
+    names: list[str] = []
+    for config in (
+        MODEL_RUNTIME_CONFIG.get(model_id) or {},
+        MODEL_RUNTIME_CONTAINER_GROUPS.get(model_id) or {},
+    ):
+        for key in ("containers", "stop_order", "start_order"):
+            for name in config.get(key, []):
+                if name not in names:
+                    names.append(name)
+    return names
+
+
+def model_runtime_group_ids() -> list[str]:
+    return list(dict.fromkeys([*MODEL_RUNTIME_CONTAINER_GROUPS, *MODEL_RUNTIME_CONFIG]))
+
+
+def model_runtime_stop_order(model_id: str) -> list[str]:
+    names: list[str] = []
+    for config in (
+        MODEL_RUNTIME_CONFIG.get(model_id) or {},
+        MODEL_RUNTIME_CONTAINER_GROUPS.get(model_id) or {},
+    ):
+        for name in config.get("stop_order", []):
+            if name not in names:
+                names.append(name)
+    return names or list(reversed(model_runtime_container_names(model_id)))
+
+
+async def stop_non_target_model_containers(target_model_id: str) -> None:
+    errors: list[str] = []
+    for model_id in model_runtime_group_ids():
+        if model_id == target_model_id:
+            continue
+        for container_name in model_runtime_stop_order(model_id):
+            try:
+                await docker_container_action(container_name, "stop")
+            except Exception as stop_error:
+                errors.append(f"{container_name}: {stop_error}")
+                logger.exception("Failed to stop non-target model container %s", container_name)
+    if errors:
+        raise RuntimeError("Failed to stop all non-target model containers: " + "; ".join(errors))
+
+
+async def assert_containers_stopped_twice(
+    containers: list[tuple[str, str]],
+    *,
+    context: str,
+) -> None:
+    """Require two consecutive Docker inspect samples with Running=false."""
+    if not containers:
+        return
+    for sample_index in range(2):
+        running: list[str] = []
+        for label, container_name in containers:
+            status = await inspect_container(container_name)
+            if status.get("running"):
+                running.append(label)
+        if running:
+            raise RuntimeError(f"{context}: " + ", ".join(running))
+        if sample_index == 0:
+            await asyncio.sleep(GPU_RELEASE_SAMPLE_INTERVAL_SECONDS)
+
+
+async def assert_non_target_model_containers_stopped(target_model_id: str) -> None:
+    containers: list[tuple[str, str]] = []
+    for model_id in model_runtime_group_ids():
+        if model_id == target_model_id:
+            continue
+        for container_name in model_runtime_container_names(model_id):
+            entry = (f"{model_id}:{container_name}", container_name)
+            if entry not in containers:
+                containers.append(entry)
+    await assert_containers_stopped_twice(
+        containers,
+        context="Model exclusivity check failed; non-target containers are still running",
+    )
+
+
+async def assert_target_model_ready_and_exclusive(target_model_id: str) -> None:
+    statuses = {
+        model_id: await model_runtime_status(model_id)
+        for model_id in MODEL_RUNTIME_CONFIG
+    }
+    exclusivity = await runtime_exclusivity_snapshot(statuses)
+    running_model_ids = exclusivity["runningModelIds"]
+    ready_model_ids = exclusivity["readyModelIds"]
+    if running_model_ids != [target_model_id] or ready_model_ids != [target_model_id]:
+        raise RuntimeError(
+            f"Model switch verification failed for {target_model_id}; "
+            f"running={','.join(running_model_ids) or 'none'}; "
+            f"ready={','.join(ready_model_ids) or 'none'}"
+        )
+
+
+async def cleanup_model_runtime_containers(model_id: str) -> list[str]:
+    """Best-effort fail-closed cleanup after a target startup failure."""
+    errors: list[str] = []
+    for container_name in model_runtime_stop_order(model_id):
+        try:
+            await docker_container_action(container_name, "stop")
+        except Exception as cleanup_error:
+            errors.append(f"{container_name}: {cleanup_error}")
+            logger.exception("Failed to clean up model container %s", container_name)
+    return errors
+
+
+async def target_model_is_unique_running_and_ready(model_id: str) -> bool:
+    """Return true only when an already-loaded target is the sole GPU runtime."""
+    config = MODEL_RUNTIME_CONFIG.get(model_id) or {}
+    if not config.get("containers") or not config.get("health_url"):
+        return False
+    statuses = {
+        runtime_model_id: await model_runtime_status(runtime_model_id)
+        for runtime_model_id in MODEL_RUNTIME_CONFIG
+    }
+    exclusivity = await runtime_exclusivity_snapshot(statuses)
+    return (
+        exclusivity.get("runningModelIds") == [model_id]
+        and exclusivity.get("readyModelIds") == [model_id]
+        and not exclusivity.get("exclusivityViolation")
+    )
+
+
+async def stop_target_model_containers_for_restart(model_id: str) -> None:
+    """Fully release an unhealthy/partial target before its clean restart."""
+    config = MODEL_RUNTIME_CONFIG.get(model_id) or {}
+    if not config.get("containers"):
+        return
+    errors: list[str] = []
+    for container_name in model_runtime_stop_order(model_id):
+        try:
+            await docker_container_action(container_name, "stop")
+        except Exception as stop_error:
+            errors.append(f"{container_name}: {stop_error}")
+            logger.exception("Failed to stop target model container %s before restart", container_name)
+    if errors:
+        raise RuntimeError("Failed to stop target model for a clean restart: " + "; ".join(errors))
+
+    await assert_containers_stopped_twice(
+        [
+            (f"{model_id}:{container_name}", container_name)
+            for container_name in model_runtime_container_names(model_id)
+        ],
+        context="Target restart release check failed; target containers are still running",
+    )
+
+
+async def activate_model_runtime(model_id: str) -> bool:
     if model_id not in MODEL_RUNTIME_CONFIG:
         raise ValueError(f"Unknown model id: {model_id}")
     if not model_control_available():
@@ -1380,31 +2136,70 @@ async def activate_model_runtime(model_id: str) -> None:
     async with model_runtime_lock:
         set_model_runtime_operation("switching", f"Switching to {model_id}", model_id)
         switch_started_at = time.monotonic()
+        target_start_attempted = False
+        retained_ready_target = False
+        non_target_exclusivity_confirmed = False
         try:
+            await stop_non_target_model_containers(model_id)
+            await assert_non_target_model_containers_stopped(model_id)
+            non_target_exclusivity_confirmed = True
+
+            # An idempotent request for the already unique, ready target must
+            # not compare free VRAM against a model that is intentionally still
+            # loaded.  Re-verify exclusivity after the two stopped samples and
+            # leave the healthy target untouched.
+            if await target_model_is_unique_running_and_ready(model_id):
+                retained_ready_target = True
+                await assert_target_model_ready_and_exclusive(model_id)
+                set_model_runtime_operation("ready", f"{model_id} is ready", model_id)
+                return True
+
+            # A partial or backend-mismatched target can itself retain VRAM.
+            # Stop and double-inspect it before the release samples so the gate
+            # measures a genuinely empty hand-off, then perform a clean start.
+            await stop_target_model_containers_for_restart(model_id)
+
+            # Probe only after other logical runtimes are proven stopped.  This
+            # both prevents a failed preflight from preserving an exclusivity
+            # violation and avoids measuring the target alongside old GPU work.
             if MODEL_RUNTIME_CONFIG[model_id].get("gpu_memory"):
                 await ensure_model_gpu_compatible(model_id)
-            for other_model_id, config in MODEL_RUNTIME_CONFIG.items():
-                if other_model_id == model_id:
-                    continue
-                for container_name in config["stop_order"]:
-                    await docker_container_action(container_name, "stop")
-
+                remaining_timeout = MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at)
+                await wait_for_stable_gpu_release(model_id, timeout=remaining_timeout)
             for container_name in MODEL_RUNTIME_CONFIG[model_id]["start_order"]:
                 remaining_timeout = max(3, MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at))
+                target_start_attempted = True
                 await docker_container_action(container_name, "start")
                 await wait_container_runtime_ready(container_name, remaining_timeout)
 
             if model_id == "unlimited-ocr":
                 remaining_timeout = max(3, MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at))
-                await ensure_unlimited_ocr_backend_runtime(unlimited_ocr_runtime_backend, remaining_timeout)
+                await ensure_unlimited_ocr_backend_runtime(
+                    unlimited_ocr_runtime_backend,
+                    remaining_timeout,
+                    gpu_release_gate_passed=True,
+                )
 
             remaining_timeout = max(3, MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at))
             await wait_model_ready(model_id, remaining_timeout)
+            await assert_non_target_model_containers_stopped(model_id)
+            await assert_target_model_ready_and_exclusive(model_id)
             set_model_runtime_operation("ready", f"{model_id} is ready", model_id)
+            return True
         except Exception as err:
             logger.exception("Model runtime switch failed")
-            set_model_runtime_operation("error", str(err), model_id)
+            cleanup_target = (
+                target_start_attempted
+                or retained_ready_target
+                or not non_target_exclusivity_confirmed
+            )
+            cleanup_errors = await cleanup_model_runtime_containers(model_id) if cleanup_target else []
+            message = str(err)
+            if cleanup_errors:
+                message += "; cleanup failed: " + "; ".join(cleanup_errors)
+            set_model_runtime_operation("error", message, model_id)
             model_runtime_operation["diagnostics"] = await model_failure_diagnostics(model_id, err)
+            return False
 
 
 async def schedule_model_runtime_activation(model_id: str) -> None:
@@ -1414,25 +2209,41 @@ async def schedule_model_runtime_activation(model_id: str) -> None:
     if not model_control_available():
         raise HTTPException(status_code=503, detail="Docker model control is not available")
     async with model_runtime_lock:
-        if ocr_active_count > 0:
+        require_controller_ocr_lease_store_ready()
+        if ocr_active_count > 0 or controller_ocr_lease_count() > 0:
             raise HTTPException(status_code=409, detail="OCR is running. Wait for the active task before switching models.")
         if model_runtime_task and not model_runtime_task.done():
-            model_runtime_task.cancel()
+            raise HTTPException(status_code=409, detail="Model runtime is already busy. Wait for it to finish.")
+        if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
+            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait for it to finish.")
         set_model_runtime_operation("switching", f"Switching to {model_id}", model_id)
         model_runtime_task = asyncio.create_task(activate_model_runtime(model_id))
 
 
 async def deploy_and_activate_model_runtime(model_id: str, backend: str | None = None) -> None:
     global unlimited_ocr_runtime_backend
+    previous_backend = unlimited_ocr_runtime_backend
+    requested_backend: str | None = None
     try:
         if model_id == "unlimited-ocr" and backend:
-            unlimited_ocr_runtime_backend = normalize_unlimited_ocr_backend(backend)
-            save_runtime_settings({"unlimitedOcrBackend": unlimited_ocr_runtime_backend})
+            requested_backend = normalize_unlimited_ocr_backend(backend)
+            unlimited_ocr_runtime_backend = requested_backend
         set_model_runtime_operation("switching", f"Deploying {model_id}", model_id)
         await ensure_model_runtime_created(model_id, backend)
-        await activate_model_runtime(model_id)
+        activated = await activate_model_runtime(model_id)
+        if activated is False:
+            raise RuntimeError(
+                model_runtime_operation.get("message")
+                or f"{model_id} failed final runtime verification"
+            )
+        if requested_backend:
+            save_runtime_settings({"unlimitedOcrBackend": requested_backend})
     except Exception as err:
         logger.exception("Model runtime deployment failed")
+        if requested_backend:
+            unlimited_ocr_runtime_backend = previous_backend
+            with contextlib.suppress(Exception):
+                save_runtime_settings({"unlimitedOcrBackend": previous_backend})
         set_model_runtime_operation("error", str(err), model_id)
         model_runtime_operation["diagnostics"] = await model_failure_diagnostics(model_id, err)
 
@@ -1444,10 +2255,13 @@ async def schedule_model_runtime_deploy(model_id: str, backend: str | None = Non
     if not model_control_available():
         raise HTTPException(status_code=503, detail="Docker model control is not available")
     async with model_runtime_lock:
-        if ocr_active_count > 0:
+        require_controller_ocr_lease_store_ready()
+        if ocr_active_count > 0 or controller_ocr_lease_count() > 0:
             raise HTTPException(status_code=409, detail="OCR is running. Wait for the active task before deploying models.")
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is already busy. Wait for it to finish.")
+        if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
+            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait for it to finish.")
         set_model_runtime_operation("switching", f"Deploying {model_id}", model_id)
         model_runtime_task = asyncio.create_task(deploy_and_activate_model_runtime(model_id, backend))
 
@@ -1481,7 +2295,8 @@ async def schedule_unlimited_ocr_backend_activation(backend: str) -> None:
         raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
     resolved_backend = normalize_unlimited_ocr_backend(backend)
     async with model_runtime_lock:
-        if ocr_active_count > 0:
+        require_controller_ocr_lease_store_ready()
+        if ocr_active_count > 0 or controller_ocr_lease_count() > 0:
             raise HTTPException(status_code=409, detail="OCR is running. Wait for the active task before switching backends.")
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is switching. Wait for it to finish before switching backends.")
@@ -1504,7 +2319,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="PaddleOCR Local WebUI",
-    version="0.2.0",
+    version=APP_VERSION,
     docs_url="/docs" if ENABLE_API_DOCS else None,
     redoc_url="/redoc" if ENABLE_API_DOCS else None,
     openapi_url="/api/openapi.json",
@@ -1523,6 +2338,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 SAFE_API_METHODS = {"GET", "HEAD", "OPTIONS"}
+BROWSER_CODE_ASSET_PATHS = {
+    "/static/app.js",
+    "/static/bootstrap.mjs",
+    "/static/i18n.js",
+    "/static/index.html",
+    "/static/style.css",
+}
 
 
 def normalize_origin(value: str) -> str:
@@ -1575,6 +2397,11 @@ async def enforce_request_security(request: Request, call_next):
                 pass
 
     response = await call_next(request)
+    if request.url.path in BROWSER_CODE_ASSET_PATHS:
+        # Module imports can otherwise survive a normal browser reload after a
+        # container upgrade. Revalidate the small application assets so the UI
+        # and the running API always come from the same deployed revision.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -1610,9 +2437,13 @@ async def get_models():
     return {
         "default": DEFAULT_RUNTIME_MODEL_ID,
         "data": model_catalog(),
+        "version": APP_VERSION,
+        "commit": APP_COMMIT or None,
         "maxUploadBytes": MAX_REQUEST_BYTES,
         "authRequired": bool(API_TOKEN),
         "originProtection": ENFORCE_ORIGIN_CHECK,
+        "apiDocsEnabled": ENABLE_API_DOCS,
+        "openapiUrl": app.openapi_url,
         "maxConcurrentOcr": MAX_CONCURRENT_OCR,
     }
 
@@ -1827,6 +2658,9 @@ def task_summary(task: dict) -> dict:
         "sourceUrl": task.get("sourceUrl"),
         "modelId": task.get("modelId"),
         "modelName": task.get("modelName"),
+        "comparisonGroupId": task.get("comparisonGroupId"),
+        "comparisonSourceName": task.get("comparisonSourceName"),
+        "benchmark": task.get("benchmark"),
         "error": task.get("error"),
         "completedPages": completed_pages,
         "batchCount": len(batches),
@@ -2029,6 +2863,19 @@ def extract_pdf_pages(source_path: Path, start_page: int, end_page: int) -> byte
     return output.getvalue()
 
 
+def clone_task_source_file(source_task_id: str, target_task_id: str) -> int:
+    """Copy a persisted source locally for an independent comparison task."""
+    source_path = task_source_path(source_task_id)
+    if not source_path.exists():
+        raise FileNotFoundError("Task source not found")
+    target_path = task_source_path(target_task_id)
+    if target_path.exists():
+        raise FileExistsError("Target task source already exists")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+    return target_path.stat().st_size
+
+
 @app.post("/api/tasks/{task_id}/source")
 async def upload_task_source(task_id: str, file: UploadFile = File(...)):
     """Persist the original uploaded source outside task.json."""
@@ -2064,6 +2911,23 @@ async def get_task_source(task_id: str):
             pass
 
     return FileResponse(source_path, media_type=media_type, filename=filename)
+
+
+@app.post("/api/tasks/{source_task_id}/clone-source/{target_task_id}")
+async def clone_task_source(source_task_id: str, target_task_id: str):
+    """Clone a task source without sending a large local document through the browser again."""
+    if source_task_id == target_task_id:
+        raise HTTPException(status_code=400, detail="Source and target task ids must differ")
+    try:
+        size = await run_in_threadpool(clone_task_source_file, source_task_id, target_task_id)
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except FileExistsError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except OSError as err:
+        logger.exception("Failed to clone task source")
+        raise HTTPException(status_code=500, detail=f"Failed to clone task source: {err}") from err
+    return {"ok": True, "url": task_source_url(target_task_id), "size": size}
 
 
 @app.get("/api/tasks/{task_id}/source/pages")
@@ -2229,6 +3093,7 @@ async def convert_to_pdf(file: UploadFile = File(...)):
 
 class OCRRequest(BaseModel):
     image: Optional[str] = None
+    modelId: Optional[str] = None
     fileType: Optional[int] = None
     useLayoutDetection: bool = True
     useDocUnwarping: bool = False
@@ -2252,6 +3117,64 @@ class OCRRequest(BaseModel):
 
 
 RawOCRInput = Union[bytes, str]
+
+UNIFIED_PARSE_MODEL_IDS = [
+    "paddleocr-vl-1.6",
+    "pp-ocrv6",
+    "unlimited-ocr",
+    "ovisocr2",
+    "hpd-parsing",
+]
+
+
+def unified_parse_openapi_extra() -> dict:
+    """Describe both body formats accepted by the raw Request parser."""
+    json_schema = OCRRequest.model_json_schema()
+    json_properties = json_schema.setdefault("properties", {})
+    json_properties["image"] = {
+        "type": "string",
+        "description": "Base64 data or a data URL containing the image/PDF payload.",
+    }
+    json_properties["modelId"] = {
+        "type": "string",
+        "enum": UNIFIED_PARSE_MODEL_IDS,
+        "description": "An enabled OCR model ID. Omit to use the server default.",
+    }
+    json_schema["required"] = ["image"]
+
+    multipart_properties = {
+        "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "Image or PDF file to parse.",
+        },
+        **{
+            key: value
+            for key, value in json_properties.items()
+            if key != "image"
+        },
+    }
+    return {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": multipart_properties,
+                    }
+                },
+                "application/json": {"schema": json_schema},
+            },
+        },
+        "responses": {
+            "400": {"description": "Invalid input or unknown/disabled modelId"},
+            "409": {"description": "Model runtime is switching or busy"},
+            "413": {"description": "OCR input exceeds the configured size limit"},
+            "503": {"description": "Selected model is not ready"},
+        },
+    }
 
 
 def parse_bool(value, default: bool = False) -> bool:
@@ -2284,7 +3207,10 @@ def parse_markdown_ignore_labels(value) -> List[str]:
     if value in (None, ""):
         return []
     if isinstance(value, list):
-        return [str(item) for item in value]
+        labels: List[str] = []
+        for item in value:
+            labels.extend(parse_markdown_ignore_labels(item))
+        return labels
     text = str(value).strip()
     if not text:
         return []
@@ -2306,7 +3232,13 @@ async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
             raise HTTPException(status_code=400, detail="Missing multipart field: file")
 
         file_bytes = await read_upload_bytes(upload, MAX_REQUEST_BYTES)
+        markdown_ignore_labels = (
+            form.getlist("markdownIgnoreLabels")
+            if hasattr(form, "getlist")
+            else form.get("markdownIgnoreLabels")
+        )
         ocr_request = OCRRequest(
+            modelId=parse_optional_string(form.get("modelId")),
             fileType=parse_optional_int(form.get("fileType")),
             useLayoutDetection=parse_bool(form.get("useLayoutDetection"), True),
             useDocUnwarping=parse_bool(form.get("useDocUnwarping"), False),
@@ -2316,7 +3248,7 @@ async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
             useSealRecognition=parse_bool(form.get("useSealRecognition"), True),
             formatBlockContent=parse_bool(form.get("formatBlockContent"), True),
             showFormulaNumber=parse_bool(form.get("showFormulaNumber"), True),
-            markdownIgnoreLabels=parse_markdown_ignore_labels(form.get("markdownIgnoreLabels")),
+            markdownIgnoreLabels=parse_markdown_ignore_labels(markdown_ignore_labels),
             layoutThreshold=parse_optional_float(form.get("layoutThreshold")),
             layoutNms=parse_bool(form.get("layoutNms")) if form.get("layoutNms") is not None else None,
             layoutUnclipRatio=parse_optional_float(form.get("layoutUnclipRatio")),
@@ -2687,33 +3619,101 @@ def parse_unlimited_ocr_response(data: dict) -> dict:
     }
 
 
-async def acquire_ocr_slot(model_id: str, not_ready_message: str) -> None:
+async def acquire_ocr_slot(model_id: str, not_ready_message: str) -> str | None:
     global ocr_active_count
     await ocr_semaphore.acquire()
+    controller_lease_id: str | None = None
     try:
         async with model_runtime_lock:
             operation = model_runtime_operation
             if operation.get("state") == "switching":
                 target = operation.get("targetModelId") or "requested model"
                 raise HTTPException(status_code=409, detail=f"Model runtime is switching to {target}. Try again when it is ready.")
-            runtime = await model_runtime_status(model_id)
-            if not runtime["ready"]:
-                raise HTTPException(status_code=503, detail=not_ready_message)
+            if MODEL_CONTROL_MODE == "remote":
+                lease = await controller_api_request(
+                    "POST", "/ocr-leases/acquire", json={"modelId": model_id}
+                )
+                controller_lease_id = str(lease.get("leaseId") or "")
+                if not controller_lease_id:
+                    raise HTTPException(status_code=502, detail="Model controller omitted the OCR lease id")
+            else:
+                runtime = await model_runtime_status(model_id)
+                if not runtime["ready"]:
+                    raise HTTPException(status_code=503, detail=not_ready_message)
             ocr_active_count += 1
+        return controller_lease_id
     except Exception:
+        if controller_lease_id:
+            with contextlib.suppress(Exception):
+                await controller_api_request(
+                    "DELETE", f"/ocr-leases/{quote(controller_lease_id, safe='')}"
+                )
         ocr_semaphore.release()
         raise
 
 
-async def release_ocr_slot() -> None:
+async def release_ocr_slot(controller_lease_id: str | None = None) -> None:
     global ocr_active_count
     async with model_runtime_lock:
-        ocr_active_count = max(0, ocr_active_count - 1)
+        try:
+            if MODEL_CONTROL_MODE == "remote" and controller_lease_id:
+                await controller_api_request(
+                    "DELETE", f"/ocr-leases/{quote(controller_lease_id, safe='')}"
+                )
+        except Exception:
+            # Keep the controller lease fail-closed.  By default leases do not
+            # expire, so a transient release failure cannot permit an unsafe
+            # switch while OCR may still be using GPU memory.
+            logger.exception("Failed to release controller OCR lease %s", controller_lease_id)
+        finally:
+            ocr_active_count = max(0, ocr_active_count - 1)
     ocr_semaphore.release()
 
 
+class OCRSlotReleaseGuard:
+    """Run controller/local OCR-slot cleanup once across competing stream exits."""
+
+    def __init__(self, controller_lease_id: str | None = None):
+        self.controller_lease_id = controller_lease_id
+        self._lock = asyncio.Lock()
+        self._release_task: asyncio.Task | None = None
+
+    async def release_once(self) -> None:
+        async with self._lock:
+            if self._release_task is None:
+                self._release_task = asyncio.create_task(
+                    release_ocr_slot(self.controller_lease_id)
+                )
+            release_task = self._release_task
+        # A disconnect may cancel the body iterator while the response itself
+        # is also unwinding.  Shield the single cleanup task so either caller
+        # can finish waiting for the same controller/semaphore release.
+        await asyncio.shield(release_task)
+
+
+class OCRSlotStreamingResponse(StreamingResponse):
+    """Tie an acquired OCR slot to the complete ASGI response lifecycle."""
+
+    def __init__(self, *args, release_guard: OCRSlotReleaseGuard, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._release_guard = release_guard
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                close_iterator = getattr(self.body_iterator, "aclose", None)
+                if close_iterator is not None:
+                    await close_iterator()
+            except Exception:
+                logger.exception("Failed to close Unlimited-OCR response iterator")
+            finally:
+                await self._release_guard.release_once()
+
+
 async def run_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
-    await acquire_ocr_slot(
+    controller_lease_id = await acquire_ocr_slot(
         "paddleocr-vl-1.6",
         "PaddleOCR-VL service is not ready. Switch to this model and wait for it to become ready.",
     )
@@ -2738,11 +3738,11 @@ async def run_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> di
 
             return parse_pipeline_response(resp.json())
     finally:
-        await release_ocr_slot()
+        await release_ocr_slot(controller_lease_id)
 
 
 async def run_ppocrv6_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
-    await acquire_ocr_slot(
+    controller_lease_id = await acquire_ocr_slot(
         "pp-ocrv6",
         "PP-OCRv6 service is not ready. Switch to this model and wait for it to become ready.",
     )
@@ -2767,14 +3767,14 @@ async def run_ppocrv6_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -
 
             return parse_ppocr_response(resp.json())
     finally:
-        await release_ocr_slot()
+        await release_ocr_slot(controller_lease_id)
 
 
 async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
     if not ENABLE_UNLIMITED_OCR:
         raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
 
-    await acquire_ocr_slot(
+    controller_lease_id = await acquire_ocr_slot(
         "unlimited-ocr",
         "Unlimited-OCR service is not ready. Switch to this model and wait for it to become ready.",
     )
@@ -2797,14 +3797,14 @@ async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRIn
 
             return parse_unlimited_ocr_response(resp.json())
     finally:
-        await release_ocr_slot()
+        await release_ocr_slot(controller_lease_id)
 
 
 async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
     if not ENABLE_OVISOCR2:
         raise HTTPException(status_code=404, detail="OvisOCR2 is not enabled")
 
-    await acquire_ocr_slot(
+    controller_lease_id = await acquire_ocr_slot(
         "ovisocr2",
         "OvisOCR2 service is not ready. Switch to this model and wait for it to become ready.",
     )
@@ -2828,14 +3828,14 @@ async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) 
                 raise HTTPException(status_code=500, detail="Unexpected response format from OvisOCR2")
             return data
     finally:
-        await release_ocr_slot()
+        await release_ocr_slot(controller_lease_id)
 
 
 async def run_hpd_parsing_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
     if not ENABLE_HPD_PARSING:
         raise HTTPException(status_code=404, detail="HPD-Parsing is not enabled")
 
-    await acquire_ocr_slot(
+    controller_lease_id = await acquire_ocr_slot(
         "hpd-parsing",
         "HPD-Parsing service is not ready. Switch to this model and wait for it to become ready.",
     )
@@ -2854,10 +3854,16 @@ async def run_hpd_parsing_request(ocr_request: OCRRequest, raw_input: RawOCRInpu
             raise HTTPException(status_code=500, detail="Unexpected response format from HPD-Parsing")
         return data
     finally:
-        await release_ocr_slot()
+        await release_ocr_slot(controller_lease_id)
 
 
-async def stream_unlimited_ocr_events(ocr_request: OCRRequest, raw_input: RawOCRInput):
+async def stream_unlimited_ocr_events(
+    ocr_request: OCRRequest,
+    raw_input: RawOCRInput,
+    controller_lease_id: str | None = None,
+    release_guard: OCRSlotReleaseGuard | None = None,
+):
+    slot_release = release_guard or OCRSlotReleaseGuard(controller_lease_id)
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
         payload = build_unlimited_ocr_payload(ocr_request, base64_data, file_type)
@@ -2882,7 +3888,7 @@ async def stream_unlimited_ocr_events(ocr_request: OCRRequest, raw_input: RawOCR
         logger.exception("Unlimited-OCR stream proxy failed")
         yield json.dumps({"type": "error", "detail": str(err)}, ensure_ascii=False) + "\n"
     finally:
-        await release_ocr_slot()
+        await slot_release.release_once()
 
 
 def validate_proxy_input_size(raw_input: RawOCRInput) -> int:
@@ -2891,6 +3897,32 @@ def validate_proxy_input_size(raw_input: RawOCRInput) -> int:
         max_mb = MAX_REQUEST_BYTES / 1024 / 1024
         raise HTTPException(status_code=413, detail=f"OCR input is too large. Max upload size is {max_mb:.0f} MB.")
     return len(base64_data)
+
+
+@app.post("/api/parse", openapi_extra=unified_parse_openapi_extra())
+async def parse_with_selected_model(request: Request):
+    """Stable model-agnostic OCR endpoint selected by the modelId field."""
+    try:
+        ocr_request, raw_input = await parse_ocr_input(request)
+        model_id = ocr_request.modelId or DEFAULT_RUNTIME_MODEL_ID
+        validate_proxy_input_size(raw_input)
+        runners = {
+            "paddleocr-vl-1.6": run_ocr_request,
+            "pp-ocrv6": run_ppocrv6_request,
+            "unlimited-ocr": run_unlimited_ocr_request,
+            "ovisocr2": run_ovisocr2_request,
+            "hpd-parsing": run_hpd_parsing_request,
+        }
+        runner = runners.get(model_id)
+        if runner is None or model_id not in MODEL_CATALOG_IDS:
+            raise HTTPException(status_code=400, detail=f"Unknown or disabled modelId: {model_id}")
+        logger.info("Received unified OCR request for model %s", model_id)
+        return await runner(ocr_request, raw_input)
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.exception("Unified OCR endpoint error")
+        raise HTTPException(status_code=500, detail=str(err)) from err
 
 
 @app.post("/api/paddleocr-vl-1.6")
@@ -2976,12 +4008,19 @@ async def proxy_unlimited_ocr_stream(request: Request):
         logger.info("Received streaming Unlimited-OCR request. Base64 input size: %s bytes", base64_size)
         if not ENABLE_UNLIMITED_OCR:
             raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
-        await acquire_ocr_slot(
+        controller_lease_id = await acquire_ocr_slot(
             "unlimited-ocr",
             "Unlimited-OCR service is not ready. Switch to this model and wait for it to become ready.",
         )
-        return StreamingResponse(
-            stream_unlimited_ocr_events(ocr_request, raw_image),
+        release_guard = OCRSlotReleaseGuard(controller_lease_id)
+        return OCRSlotStreamingResponse(
+            stream_unlimited_ocr_events(
+                ocr_request,
+                raw_image,
+                controller_lease_id,
+                release_guard,
+            ),
+            release_guard=release_guard,
             media_type="application/x-ndjson",
         )
     except HTTPException:

@@ -308,6 +308,7 @@ def test_one_click_and_runtime_include_hpd_parsing():
     assert legacy_all and 'Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"' not in legacy_all.group(0)
     assert legacy_sglang and 'Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"' not in legacy_sglang.group(0)
     assert '"11", "all-five", "full-five"' in script
+    assert '$createArguments += "--no-build"' in script
 
     local_check = (root / "scripts" / "check-local.sh").read_text(encoding="utf-8")
     coverage_check = (root / "scripts" / "check-coverage.sh").read_text(encoding="utf-8")

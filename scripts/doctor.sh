@@ -164,7 +164,8 @@ PY
     printf "\nRecommended one-click command on Windows NVIDIA:\n"
     printf "  .\\windows-one-click.bat\n"
     printf "\nManual Docker command starts with:\n"
-    printf "  docker compose --env-file env.txt config --quiet\n"
+    printf "  runtime_env=\"\$(bash ./scripts/prepare-runtime-env.sh env.txt)\"\n"
+    printf "  docker compose --env-file env.txt --env-file \"\$runtime_env\" config --quiet\n"
     ;;
 esac
 

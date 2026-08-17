@@ -4,7 +4,7 @@
 set -u
 
 ENV_FILE="${PANDOCR_ENV_FILE:-${1:-env.txt}}"
-COMPOSE=(docker compose --env-file "$ENV_FILE")
+RUNTIME_ENV="${PANDOCR_RUNTIME_ENV_FILE:-tmp/pandocr-runtime.env}"
 
 echo "🔍 测试 PaddleOCR Local 服务连接..."
 echo "   Env file: $ENV_FILE"
@@ -14,6 +14,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "❌ 环境文件不存在: $ENV_FILE"
     exit 1
 fi
+
+RUNTIME_ENV="$(bash ./scripts/prepare-runtime-env.sh "$ENV_FILE" "$RUNTIME_ENV")" || exit 1
+unset PANDOCR_MODEL_CONTROLLER_TOKEN
+COMPOSE=(docker compose --env-file "$ENV_FILE" --env-file "$RUNTIME_ENV" --profile "*")
 
 # 测试前端服务
 echo "1️⃣  测试前端服务 (localhost:8000)..."
@@ -57,10 +61,10 @@ fi
 
 # 测试 GPU 可用性
 echo "6️⃣  测试 GPU 可用性..."
-if "${COMPOSE[@]}" exec -T paddleocr-vlm-server nvidia-smi &> /dev/null; then
+if "${COMPOSE[@]}" run --rm --no-deps paddleocr-vlm-server nvidia-smi &> /dev/null; then
     echo "   ✅ GPU 可用"
 else
-    echo "   ⚠️  GPU 当前不可用（如果 VL 容器待启动，这是正常的）"
+    echo "   ⚠️  Docker GPU 当前不可用"
 fi
 
 echo ""
@@ -69,5 +73,5 @@ echo "📊 服务状态总览:"
 
 echo ""
 echo "💡 提示:"
-echo "   - 如果服务异常，查看日志: docker compose --env-file $ENV_FILE logs -f"
+echo "   - 如果服务异常，查看日志: docker compose --env-file $ENV_FILE --env-file $RUNTIME_ENV --profile \"*\" logs -f"
 echo "   - 如果正在启动中，等待 3-5 分钟后重试"

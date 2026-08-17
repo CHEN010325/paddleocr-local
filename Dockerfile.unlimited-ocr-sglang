@@ -1,7 +1,8 @@
-ARG CUDA_BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04@sha256:50efab398f76258daa91ceebb33b6467e40217c67ea44fb5a2cebc6be7d9cce3
+# CUDA 12.9 is the first toolkit line that can compile FlashInfer kernels for
+# Blackwell consumer GPUs (SM120). Keep the digest pinned so an upstream tag
+# move cannot silently reintroduce an older, incompatible toolkit.
+ARG CUDA_BASE_IMAGE=nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04@sha256:a2e1e2360c85298ac47ec2543b406ab1e8cec42e31ee47e4d32140ebc82e1067
 FROM ${CUDA_BASE_IMAGE}
-
-ARG UNLIMITED_OCR_SGLANG_WHEEL_URL=https://github.com/baidu/Unlimited-OCR/raw/main/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl
 
 ENV DEBIAN_FRONTEND=noninteractive \
     VIRTUAL_ENV=/opt/venv \
@@ -23,6 +24,8 @@ RUN apt-get update && \
       python3-pip \
       python3-venv && \
     rm -rf /var/lib/apt/lists/*
+
+ARG UNLIMITED_OCR_SGLANG_WHEEL_URL=https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5
 
 RUN python -m venv /opt/venv && \
     pip install --no-cache-dir --upgrade pip && \

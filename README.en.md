@@ -1,101 +1,82 @@
 # PaddleOCR Local
 
-**Language / 语言**: [简体中文](README.md) | English
+**One local workbench for five OCR and document-parsing models.** Upload images, PDFs, Word documents, or PowerPoint files, inspect source and structured output side by side, and export Markdown, JSON, and extracted assets.
 
-A self-hosted, multi-model document parsing WebUI for images, PDFs, PowerPoint, and Word documents, with Markdown preview and export.
+[简体中文](README.md) · [Quick start](QUICKSTART.md) · [CLI](CLI.md) · [Compatibility](docs/compatibility.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
-Five isolated models are supported:
-
-- PaddleOCR-VL 1.6
-- PP-OCRv6
-- Unlimited-OCR
-- OvisOCR2
-- HPD-Parsing
+![CI](https://github.com/CHEN010325/paddleocr-local/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/CHEN010325/paddleocr-local)
+![Release](https://img.shields.io/github/v/release/CHEN010325/paddleocr-local?include_prereleases)
 
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
-## One-Click Deployment
+## Why it exists
 
-The installer asks which model to deploy first and downloads and starts only that model. Unselected model weights are not downloaded and use no RAM or VRAM.
+- **Local-first**: documents, results, and task history stay on your machine.
+- **Five models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, Unlimited-OCR, OvisOCR2, and HPD-Parsing.
+- **Single-GPU friendly**: only the active model runs; switching releases the others' VRAM.
+- **Cross-platform**: Windows/Linux NVIDIA Docker plus native and MLX paths for Apple Silicon.
+- **Built for documents**: page progress, recovery, source/result comparison, tables, formulas, and exports.
+- **Deployment hardening**: VRAM preflight, isolated model control and Office conversion, API tokens, pinned dependencies, and high-coverage tests.
 
-### Windows + NVIDIA
+## Models
 
-Install an NVIDIA driver and GPU-enabled Docker Desktop first.
+| Model | Best for | Suggested hardware | Notes |
+| --- | --- | --- | --- |
+| PaddleOCR-VL 1.6 | Complex layouts, tables, formulas | NVIDIA 12 GB+ | Main PaddleOCR document pipeline |
+| PP-OCRv6 | Text OCR and lower-memory systems | NVIDIA 4 GB+ | Fast startup; CPU Lite remains on the roadmap |
+| Unlimited-OCR | Long structured documents | NVIDIA 8 GB+ | Transformers and SGLang backends |
+| OvisOCR2 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
+| HPD-Parsing | High-quality document parsing | NVIDIA 8 GB+ | Official customized vLLM runtime |
+
+These are startup compatibility guidelines, not guarantees for every document. See the [compatibility guide](docs/compatibility.md).
+
+## Quick start
+
+Windows with NVIDIA:
 
 ```powershell
 .\windows-one-click.bat
 ```
 
-Deploy OvisOCR2 directly:
-
-```powershell
-.\windows-one-click.bat -Model ovisocr2
-```
-
-Deploy HPD-Parsing directly:
-
-```powershell
-.\windows-one-click.bat -Model hpd-parsing
-```
-
-HPD-Parsing uses its official customized vLLM image and requires an NVIDIA GPU, Linux x86-64 containers, and a driver supporting CUDA 12.8 or newer.
-
-Validate the plan without downloading or starting services:
-
-```powershell
-.\windows-one-click.bat -Model ovisocr2 -DryRun
-```
-
-### macOS Apple Silicon
-
-Apple M1, M2, M3, and M4 are supported. OvisOCR2 uses MLX by default.
+macOS Apple Silicon:
 
 ```bash
 ./macos-one-click.command
 ```
 
-Deploy OvisOCR2 directly:
+Linux / Docker:
 
 ```bash
-./macos-one-click.command --model ovisocr2
+cp env.docker env.txt
+./build.sh
+./deploy.sh
 ```
 
-Validate the plan without installing or starting services:
-
-```bash
-./macos-one-click.command --model ovisocr2 --dry-run
-```
-
-For Linux, manual Docker deployment, and advanced settings, see the [deployment guide](DOCKER_DEPLOY.md).
-
-## Start Using It
-
-After deployment, open:
-
-- WebUI: http://localhost:8000
-- PaddleOCR-VL: http://localhost:8081/health
-- PP-OCRv6: http://localhost:8082/health
-- Unlimited-OCR: http://localhost:8083/health
-- OvisOCR2: http://localhost:8084/health
-- HPD-Parsing: http://localhost:8085/health
-
-A health endpoint is available only while its model is running. On a single GPU, only the selected model is loaded; switching models automatically stops the others to avoid unnecessary VRAM use.
+Then open <http://localhost:8000>. Each logical model is guarded by its own Compose profile. The deployment script creates stopped standby containers and lets the controller start exactly one selected model. A switch fully stops the old model and releases its GPU memory before the new model starts, so GPU memory contains only the currently selected logical model at every moment. The scripts never use a bare `docker compose up` that could load multiple models. The first run downloads images or model weights. See [Docker deployment](DOCKER_DEPLOY.md) for advanced configuration.
 
 ## Features
 
-- Image, PDF, PPT/PPTX, and DOC/DOCX parsing
-- Five-model selection and on-demand deployment
-- Page-by-page PDF parsing, progress, and persistent history
-- Markdown, table, formula, and visual-region rendering
-- Side-by-side source and result views
-- Markdown, JSON, and extracted-image downloads
+- Multi-file image, PDF, PPT/PPTX, DOC/DOCX upload
+- Page/batch PDF processing, progress, persistence, and interrupted-task recovery
+- On-demand deployment, VRAM preflight, and runtime switching for five models
+- Markdown, table, formula, code, and extracted-image rendering
+- Side-by-side source and result views with synchronized scrolling
+- Searchable local task history
+- Markdown, JSON, and extracted-asset downloads
 - Chinese and English UI
+- FastAPI endpoints and OpenAPI description
+- CLI, folder batching, watch-folder automation, and multi-model reports
 
-## Documentation
+## Quality and security
 
-- [Quick Start](QUICKSTART.md)
-- [OvisOCR2 deployment and configuration](OVISOCR2_DEPLOY.md)
-- [Manual Docker deployment](DOCKER_DEPLOY.md)
-- [API reference](api.md)
+- 237 Python tests and 47 frontend tests with 95%+ coverage gates
+- Dependency vulnerability audits in CI
+- Pinned container images, Actions, and model revisions
+- Isolated Web, Docker controller, and LibreOffice converter services
 
-Repository: [https://github.com/CHEN010325/paddleocr-local](https://github.com/CHEN010325/paddleocr-local)
+See [CHANGELOG](CHANGELOG.md), [SECURITY](SECURITY.md), and [SUPPORT](SUPPORT.md).
+
+Contributions, hardware reports, model adapters, and documentation improvements are welcome. The project is licensed under [Apache-2.0](LICENSE).
+
+> PaddleOCR Local is a community project and is not an official PaddlePaddle product. Product and model names belong to their respective owners.

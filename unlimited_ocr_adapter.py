@@ -7,7 +7,6 @@ import logging
 import os
 import queue
 import re
-import sys
 import tempfile
 import threading
 import time
@@ -85,6 +84,9 @@ SINGLE_NGRAM_WINDOW = int(os.getenv("UNLIMITED_OCR_SINGLE_NGRAM_WINDOW", "128"))
 MULTI_NGRAM_WINDOW = int(os.getenv("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024"))
 MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_MAX_TOKENS", "32768"))
 STREAM_HEARTBEAT_SECONDS = float(os.getenv("UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS", "20"))
+STREAM_RENDER_MIN_CHAR_DELTA = 24
+STREAM_RENDER_MAX_INTERVAL_SECONDS = 0.25
+STREAM_RENDER_BOUNDARY_SUFFIXES = (".", "\n", "。", "！", "？", "；", "，", "<|/det|>")
 TRANSFORMERS_SINGLE_BASE_SIZE = int(os.getenv("UNLIMITED_OCR_TRANSFORMERS_SINGLE_BASE_SIZE", "1024"))
 TRANSFORMERS_SINGLE_IMAGE_SIZE = int(os.getenv("UNLIMITED_OCR_TRANSFORMERS_SINGLE_IMAGE_SIZE", "640"))
 TRANSFORMERS_MPS_OOM_RETRY = parse_bool_env("UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY", "1")
@@ -106,6 +108,8 @@ DEGENERATION_CONSECUTIVE_REPEAT_THRESHOLD = int(
 )
 DEGENERATION_REPEAT_MAX_EXTRA_GAP = int(os.getenv("UNLIMITED_OCR_DEGENERATION_REPEAT_MAX_EXTRA_GAP", "3"))
 DEGENERATION_WINDOW_CHARS = int(os.getenv("UNLIMITED_OCR_DEGENERATION_WINDOW_CHARS", "4000"))
+DEGENERATION_RETRY_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_NGRAM_SIZE", "8"))
+DEGENERATION_RETRY_WINDOW = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_WINDOW", "512"))
 ENABLE_NO_REPEAT_PROCESSOR = os.getenv("UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR", "1").strip().lower() not in {
     "0",
     "false",
@@ -531,6 +535,22 @@ def should_emit_stream_progress(markdown: str, last_markdown: str, last_emit_siz
     return markdown.endswith((".", "\n", "\u3002", "\uff01", "\uff1f", "\uff1b", "\uff0c"))
 
 
+def should_render_stream_snapshot(
+    raw_text: str,
+    last_render_size: int,
+    last_render_at: float,
+    now: float | None = None,
+) -> bool:
+    if not raw_text:
+        return False
+    if len(raw_text) - last_render_size >= STREAM_RENDER_MIN_CHAR_DELTA:
+        return True
+    if raw_text.endswith(STREAM_RENDER_BOUNDARY_SUFFIXES):
+        return True
+    current = time.monotonic() if now is None else now
+    return current - last_render_at >= STREAM_RENDER_MAX_INTERVAL_SECONDS
+
+
 def extract_text_from_transformers_result(result: Any, output_dir: str) -> str:
     if isinstance(result, str) and result.strip():
         return result
@@ -759,7 +779,12 @@ async def stream_transformers_adapter_events(
             raw_text = extract_layout_text_from_transformers_stdout("".join(stdout_parts))
             if not raw_text:
                 continue
-            markdown, images = render_streaming_markdown(raw_text, image_pages, page_texts)
+            markdown, images = await asyncio.to_thread(
+                render_streaming_markdown,
+                raw_text,
+                image_pages,
+                page_texts,
+            )
             if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
                 fresh_images = unsent_images(images, sent_images)
                 last_markdown = markdown
@@ -767,7 +792,12 @@ async def stream_transformers_adapter_events(
                 event = {
                     "type": "progress",
                     "markdown": markdown,
-                    "source": streaming_source_position(raw_text, len(image_pages), page_texts),
+                    "source": await asyncio.to_thread(
+                        streaming_source_position,
+                        raw_text,
+                        len(image_pages),
+                        page_texts,
+                    ),
                 }
                 if fresh_images:
                     event["images"] = fresh_images
@@ -786,9 +816,18 @@ async def stream_transformers_adapter_events(
         result_text, images_config = result_holder.get("result", ("", {"backend": "transformers"}))
         raw_stdout = extract_layout_text_from_transformers_stdout(stdout_writer.text())
         raw_text = raw_stdout or result_text
+        result = await asyncio.to_thread(
+            build_adapter_response,
+            raw_text,
+            len(image_pages),
+            file_type,
+            images_config,
+            image_pages,
+            page_texts,
+        )
         yield {
             "type": "final",
-            "result": build_adapter_response(raw_text, len(image_pages), file_type, images_config, image_pages, page_texts),
+            "result": result,
         }
 
 
@@ -875,6 +914,45 @@ def adjust_sglang_payload_for_context_error(payload: dict, error_body: str) -> d
     return adjusted_payload
 
 
+def adjust_sglang_payload_for_degeneration(payload: dict, reason: str) -> dict | None:
+    """Retry one degenerate generation with a stricter no-repeat window."""
+    images_config = dict(payload.get("images_config") or {})
+    if images_config.get("degeneration_retry"):
+        return None
+    if not payload.get("custom_logit_processor"):
+        return None
+
+    custom_params = dict(payload.get("custom_params") or {})
+    current_ngram_size = int(custom_params.get("ngram_size") or NO_REPEAT_NGRAM_SIZE)
+    retry_ngram_size = max(2, min(current_ngram_size - 1, DEGENERATION_RETRY_NGRAM_SIZE))
+    if retry_ngram_size >= current_ngram_size:
+        return None
+
+    adjusted_payload = dict(payload)
+    custom_params["ngram_size"] = retry_ngram_size
+    custom_params["window_size"] = max(
+        int(custom_params.get("window_size") or 0),
+        DEGENERATION_RETRY_WINDOW,
+    )
+    adjusted_payload["custom_params"] = custom_params
+    images_config.update(
+        {
+            "degeneration_retry": True,
+            "degeneration_reason": str(reason),
+            "retry_no_repeat_ngram_size": retry_ngram_size,
+            "retry_no_repeat_window": custom_params["window_size"],
+        }
+    )
+    adjusted_payload["images_config"] = images_config
+    logger.warning(
+        "Retrying degenerate SGLang generation near %r with no-repeat ngram=%s window=%s",
+        reason,
+        retry_ngram_size,
+        custom_params["window_size"],
+    )
+    return adjusted_payload
+
+
 async def collect_streaming_response(response: httpx.Response) -> str:
     chunks: list[str] = []
     async for line in response.aiter_lines():
@@ -890,10 +968,15 @@ async def collect_streaming_response(response: httpx.Response) -> str:
             continue
         if delta:
             chunks.append(delta)
-            reason = detect_degenerate_repetition("".join(chunks))
+            _raw_text, reason = await asyncio.to_thread(inspect_sglang_chunks, chunks)
             if reason:
                 raise DegenerateGenerationError(reason)
     return "".join(chunks)
+
+
+def inspect_sglang_chunks(chunks: list[str]) -> tuple[str, str | None]:
+    raw_text = "".join(chunks)
+    return raw_text, detect_degenerate_repetition(raw_text)
 
 
 def parse_stream_delta(line: str) -> str:
@@ -914,10 +997,13 @@ async def generate_markdown(image_pages: list[bytes], file_type: int, backend: s
     if resolved_backend == "transformers":
         return await generate_transformers_markdown(image_pages, file_type)
 
-    payload = build_sglang_payload(image_pages, file_type)
+    payload = await asyncio.to_thread(build_sglang_payload, image_pages, file_type)
     timeout = REQUEST_TIMEOUT if REQUEST_TIMEOUT > 0 else None
+    context_adjusted = False
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        for attempt in range(2):
+        # At most one context-size adjustment and one degeneration retry.
+        # Keeping three total requests prevents an unbounded retry loop.
+        for attempt in range(3):
             async with client.stream(
                 "POST",
                 f"{SGLANG_URL}/v1/chat/completions",
@@ -926,12 +1012,26 @@ async def generate_markdown(image_pages: list[bytes], file_type: int, backend: s
             ) as response:
                 if response.status_code != 200:
                     body = (await response.aread()).decode("utf-8", errors="replace")
-                    adjusted_payload = adjust_sglang_payload_for_context_error(payload, body)
-                    if attempt == 0 and adjusted_payload:
+                    adjusted_payload = None if context_adjusted else adjust_sglang_payload_for_context_error(payload, body)
+                    if adjusted_payload and attempt < 2:
                         payload = adjusted_payload
+                        context_adjusted = True
                         continue
                     raise HTTPException(status_code=response.status_code, detail=f"Unlimited-OCR upstream error: {body}")
-                text = await collect_streaming_response(response)
+                try:
+                    text = await collect_streaming_response(response)
+                except DegenerateGenerationError as err:
+                    adjusted_payload = adjust_sglang_payload_for_degeneration(payload, str(err))
+                    if adjusted_payload and attempt < 2:
+                        payload = adjusted_payload
+                        continue
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "Unlimited-OCR generation remained repetitive after the guarded retry "
+                            f"near '{err}'. Try the Transformers backend for this document."
+                        ),
+                    ) from err
                 return text, payload.get("images_config", {})
     raise HTTPException(status_code=500, detail="Unlimited-OCR SGLang request failed before streaming.")
 
@@ -1367,57 +1467,131 @@ async def stream_sglang_payload_events(
     page_texts: list[str] | None = None,
 ):
     timeout = REQUEST_TIMEOUT if REQUEST_TIMEOUT > 0 else None
-    raw_chunks: list[str] = []
-    last_markdown = ""
-    last_emit_size = 0
-    sent_images: dict[str, str] = {}
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        async with client.stream(
-            "POST",
-            f"{SGLANG_URL}/v1/chat/completions",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        ) as response:
-            if response.status_code != 200:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                yield {"type": "error", "detail": f"Unlimited-OCR upstream error: {body}"}
-                return
-            async for line in response.aiter_lines():
-                delta = parse_stream_delta(line)
-                if not delta:
-                    continue
-                raw_chunks.append(delta)
-                raw_text = "".join(raw_chunks)
-                repetition = detect_degenerate_repetition(raw_text)
-                if repetition:
-                    yield {
-                        "type": "error",
-                        "detail": (
-                            "Unlimited-OCR generation became repetitive "
-                            f"near '{repetition}'. Try a smaller PDF batch size, such as 5 pages, "
-                            "or use the Transformers backend for this document."
-                        ),
-                    }
-                    return
-                markdown, images = render_streaming_markdown(raw_text, image_pages, page_texts)
-                if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
-                    fresh_images = unsent_images(images, sent_images)
-                    last_markdown = markdown
-                    last_emit_size = len(markdown)
-                    event = {
-                        "type": "progress",
-                        "markdown": markdown,
-                        "source": streaming_source_position(raw_text, len(image_pages), page_texts),
-                    }
-                    if fresh_images:
-                        event["images"] = fresh_images
-                    yield event
+    images_config = payload.get("images_config") or {}
+    context_adjusted = "max_tokens_adjusted_from" in images_config
 
-    raw_text = "".join(raw_chunks)
-    yield {
-        "type": "final",
-        "result": build_adapter_response(raw_text, len(image_pages), file_type, payload.get("images_config", {}), image_pages, page_texts),
-    }
+    # Retrying recursively from inside client.stream() keeps the previous
+    # response (and its generation) alive while the next request starts.  Keep
+    # all retries in one bounded state machine so every response and client has
+    # exited before the next attempt can acquire GPU work.
+    for attempt in range(3):
+        raw_chunks: list[str] = []
+        last_markdown = ""
+        last_emit_size = 0
+        last_render_size = 0
+        last_render_at = time.monotonic()
+        sent_images: dict[str, str] = {}
+        retry_payload: dict | None = None
+        terminal_error: dict | None = None
+        response_completed = False
+
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            async with client.stream(
+                "POST",
+                f"{SGLANG_URL}/v1/chat/completions",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                if response.status_code != 200:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    adjusted_payload = (
+                        None
+                        if context_adjusted
+                        else adjust_sglang_payload_for_context_error(payload, body)
+                    )
+                    if adjusted_payload and attempt < 2:
+                        retry_payload = adjusted_payload
+                        context_adjusted = True
+                    else:
+                        terminal_error = {
+                            "type": "error",
+                            "detail": f"Unlimited-OCR upstream error: {body}",
+                        }
+                else:
+                    async for line in response.aiter_lines():
+                        delta = parse_stream_delta(line)
+                        if not delta:
+                            continue
+                        raw_chunks.append(delta)
+                        raw_text, repetition = await asyncio.to_thread(
+                            inspect_sglang_chunks,
+                            raw_chunks,
+                        )
+                        if repetition:
+                            adjusted_payload = adjust_sglang_payload_for_degeneration(payload, repetition)
+                            if adjusted_payload and attempt < 2:
+                                retry_payload = adjusted_payload
+                            else:
+                                terminal_error = {
+                                    "type": "error",
+                                    "detail": (
+                                        "Unlimited-OCR generation remained repetitive after the guarded retry "
+                                        f"near '{repetition}'. Try a smaller PDF batch size, such as 5 pages, "
+                                        "or use the Transformers backend for this document."
+                                    ),
+                                }
+                            break
+                        now = time.monotonic()
+                        if not should_render_stream_snapshot(
+                            raw_text,
+                            last_render_size,
+                            last_render_at,
+                            now,
+                        ):
+                            continue
+                        markdown, images = await asyncio.to_thread(
+                            render_streaming_markdown,
+                            raw_text,
+                            image_pages,
+                            page_texts,
+                        )
+                        last_render_size = len(raw_text)
+                        last_render_at = time.monotonic()
+                        if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
+                            fresh_images = unsent_images(images, sent_images)
+                            last_markdown = markdown
+                            last_emit_size = len(markdown)
+                            event = {
+                                "type": "progress",
+                                "markdown": markdown,
+                                "source": await asyncio.to_thread(
+                                    streaming_source_position,
+                                    raw_text,
+                                    len(image_pages),
+                                    page_texts,
+                                ),
+                            }
+                            if fresh_images:
+                                event["images"] = fresh_images
+                            yield event
+                    else:
+                        response_completed = True
+
+        # Both nested async contexts are closed before any retry is issued.
+        if retry_payload is not None:
+            payload = retry_payload
+            continue
+        if terminal_error is not None:
+            yield terminal_error
+            return
+        if response_completed:
+            raw_text = await asyncio.to_thread("".join, raw_chunks)
+            result = await asyncio.to_thread(
+                build_adapter_response,
+                raw_text,
+                len(image_pages),
+                file_type,
+                payload.get("images_config", {}),
+                image_pages,
+                page_texts,
+            )
+            yield {
+                "type": "final",
+                "result": result,
+            }
+            return
+
+    yield {"type": "error", "detail": "Unlimited-OCR SGLang retry limit was exhausted."}
 
 
 async def stream_adapter_events(
@@ -1432,65 +1606,15 @@ async def stream_adapter_events(
             yield event
         return
 
-    payload = build_sglang_payload(image_pages, file_type)
-    timeout = REQUEST_TIMEOUT if REQUEST_TIMEOUT > 0 else None
-    raw_chunks: list[str] = []
-    last_markdown = ""
-    last_emit_size = 0
-    sent_images: dict[str, str] = {}
+    payload = await asyncio.to_thread(build_sglang_payload, image_pages, file_type)
     try:
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            async with client.stream(
-                "POST",
-                f"{SGLANG_URL}/v1/chat/completions",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            ) as response:
-                if response.status_code != 200:
-                    body = (await response.aread()).decode("utf-8", errors="replace")
-                    adjusted_payload = adjust_sglang_payload_for_context_error(payload, body)
-                    if adjusted_payload:
-                        async for event in stream_sglang_payload_events(adjusted_payload, image_pages, file_type, page_texts):
-                            yield event
-                        return
-                    yield {"type": "error", "detail": f"Unlimited-OCR upstream error: {body}"}
-                    return
-                async for line in response.aiter_lines():
-                    delta = parse_stream_delta(line)
-                    if not delta:
-                        continue
-                    raw_chunks.append(delta)
-                    raw_text = "".join(raw_chunks)
-                    repetition = detect_degenerate_repetition(raw_text)
-                    if repetition:
-                        yield {
-                            "type": "error",
-                            "detail": (
-                                "Unlimited-OCR generation became repetitive "
-                                f"near '{repetition}'. Try a smaller PDF batch size, such as 5 pages, "
-                                "or use the Transformers backend for this document."
-                            ),
-                        }
-                        return
-                    markdown, images = render_streaming_markdown(raw_text, image_pages, page_texts)
-                    if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
-                        fresh_images = unsent_images(images, sent_images)
-                        last_markdown = markdown
-                        last_emit_size = len(markdown)
-                        event = {
-                            "type": "progress",
-                            "markdown": markdown,
-                            "source": streaming_source_position(raw_text, len(image_pages), page_texts),
-                        }
-                        if fresh_images:
-                            event["images"] = fresh_images
-                        yield event
-
-        raw_text = "".join(raw_chunks)
-        yield {
-            "type": "final",
-            "result": build_adapter_response(raw_text, len(image_pages), file_type, payload.get("images_config", {}), image_pages, page_texts),
-        }
+        async for event in stream_sglang_payload_events(
+            payload,
+            image_pages,
+            file_type,
+            page_texts,
+        ):
+            yield event
     except DegenerateGenerationError as err:
         yield {
             "type": "error",
@@ -1507,7 +1631,8 @@ async def stream_adapter_events(
 
 async def ndjson_event_stream(events):
     async for event in events:
-        yield json.dumps(event, ensure_ascii=False) + "\n"
+        serialized = await asyncio.to_thread(json.dumps, event, ensure_ascii=False)
+        yield serialized + "\n"
 
 
 async def sglang_health_status() -> dict:
@@ -1582,19 +1707,35 @@ async def unload_transformers_backend():
 @app.post("/ocr")
 async def ocr(request: Request):
     file_bytes, file_type, backend = await read_input(request)
-    image_pages, page_texts = prepare_image_pages_and_texts(file_bytes, file_type)
+    image_pages, page_texts = await asyncio.to_thread(
+        prepare_image_pages_and_texts,
+        file_bytes,
+        file_type,
+    )
 
     if not image_pages:
         raise HTTPException(status_code=400, detail="No images were produced for OCR.")
 
     markdown, images_config = await generate_markdown(image_pages, file_type, backend)
-    return build_adapter_response(markdown, len(image_pages), file_type, images_config, image_pages, page_texts)
+    return await asyncio.to_thread(
+        build_adapter_response,
+        markdown,
+        len(image_pages),
+        file_type,
+        images_config,
+        image_pages,
+        page_texts,
+    )
 
 
 @app.post("/ocr/stream")
 async def ocr_stream(request: Request):
     file_bytes, file_type, backend = await read_input(request)
-    image_pages, page_texts = prepare_image_pages_and_texts(file_bytes, file_type)
+    image_pages, page_texts = await asyncio.to_thread(
+        prepare_image_pages_and_texts,
+        file_bytes,
+        file_type,
+    )
 
     if not image_pages:
         raise HTTPException(status_code=400, detail="No images were produced for OCR.")
@@ -1614,7 +1755,19 @@ async def ocr_multipart(
     file_bytes = await file.read()
     resolved_type = infer_file_type(file_bytes, fileType)
     resolved_backend = normalize_backend(backend, DEFAULT_BACKEND)
-    image_pages, page_texts = prepare_image_pages_and_texts(file_bytes, resolved_type)
+    image_pages, page_texts = await asyncio.to_thread(
+        prepare_image_pages_and_texts,
+        file_bytes,
+        resolved_type,
+    )
 
     markdown, images_config = await generate_markdown(image_pages, resolved_type, resolved_backend)
-    return build_adapter_response(markdown, len(image_pages), resolved_type, images_config, image_pages, page_texts)
+    return await asyncio.to_thread(
+        build_adapter_response,
+        markdown,
+        len(image_pages),
+        resolved_type,
+        images_config,
+        image_pages,
+        page_texts,
+    )

@@ -32,33 +32,47 @@ Windows one-click deployment:
 .\windows-one-click.bat -Model ovisocr2
 ```
 
-To prepare all four models while making OvisOCR2 the first active model:
+To prepare all five models while making OvisOCR2 the first active model:
 
 ```powershell
-.\windows-one-click.bat -Models all -ActiveModel ovisocr2
+.\windows-one-click.bat -Models all-five -ActiveModel ovisocr2
 ```
 
 Manual Compose deployment:
 
 ```powershell
-docker compose --env-file env.txt --profile ovisocr2 build ovisocr2-api pandocr-web
-docker compose --env-file env.txt --profile ovisocr2 up -d --no-start
-docker compose --env-file env.txt start pandocr-web
+$env:PANDOCR_ACTIVE_MODEL_ON_START = "ovisocr2"
+$env:PANDOCR_MODEL_CATALOG = "ovisocr2"
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 build ovisocr2-api pandocr-web
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web ovisocr2-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
-Open `http://localhost:8000`, select **OvisOCR2**, and confirm deployment if its runtime is shown as missing.
-The WebUI will create/start `ovisocr2-api`, wait for the model to load, and stop the other OCR model containers on a single-GPU setup.
+The model container is created in a stopped standby state. The controller starts OvisOCR2 only after the
+WebUI and its isolated support services are running. On every later switch it fully stops the old model
+and releases its GPU memory before starting the selected model, so two logical models never reside in GPU
+memory at the same time.
+Open `http://localhost:8000` and wait for **OvisOCR2** to become ready.
+The helper stores the controller credential only in Git-ignored `tmp/pandocr-runtime.env`. Run it in
+every new PowerShell session and keep the runtime file as the second `--env-file`; it reuses the same
+credential across recreations and rejects empty, placeholder, or conflicting process values.
 
-To deploy and start OvisOCR2 directly:
+To rebuild and recreate this deployment later, keep the same explicit profile and service list:
 
 ```powershell
 $env:PANDOCR_ACTIVE_MODEL_ON_START = "ovisocr2"
-docker compose --env-file env.txt --profile ovisocr2 up -d --build ovisocr2-api pandocr-web
-Remove-Item Env:PANDOCR_ACTIVE_MODEL_ON_START
+$env:PANDOCR_MODEL_CATALOG = "ovisocr2"
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 build ovisocr2-api pandocr-web
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web ovisocr2-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
-The one-command deployment temporarily overrides the WebUI startup model so it does not stop OvisOCR2
-while the adapter is loading.
+Do not use a bare `docker compose up`: every model is behind a profile, and the explicit standby-create
+sequence is what preserves the project-wide one-logical-model invariant.
 
 Check readiness:
 
@@ -80,6 +94,9 @@ Open `http://127.0.0.1:8000`. The model weights are cached in
 `model_cache_ovisocr2_macos/`, and the local adapter listens on `http://127.0.0.1:8084`.
 For a manual two-step installation, run `bash scripts/setup-macos-ovisocr2.sh` followed by
 `bash scripts/start-macos-ovisocr2.sh`.
+The compatibility start script delegates to the shared fail-closed macOS launcher with only OvisOCR2
+enabled. It stops and verifies any previously selected model before starting OvisOCR2; it no longer
+starts an adapter or WebUI process directly.
 Stop both processes with:
 
 ```bash

@@ -74,7 +74,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务、WebUI 及两个隔离支持服务。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready，避免单 GPU 同时加载多个模型。
+脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务、WebUI 及两个隔离支持服务。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
 
 只做预检、不启动服务：
 
@@ -121,7 +121,7 @@ WebUI 会在模型启动前通过一个短生命周期的 `nvidia-smi` 容器读
 | --- | ---: | --- |
 | PaddleOCR-VL 1.6 | 11264 MiB（12 GB 级别） | `PANDOCR_VLLM_MIN_REQUIRED_MIB=6656`、`PANDOCR_VLLM_RESERVE_MIB=512`、并发 1 |
 | PP-OCRv6 | 4096 MiB | `PANDOCR_MAX_CONCURRENT_OCR=1` |
-| Unlimited-OCR | 7680 MiB | 优先 `UNLIMITED_OCR_BACKEND=transformers`、`UNLIMITED_OCR_MAX_TOKENS=8192` |
+| Unlimited-OCR | 7680 MiB | RTX 50 / Blackwell 使用 CUDA 12.9.1 的 `sglang`；其他显卡可选 `transformers`，并设置 `UNLIMITED_OCR_MAX_TOKENS=8192` |
 | OvisOCR2 | 7680 MiB | `OVISOCR2_KV_CACHE_MEMORY_MB=256`、`OVISOCR2_MAX_TOKENS=4096` |
 | HPD-Parsing | 7680 MiB | `HPD_PARSING_GPU_MEMORY_TARGET_MIB=6144`、`HPD_PARSING_MAX_MODEL_LEN=8192`、`HPD_PARSING_MAX_TOKENS=4096` |
 
@@ -132,8 +132,10 @@ WebUI 会在模型启动前通过一个短生命周期的 `nvidia-smi` 容器读
 ### 2. 拉取并构建
 
 ```powershell
-docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
-docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl pull paddleocr-vlm-server paddleocr-vl-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile pp-ocrv6 build paddleocr-ocr-api pandocr-web pandocr-office-converter
 ```
 
 `pandocr-web` 提供 WebUI 和 FastAPI 代理，`pandocr-office-converter` 负责 Office 转 PDF，`pandocr-controller` 负责模型切换；PaddleOCR-VL 由官方 `paddleocr-vl-api` 和 `paddleocr-vlm-server` 镜像提供，PP-OCRv6 由本地 `paddleocr-ocr-api` 镜像提供。
@@ -141,23 +143,25 @@ docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
 ### 3. 启动服务
 
 ```powershell
-docker compose --env-file env.txt up -d --no-start
-docker compose --env-file env.txt start pandocr-web
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
-首次启动默认模型会加载权重，可能需要几分钟。单 GPU 部署默认只热加载 `PaddleOCR-VL 1.6`；切到 `PP-OCRv6` 时，WebUI 会先停止 VL 相关容器，再启动 PP-OCRv6 容器。
+`prepare-runtime-env.ps1` 只把随机 controller token 写入已忽略的 `tmp/pandocr-runtime.env`，不会把密钥写入可跟踪的 `env.txt` / `env.docker`。后续即使换一个 PowerShell 窗口或只重建 Web/控制器，也必须重新执行 helper 并同时传入两个 `--env-file`；helper 会复用原 token，并拒绝空值、占位值或与已持久 token 不同的进程环境变量。
+
+第一条启动命令只创建两个核心模型的待机容器，不启动模型；控制器启动后才按 `PANDOCR_ACTIVE_MODEL_ON_START` 加载一个模型。不要改成无 profile、无服务白名单的裸 `docker compose up`。首次启动默认模型会加载权重，可能需要几分钟。切到 `PP-OCRv6` 时，WebUI 会先完整停止 VL 相关容器并确认显存释放，再启动 PP-OCRv6 容器；两者不会并行驻留显存。
 
 ### 4. 验证
 
 ```powershell
-docker compose --env-file env.txt ps
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile "*" ps
 curl http://localhost:8000/api/models
 curl http://localhost:8000/api/model-runtime
 curl http://localhost:8081/health
 ./test-connection.sh env.txt
 ```
 
-实际容器数量取决于已部署模型和启用的 Compose profile。单 GPU 环境中，`pandocr-web`、两个隔离支持服务与当前活跃模型处于 running/healthy，其他已创建模型处于 created/exited/standby 均属正常。可能出现的模型服务包括：
+实际容器数量取决于已部署模型和启用的 Compose profile。单 GPU 环境中，`pandocr-web`、两个隔离支持服务与当前活跃模型处于 running/healthy，其他已创建模型必须处于 created/exited/stopped，不占用显存。可能出现的模型服务包括：
 
 - `paddleocr-vlm-server`
 - `paddleocr-vl-api`
@@ -203,10 +207,12 @@ unexpected status ... docker.m.daocloud.io ... 403 Forbidden
 说明 Docker 正在尝试从远端仓库拉取 `pandocr-web:latest`。这个镜像应该在本机从项目源码构建，不需要从 Docker Hub 拉取。请先更新到最新代码，然后使用：
 
 ```powershell
-docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
-docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
-docker compose --env-file env.txt up -d --no-start
-docker compose --env-file env.txt start pandocr-web
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl pull paddleocr-vlm-server paddleocr-vl-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile pp-ocrv6 build paddleocr-ocr-api pandocr-web pandocr-office-converter
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
 不要单独执行旧版本文档里的 `docker compose --env-file env.txt pull`。如果 403 出现在其他 Docker Hub 镜像上，再检查 Docker Desktop 的 registry mirror 配置，移除或更换返回 403 的 `docker.m.daocloud.io` 镜像源。
@@ -216,7 +222,9 @@ docker compose --env-file env.txt start pandocr-web
 `paddleocr-vlm-server` 是最底层的 VLM 推理服务。它没有健康起来时，后面的 `paddleocr-vl-api` 和 `pandocr-web` 都会被依赖关系卡住。先看它自己的日志：
 
 ```powershell
-docker compose --env-file env.txt logs --tail=200 paddleocr-vlm-server
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl logs --tail=200 paddleocr-vlm-server
 ```
 
 Issue #7（Ubuntu 24、RTX 4070 Laptop 8 GB）走的是 PaddleOCR-VL 启动链路，不是 HPD-Parsing。该显卡低于官方当前验证过的 12 GB 最低配置，当前版本会在启动前给出可运行模型建议。PaddleOCR-VL 的保护值为：
@@ -238,18 +246,22 @@ docker logs --tail 200 pandocr-web
 如果你使用 RTX 30/40 系列，命令里的 `env.txt` 要换成 `env.docker`：
 
 ```powershell
-docker compose --env-file env.docker pull paddleocr-vlm-server paddleocr-vl-api
-docker compose --env-file env.docker build paddleocr-ocr-api pandocr-web
-docker compose --env-file env.docker up -d --no-start
-docker compose --env-file env.docker start pandocr-web
+$baseEnv = "env.docker"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl pull paddleocr-vlm-server paddleocr-vl-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile pp-ocrv6 build paddleocr-ocr-api pandocr-web pandocr-office-converter
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
 如果之前已经启动失败过，先清掉旧的 unhealthy 容器再重启：
 
 ```powershell
-docker compose --env-file env.txt down
-docker compose --env-file env.txt up -d --no-start --force-recreate
-docker compose --env-file env.txt start pandocr-web
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile "*" down
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile paddleocr-vl --profile pp-ocrv6 start pandocr-controller pandocr-office-converter pandocr-web
 ```
 
 首次启动 VLM 会加载模型，可能需要 10-15 分钟。若日志提示显存不足，请关闭占用 GPU 的程序，或在 `env.txt` / `env.docker` 中把 `PANDOCR_GPU_DEVICE_ID` 改成另一张空闲显卡的编号。
@@ -274,8 +286,12 @@ PADDLE_REQUEST_TIMEOUT=7200
 修改后重建或重启 `pandocr-web`：
 
 ```powershell
-docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-web
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv up -d --no-deps --force-recreate pandocr-controller pandocr-web
 ```
+
+即使是第一次从旧版升级、本机还没有 runtime env，这条命令也会让 Controller 和 Web 同时使用 helper 创建的持久 token；不要改回只重建 `pandocr-web` 的命令。
 
 ### 前端改动没有生效
 

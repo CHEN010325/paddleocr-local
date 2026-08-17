@@ -1,0 +1,63 @@
+name: Bug Report
+description: 报告可复现的部署、解析或界面错误
+title: "[Bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: 请先搜索已有 Issue，并删除日志中的 Token、文档内容和其他敏感信息。
+  - type: input
+    id: version
+    attributes:
+      label: 项目版本
+      description: Release、Commit SHA 或 `git rev-parse --short HEAD`
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options: [Windows + NVIDIA, Linux + NVIDIA, macOS Apple Silicon, CPU, Other]
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: 硬件
+      description: GPU/芯片、显存或统一内存
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: 模型与后端
+      placeholder: OvisOCR2 / MLX
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从干净启动开始，写出最短复现路径。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已搜索现有 Issue。
+          required: true
+        - label: 我已删除 Token、隐私文档内容和凭据。
+          required: true

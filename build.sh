@@ -26,12 +26,18 @@ VLM_BACKEND=vllm
 VLM_IMAGE_TAG_SUFFIX=latest-nvidia-gpu-sm120-offline
 VLM_IMAGE_DIGEST=@sha256:bffd525308facf5dba2f8eca44ab476704a0ae3bfdcba25f77655973e4c0a7ca
 PANDOCR_GPU_DEVICE_ID=0
+PANDOCR_APP_VERSION=0.2.0
+PANDOCR_GIT_COMMIT=
 PADDLEOCR_VL_MODEL_NAME=PaddleOCR-VL-1.6-0.9B
 PPOCR_V6_MODEL_NAME=PP-OCRv6_medium
 PANDOCR_MODEL_CONTROL=docker
 PANDOCR_MODEL_CONTROLLER_TOKEN=change-this-to-a-random-long-value
 PANDOCR_ACTIVE_MODEL_ON_START=paddleocr-vl-1.6
 PANDOCR_MODEL_SWITCH_TIMEOUT=1200
+PANDOCR_GPU_RELEASE_TIMEOUT=60
+PANDOCR_GPU_RELEASE_STABLE_SAMPLES=3
+PANDOCR_GPU_RELEASE_SAMPLE_INTERVAL_MS=500
+PANDOCR_GPU_RELEASE_TOLERANCE_MIB=128
 PADDLE_REQUEST_TIMEOUT=3600
 PANDOCR_CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
 PANDOCR_MAX_UPLOAD_MB=512
@@ -44,16 +50,20 @@ OVISOCR2_MODEL_REVISION=65c619d374b55d4152e85150fc1b003700bc1f0c
 EOF
 fi
 
+RUNTIME_ENV="$(bash ./scripts/prepare-runtime-env.sh env.txt tmp/pandocr-runtime.env)"
+unset PANDOCR_MODEL_CONTROLLER_TOKEN
+COMPOSE=(docker compose --env-file env.txt --env-file "$RUNTIME_ENV")
+
 echo "Pulling PaddleOCR-VL images..."
-docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
+"${COMPOSE[@]}" --profile paddleocr-vl pull paddleocr-vlm-server paddleocr-vl-api
 
 echo "Building local images..."
-docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web pandocr-office-converter
+"${COMPOSE[@]}" --profile pp-ocrv6 build paddleocr-ocr-api pandocr-web pandocr-office-converter
 
 echo "Build complete."
 echo ""
 echo "Next:"
-echo "  docker compose --env-file env.txt up -d --no-start"
-echo "  docker compose --env-file env.txt start pandocr-controller pandocr-office-converter pandocr-web"
-echo "  docker compose --env-file env.txt logs -f"
-echo "  docker compose --env-file env.txt down"
+echo "  ./deploy.sh"
+echo "  # deploy.sh creates both core profiles stopped, then lets the controller start exactly one model."
+echo "  docker compose --env-file env.txt --env-file tmp/pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 logs -f"
+echo "  docker compose --env-file env.txt --env-file tmp/pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 down"

@@ -1827,6 +1827,9 @@ def task_summary(task: dict) -> dict:
         "sourceUrl": task.get("sourceUrl"),
         "modelId": task.get("modelId"),
         "modelName": task.get("modelName"),
+        "comparisonGroupId": task.get("comparisonGroupId"),
+        "comparisonSourceName": task.get("comparisonSourceName"),
+        "benchmark": task.get("benchmark"),
         "error": task.get("error"),
         "completedPages": completed_pages,
         "batchCount": len(batches),
@@ -2029,6 +2032,19 @@ def extract_pdf_pages(source_path: Path, start_page: int, end_page: int) -> byte
     return output.getvalue()
 
 
+def clone_task_source_file(source_task_id: str, target_task_id: str) -> int:
+    """Copy a persisted source locally for an independent comparison task."""
+    source_path = task_source_path(source_task_id)
+    if not source_path.exists():
+        raise FileNotFoundError("Task source not found")
+    target_path = task_source_path(target_task_id)
+    if target_path.exists():
+        raise FileExistsError("Target task source already exists")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+    return target_path.stat().st_size
+
+
 @app.post("/api/tasks/{task_id}/source")
 async def upload_task_source(task_id: str, file: UploadFile = File(...)):
     """Persist the original uploaded source outside task.json."""
@@ -2064,6 +2080,23 @@ async def get_task_source(task_id: str):
             pass
 
     return FileResponse(source_path, media_type=media_type, filename=filename)
+
+
+@app.post("/api/tasks/{source_task_id}/clone-source/{target_task_id}")
+async def clone_task_source(source_task_id: str, target_task_id: str):
+    """Clone a task source without sending a large local document through the browser again."""
+    if source_task_id == target_task_id:
+        raise HTTPException(status_code=400, detail="Source and target task ids must differ")
+    try:
+        size = await run_in_threadpool(clone_task_source_file, source_task_id, target_task_id)
+    except FileNotFoundError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except FileExistsError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except OSError as err:
+        logger.exception("Failed to clone task source")
+        raise HTTPException(status_code=500, detail=f"Failed to clone task source: {err}") from err
+    return {"ok": True, "url": task_source_url(target_task_id), "size": size}
 
 
 @app.get("/api/tasks/{task_id}/source/pages")
@@ -2229,6 +2262,7 @@ async def convert_to_pdf(file: UploadFile = File(...)):
 
 class OCRRequest(BaseModel):
     image: Optional[str] = None
+    modelId: Optional[str] = None
     fileType: Optional[int] = None
     useLayoutDetection: bool = True
     useDocUnwarping: bool = False
@@ -2307,6 +2341,7 @@ async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
 
         file_bytes = await read_upload_bytes(upload, MAX_REQUEST_BYTES)
         ocr_request = OCRRequest(
+            modelId=parse_optional_string(form.get("modelId")),
             fileType=parse_optional_int(form.get("fileType")),
             useLayoutDetection=parse_bool(form.get("useLayoutDetection"), True),
             useDocUnwarping=parse_bool(form.get("useDocUnwarping"), False),
@@ -2891,6 +2926,32 @@ def validate_proxy_input_size(raw_input: RawOCRInput) -> int:
         max_mb = MAX_REQUEST_BYTES / 1024 / 1024
         raise HTTPException(status_code=413, detail=f"OCR input is too large. Max upload size is {max_mb:.0f} MB.")
     return len(base64_data)
+
+
+@app.post("/api/parse")
+async def parse_with_selected_model(request: Request):
+    """Stable model-agnostic OCR endpoint selected by the modelId field."""
+    try:
+        ocr_request, raw_input = await parse_ocr_input(request)
+        model_id = ocr_request.modelId or DEFAULT_RUNTIME_MODEL_ID
+        validate_proxy_input_size(raw_input)
+        runners = {
+            "paddleocr-vl-1.6": run_ocr_request,
+            "pp-ocrv6": run_ppocrv6_request,
+            "unlimited-ocr": run_unlimited_ocr_request,
+            "ovisocr2": run_ovisocr2_request,
+            "hpd-parsing": run_hpd_parsing_request,
+        }
+        runner = runners.get(model_id)
+        if runner is None or model_id not in MODEL_CATALOG_IDS:
+            raise HTTPException(status_code=400, detail=f"Unknown or disabled modelId: {model_id}")
+        logger.info("Received unified OCR request for model %s", model_id)
+        return await runner(ocr_request, raw_input)
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.exception("Unified OCR endpoint error")
+        raise HTTPException(status_code=500, detail=str(err)) from err
 
 
 @app.post("/api/paddleocr-vl-1.6")

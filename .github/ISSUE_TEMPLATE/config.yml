@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/CHEN010325/paddleocr-local/security/policy
+    about: 安全漏洞请按安全策略私下报告，不要创建公开 Issue。

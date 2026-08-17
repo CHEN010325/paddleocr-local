@@ -1,3 +1,26 @@
+# PaddleOCR Local 统一接口
+
+推荐新集成使用 `POST /api/parse`，在 multipart 表单中通过 `modelId` 选择模型：
+
+```bash
+curl http://127.0.0.1:8000/api/parse \
+  -H "Authorization: Bearer $PANDOCR_API_TOKEN" \
+  -F "modelId=pp-ocrv6" \
+  -F "fileType=0" \
+  -F "file=@document.pdf"
+```
+
+可用模型和对应状态：
+
+```bash
+curl http://127.0.0.1:8000/api/models
+curl http://127.0.0.1:8000/api/model-runtime
+```
+
+接口只调用已经启用并就绪的模型；部署和启动可通过 WebUI、CLI 或 `/api/model-runtime/deploy`、`/api/model-runtime/switch` 完成。完整 OpenAPI 快照见 `webui-openapi.json`，运行服务后也可访问 `/docs`。
+
+## PaddleOCR-VL 上游参数参考
+
 以下是服务化部署的 API 参考与多语言服务调用示例：
 
 <details open=""><summary>API 参考</summary>

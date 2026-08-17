@@ -20,6 +20,7 @@ step() {
 step "Checking Python syntax"
 "$PYTHON" -m py_compile \
   server.py \
+  pandocr_cli.py \
   controller.py \
   office_converter.py \
   hpd_parsing_adapter.py \

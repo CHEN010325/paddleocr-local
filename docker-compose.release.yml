@@ -1,0 +1,20 @@
+services:
+  pandocr-controller:
+    build: !reset null
+    image: ghcr.io/chen010325/paddleocr-local-web:${PANDOCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  pandocr-office-converter:
+    build: !reset null
+    image: ghcr.io/chen010325/paddleocr-local-office-converter:${PANDOCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  hpd-parsing-api:
+    build: !reset null
+    image: ghcr.io/chen010325/paddleocr-local-hpd-parsing-adapter:${PANDOCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  pandocr-web:
+    build: !reset null
+    image: ghcr.io/chen010325/paddleocr-local-web:${PANDOCR_IMAGE_TAG:-latest}
+    pull_policy: always

@@ -71,6 +71,7 @@ const sourcePdfCache = new Map();
 const sourceBytesCache = new Map();
 const linkedLayoutBlockByElement = new WeakMap();
 let linkedLayoutEntries = [];
+const comparisonGroupsLoading = new Set();
 const i18nTextSources = new WeakMap();
 const i18nAttributeSources = new WeakMap();
 const I18N_ATTRIBUTES = ['title', 'placeholder', 'aria-label'];
@@ -112,10 +113,18 @@ const els = {
     resetZoomBtn: document.getElementById('reset-zoom-btn'),
     resultTitle: document.getElementById('result-title'),
     startBtn: document.getElementById('start-btn'),
+    compareBtn: document.getElementById('compare-btn'),
+    editBtn: document.getElementById('edit-btn'),
     copyBtn: document.getElementById('copy-btn'),
     downloadBtn: document.getElementById('download-btn'),
     markdownView: document.getElementById('markdown-view'),
     jsonView: document.getElementById('json-view'),
+    comparisonView: document.getElementById('comparison-view'),
+    comparisonTab: document.querySelector('.comparison-tab'),
+    compareDialog: document.getElementById('compare-dialog'),
+    compareForm: document.getElementById('compare-form'),
+    compareModelList: document.getElementById('compare-model-list'),
+    compareStartBtn: document.getElementById('compare-start-btn'),
     chartRecognitionSwitch: document.getElementById('chart-recognition-switch'),
     docUnwarpingSwitch: document.getElementById('doc-unwarping-switch'),
     docOrientationSwitch: document.getElementById('doc-orientation-switch'),
@@ -128,7 +137,7 @@ const els = {
     taskTemplate: document.getElementById('task-item-template')
 };
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initializeApp() {
     pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.min.mjs';
     initLanguage();
     initPdfBatchSizeSetting();
@@ -141,7 +150,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         await selectTask(tasks[0].id);
     }
     applyLanguage(document.body);
-});
+}
+
+if (globalThis.pdfjsLib) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeApp, { once: true });
+    } else {
+        initializeApp();
+    }
+}
 
 function setupEventListeners() {
     [els.browseBtn, els.newTaskBtn].forEach((button) => {
@@ -178,6 +195,8 @@ function setupEventListeners() {
     els.taskSearch.addEventListener('input', renderTaskList);
     els.clearHistoryBtn.addEventListener('click', clearHistory);
     els.startBtn.addEventListener('click', () => processActiveTask());
+    els.compareBtn?.addEventListener('click', openComparisonDialog);
+    els.editBtn?.addEventListener('click', startMarkdownEdit);
     els.copyBtn.addEventListener('click', copyActiveResult);
     els.downloadBtn.addEventListener('click', downloadActiveTask);
     els.prevPageBtn.addEventListener('click', () => changePdfPage(-1));
@@ -188,6 +207,7 @@ function setupEventListeners() {
     els.sourceViewer.addEventListener('scroll', handleSourceViewerScroll);
     els.markdownView.addEventListener('scroll', handlePPOCRMarkdownScroll);
     els.jsonView.addEventListener('scroll', renderVisibleJsonLines);
+    els.compareForm?.addEventListener('submit', handleComparisonSubmit);
     els.modelSelect?.addEventListener('change', handleModelSelectionChange);
     els.unlimitedBackendSelect?.addEventListener('change', handleUnlimitedOcrBackendChange);
     els.languageToggle?.addEventListener('click', toggleLanguage);
@@ -1133,7 +1153,8 @@ function dedupeTasks(taskItems) {
             task.sourceKind || '',
             task.size || 0,
             task.pageCount || 0,
-            task.modelId || ''
+            task.modelId || '',
+            task.comparisonGroupId || ''
         ].join('|');
         const existing = byFingerprint.get(fingerprint);
         if (!existing || (task.updatedAt || 0) > (existing.updatedAt || 0)) {
@@ -1675,10 +1696,16 @@ function resetResultScrollPositions() {
     els.markdownView.scrollLeft = 0;
     els.jsonView.scrollTop = 0;
     els.jsonView.scrollLeft = 0;
+    if (els.comparisonView) {
+        els.comparisonView.scrollTop = 0;
+        els.comparisonView.scrollLeft = 0;
+    }
 }
 
 function captureResultScrollState() {
-    const element = activeResultView === 'json' ? els.jsonView : els.markdownView;
+    const element = activeResultView === 'json'
+        ? els.jsonView
+        : (activeResultView === 'comparison' ? els.comparisonView : els.markdownView);
     const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
     const bottomOffset = maxScrollTop - element.scrollTop;
     return {
@@ -1708,8 +1735,10 @@ function restoreResultScrollState(state) {
 
 function showResultView(view) {
     const showJson = view === 'json';
-    els.markdownView.classList.toggle('hidden', showJson);
+    const showComparison = view === 'comparison';
+    els.markdownView.classList.toggle('hidden', showJson || showComparison);
     els.jsonView.classList.toggle('hidden', !showJson);
+    els.comparisonView?.classList.toggle('hidden', !showComparison);
 }
 
 function renderResultPane(task, { deferJson = false, preserveScroll = true } = {}) {
@@ -1722,6 +1751,7 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
         els.resultTitle.textContent = t('解析结果');
         els.markdownView.innerHTML = `<div class="empty-result">${escapeHtml(t('选择左侧任务，或上传一个新文件开始解析。'))}</div>`;
         els.jsonView.textContent = '';
+        if (els.comparisonView) els.comparisonView.textContent = '';
         return;
     }
 
@@ -1742,6 +1772,13 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
     if (activeResultView === 'json') {
         showResultView('json');
         renderJsonResult(task, { defer: deferJson, scrollState });
+        return;
+    }
+
+    if (activeResultView === 'comparison') {
+        showResultView('comparison');
+        renderComparisonResult(task);
+        restoreResultScrollState(scrollState);
         return;
     }
 
@@ -1858,6 +1895,15 @@ function updateResultViewLabels(task) {
     const markdownTab = document.querySelector('.view-tab[data-view="markdown"]');
     if (!markdownTab) return;
     markdownTab.textContent = isPPOCRVisualTask(task) ? t('文字识别') : t('文档解析');
+    const groupTasks = comparisonTasksFor(task);
+    const hasComparison = groupTasks.length > 1;
+    els.comparisonTab?.classList.toggle('hidden', !hasComparison);
+    if (!hasComparison && activeResultView === 'comparison') {
+        activeResultView = 'markdown';
+        document.querySelectorAll('.view-tab').forEach((tab) => {
+            tab.classList.toggle('active', tab.dataset.view === 'markdown');
+        });
+    }
 }
 
 function syncResultMode(task) {
@@ -2665,6 +2711,264 @@ async function processActiveTask() {
     await processTask(task, { confirmCompleted: true });
 }
 
+function openComparisonDialog() {
+    const task = getActiveTask();
+    if (!task || isProcessing || modelSwitchInFlight) return;
+    els.compareModelList.innerHTML = '';
+    availableModels.forEach((model) => {
+        const status = getModelRuntimeStatus(model.id);
+        const option = document.createElement('label');
+        option.className = 'compare-model-option';
+        const checked = model.id === task.modelId || model.id === selectedModelId;
+        option.innerHTML = `
+            <input type="checkbox" name="compare-model" value="${escapeHtml(model.id)}" ${checked ? 'checked' : ''}>
+            <span>${escapeHtml(modelDisplayName(model))}</span>
+            <small>${escapeHtml(status?.state === 'missing' ? t('未部署') : (status?.ready ? t('就绪') : t('待启动')))}</small>
+        `;
+        els.compareModelList.appendChild(option);
+    });
+    if (els.compareModelList.querySelectorAll('input:checked').length < 2) {
+        const fallback = els.compareModelList.querySelector('input:not(:checked)');
+        if (fallback) fallback.checked = true;
+    }
+    els.compareDialog?.showModal();
+}
+
+async function handleComparisonSubmit(event) {
+    event.preventDefault();
+    if (event.submitter?.value === 'cancel') {
+        els.compareDialog?.close();
+        return;
+    }
+    const modelIds = Array.from(els.compareModelList.querySelectorAll('input:checked')).map((input) => input.value);
+    if (modelIds.length < 2) {
+        alert(t('请至少选择两个模型。'));
+        return;
+    }
+    const sourceTask = getActiveTask();
+    if (!sourceTask) return;
+    els.compareDialog?.close();
+    await runModelComparison(sourceTask, modelIds);
+}
+
+async function cloneTaskSource(sourceTaskId, targetTaskId) {
+    const response = await apiFetch(
+        `${API_BASE}/tasks/${encodeURIComponent(sourceTaskId)}/clone-source/${encodeURIComponent(targetTaskId)}`,
+        { method: 'POST' }
+    );
+    if (!response.ok) throw new Error(await responseErrorText(response));
+    const data = await response.json();
+    return data.url;
+}
+
+function comparisonTaskName(sourceTask, model) {
+    return `${sourceTask.name.replace(/\s·\s.+$/, '')} · ${modelShortName(model)}`;
+}
+
+async function createComparisonTask(sourceTask, model, groupId) {
+    const id = createId();
+    const sourceUrl = await cloneTaskSource(sourceTask.id, id);
+    const pageCount = Number(sourceTask.pageCount || 1);
+    const pdfBatchSize = Number(sourceTask.pdfBatchSize || getConfiguredPdfBatchSize());
+    const batches = sourceTask.sourceKind === 'image'
+        ? [{ id: createId(), label: formatPageLabel(1), fileType: 1, pageCount: 1, status: 'pending' }]
+        : createPdfBatchDescriptors(pageCount, pdfBatchSize);
+    const now = Date.now();
+    return {
+        id,
+        name: comparisonTaskName(sourceTask, model),
+        sourceKind: sourceTask.sourceKind,
+        originalName: sourceTask.originalName || sourceTask.name,
+        mimeType: sourceTask.mimeType,
+        size: sourceTask.size,
+        createdAt: now,
+        updatedAt: now,
+        status: 'pending',
+        pageCount,
+        pdfBatchSize,
+        sourceUrl,
+        thumbnail: sourceTask.thumbnail,
+        batches,
+        markdown: '',
+        images: {},
+        ocrResults: [],
+        modelId: model.id,
+        modelName: modelDisplayName(model),
+        modelEndpoint: model.endpoint,
+        comparisonGroupId: groupId,
+        comparisonSourceName: sourceTask.originalName || sourceTask.name
+    };
+}
+
+async function runModelComparison(sourceTask, modelIds) {
+    if (!sourceTask || isProcessing) return;
+    const groupId = `compare-${createId()}`;
+    const models = modelIds
+        .map((id) => availableModels.find((model) => model.id === id))
+        .filter(Boolean);
+    const comparisonTasks = [];
+    try {
+        for (const model of models) {
+            const task = await createComparisonTask(sourceTask, model, groupId);
+            comparisonTasks.push(task);
+            tasks.unshift(task);
+            await saveTask(task);
+            activeTaskId = task.id;
+            renderTaskList();
+            await selectTask(task.id);
+            await processTask(task, { confirmCompleted: false });
+        }
+    } catch (error) {
+        console.error(error);
+        alert(t('创建模型对比失败：{detail}', { detail: error.message || t('未知错误') }));
+    } finally {
+        const target = comparisonTasks[comparisonTasks.length - 1];
+        if (target) {
+            await selectTask(target.id);
+            activeResultView = 'comparison';
+            document.querySelectorAll('.view-tab').forEach((tab) => {
+                tab.classList.toggle('active', tab.dataset.view === 'comparison');
+            });
+            renderResultPane(target, { preserveScroll: false });
+            updateActionState(target);
+        }
+    }
+}
+
+function comparisonTasksFor(task) {
+    if (!task?.comparisonGroupId) return [];
+    return tasks
+        .filter((item) => item.comparisonGroupId === task.comparisonGroupId)
+        .sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
+}
+
+function formatDuration(durationMs) {
+    const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+function comparisonReportMarkdown(task) {
+    const groupTasks = comparisonTasksFor(task);
+    const sourceName = task?.comparisonSourceName || task?.originalName || task?.name || '';
+    const lines = [
+        `# ${t('多模型对比报告')}`,
+        '',
+        `- ${t('源文件')}: ${sourceName}`,
+        `- ${t('生成时间')}: ${new Date().toISOString()}`,
+        `- ${t('项目版本')}: ${document.documentElement.dataset.version || 'development'}`,
+        '',
+        `| ${t('模型')} | ${t('状态')} | ${t('页数')} | ${t('解析耗时')} | ${t('输出字符')} |`,
+        '| --- | --- | ---: | ---: | ---: |'
+    ];
+    groupTasks.forEach((item) => {
+        lines.push(`| ${item.modelName || item.modelId} | ${statusText(item)} | ${item.pageCount || 1} | ${formatDuration(item.benchmark?.durationMs)} | ${visibleTaskMarkdown(item).length} |`);
+    });
+    groupTasks.forEach((item) => {
+        lines.push('', `## ${item.modelName || item.modelId}`, '', visibleTaskMarkdown(item) || `> ${item.error || t('没有可用结果')}`);
+    });
+    return lines.join('\n');
+}
+
+function renderComparisonResult(task) {
+    if (!els.comparisonView) return;
+    const groupTasks = comparisonTasksFor(task);
+    if (groupTasks.length < 2) {
+        els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('当前任务没有多模型对比结果。'))}</div>`;
+        return;
+    }
+    const unloadedTasks = groupTasks.filter((item) => !isTaskDetailLoaded(item));
+    if (unloadedTasks.length) {
+        els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('正在加载对比结果...'))}</div>`;
+        loadComparisonGroupDetails(task.comparisonGroupId, unloadedTasks);
+        return;
+    }
+    const rows = groupTasks.map((item) => `
+        <tr>
+            <td>${escapeHtml(item.modelName || item.modelId)}</td>
+            <td class="comparison-status-${escapeHtml(item.status || 'pending')}">${escapeHtml(statusText(item))}</td>
+            <td>${item.pageCount || 1}</td>
+            <td>${escapeHtml(formatDuration(item.benchmark?.durationMs))}</td>
+            <td>${visibleTaskMarkdown(item).length.toLocaleString(languageLocale())}</td>
+        </tr>
+    `).join('');
+    const cards = groupTasks.map((item) => `
+        <article class="comparison-card">
+            <div class="comparison-card-header">
+                <strong>${escapeHtml(item.modelName || item.modelId)}</strong>
+                <span>${escapeHtml(statusText(item))}</span>
+            </div>
+            <pre>${escapeHtml(visibleTaskMarkdown(item) || item.error || t('没有可用结果'))}</pre>
+        </article>
+    `).join('');
+    els.comparisonView.innerHTML = `
+        <table class="comparison-summary">
+            <thead><tr><th>${escapeHtml(t('模型'))}</th><th>${escapeHtml(t('状态'))}</th><th>${escapeHtml(t('页数'))}</th><th>${escapeHtml(t('解析耗时'))}</th><th>${escapeHtml(t('输出字符'))}</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        <div class="comparison-grid">${cards}</div>
+    `;
+}
+
+async function loadComparisonGroupDetails(groupId, groupTasks) {
+    if (!groupId || comparisonGroupsLoading.has(groupId)) return;
+    comparisonGroupsLoading.add(groupId);
+    try {
+        const results = await Promise.all(groupTasks.map((item) => loadTaskFromServer(item.id)));
+        results.forEach(replaceTask);
+        const activeTask = getActiveTask();
+        if (activeTask?.comparisonGroupId === groupId && activeResultView === 'comparison') {
+            renderComparisonResult(activeTask);
+            updateActionState(activeTask);
+        }
+    } catch (error) {
+        console.error(error);
+        if (els.comparisonView) {
+            els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('加载对比结果失败：{detail}', { detail: error.message || t('未知错误') }))}</div>`;
+        }
+    } finally {
+        comparisonGroupsLoading.delete(groupId);
+    }
+}
+
+function startMarkdownEdit() {
+    const task = getActiveTask();
+    if (!task || isProcessing || !visibleTaskMarkdown(task) || activeResultView !== 'markdown') return;
+    const editor = document.createElement('textarea');
+    editor.className = 'markdown-editor';
+    editor.value = normalizeOCRMarkdown(visibleTaskMarkdown(task));
+    const shell = document.createElement('div');
+    shell.className = 'markdown-editor-shell';
+    const actions = document.createElement('div');
+    actions.className = 'markdown-editor-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'secondary-button';
+    cancel.textContent = t('取消');
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'primary-button';
+    save.textContent = t('保存');
+    cancel.addEventListener('click', () => {
+        resetResultRenderCache(task.id);
+        renderResultPane(task, { preserveScroll: false });
+    });
+    save.addEventListener('click', async () => {
+        task.markdown = editor.value;
+        task.manualEditedAt = Date.now();
+        task.updatedAt = Date.now();
+        await saveTask(task);
+        resetResultRenderCache(task.id);
+        renderResultPane(task, { preserveScroll: false });
+        updateActionState(task);
+    });
+    actions.append(cancel, save);
+    shell.append(editor, actions);
+    els.markdownView.replaceChildren(shell);
+    editor.focus();
+}
+
 async function processTask(task, { confirmCompleted = true } = {}) {
     if (!task || isProcessing) return;
     if (confirmCompleted && task.status === 'completed' && !confirm(t('这个任务已经解析完成，要重新解析吗？'))) return;
@@ -2677,6 +2981,16 @@ async function processTask(task, { confirmCompleted = true } = {}) {
     if (!modelReady) return;
 
     isProcessing = true;
+    const benchmarkStartedAt = Date.now();
+    const gpu = modelRuntime?.gpuPreflight?.gpus?.[0] || {};
+    task.benchmark = {
+        ...(task.benchmark || {}),
+        startedAt: benchmarkStartedAt,
+        modelId: targetModel.id,
+        gpuName: gpu.name || null,
+        gpuTotalMiB: Number(gpu.totalMiB || 0) || null,
+        gpuFreeMiBBefore: Number(gpu.freeMiB || 0) || null
+    };
     try {
         if (shouldRebuildPdfBatchPlan(task)) {
             rebuildPdfBatchPlan(task);
@@ -2751,10 +3065,13 @@ async function processTask(task, { confirmCompleted = true } = {}) {
         }
     } finally {
         isProcessing = false;
+        task.benchmark.completedAt = Date.now();
+        task.benchmark.durationMs = task.benchmark.completedAt - benchmarkStartedAt;
         task.updatedAt = Date.now();
         await saveTask(task, { includeResults: false });
         refreshTaskUi(task);
     }
+    return task.status === 'completed';
 }
 
 function shouldResumeTask(task) {
@@ -3216,6 +3533,19 @@ function updateActionState(task) {
         || isProcessing
         || modelStarting
         || (!modelReady && !canStartAfterSwitch && !canDeployMissingModel);
+    if (els.compareBtn) {
+        els.compareBtn.disabled = !task
+            || !isTaskDetailLoaded(task)
+            || isProcessing
+            || modelSwitchInFlight
+            || availableModels.length < 2;
+    }
+    if (els.editBtn) {
+        els.editBtn.disabled = !task
+            || isProcessing
+            || activeResultView !== 'markdown'
+            || !Boolean(visibleTaskMarkdown(task));
+    }
     updateCopyButtonState(task);
     els.downloadBtn.disabled = !hasResult;
     const startLabel = startButtonLabel(task);
@@ -3246,11 +3576,14 @@ function hasJsonResult(task) {
 
 function canCopyActiveResult(task) {
     if (activeResultView === 'json') return hasJsonResult(task);
+    if (activeResultView === 'comparison') return comparisonTasksFor(task).length > 1;
     return Boolean(visibleTaskMarkdown(task));
 }
 
 function copyButtonLabel() {
-    return activeResultView === 'json' ? t('复制 JSON') : t('复制 Markdown');
+    if (activeResultView === 'json') return t('复制 JSON');
+    if (activeResultView === 'comparison') return t('复制对比报告');
+    return t('复制 Markdown');
 }
 
 function updateCopyButtonState(task) {
@@ -3266,6 +3599,7 @@ function activeResultCopyText(task) {
         if (!hasJsonResult(task)) return '';
         return JSON.stringify(toOfficialJson(task), null, 2);
     }
+    if (activeResultView === 'comparison') return comparisonReportMarkdown(task);
     const markdown = visibleTaskMarkdown(task);
     return markdown ? normalizeOCRMarkdown(markdown) : '';
 }
@@ -3291,6 +3625,12 @@ async function downloadActiveTask() {
     if (activeResultView === 'json') {
         const json = JSON.stringify(toOfficialJson(task), null, 2);
         downloadBlob(new Blob([json], { type: 'application/json' }), safeDownloadName(task.name, 'json'));
+        return;
+    }
+
+    if (activeResultView === 'comparison') {
+        const report = comparisonReportMarkdown(task);
+        downloadBlob(new Blob([report], { type: 'text/markdown' }), safeDownloadName(task.comparisonSourceName || task.name, 'comparison.md'));
         return;
     }
 

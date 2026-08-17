@@ -93,6 +93,53 @@ class ServerTaskApiTests(unittest.TestCase):
         ids = [task["id"] for task in response.json()["tasks"]]
         self.assertLess(ids.index("task_sort_numeric"), ids.index("task_sort_iso"))
 
+    def test_task_source_can_be_cloned_for_comparison(self):
+        upload = self.client.post(
+            "/api/tasks/source_123/source",
+            files={"file": ("sample.pdf", b"%PDF-test", "application/pdf")},
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        clone = self.client.post("/api/tasks/source_123/clone-source/target_123")
+        self.assertEqual(clone.status_code, 200)
+        self.assertEqual(clone.json()["url"], "/api/tasks/target_123/source")
+        cloned_source = self.client.get(clone.json()["url"])
+        self.assertEqual(cloned_source.content, b"%PDF-test")
+
+        self.assertEqual(
+            self.client.post("/api/tasks/source_123/clone-source/target_123").status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.post("/api/tasks/missing_123/clone-source/other_123").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post("/api/tasks/source_123/clone-source/source_123").status_code,
+            400,
+        )
+
+    def test_unified_parse_endpoint_dispatches_by_model_id(self):
+        with (
+            patch.object(self.server, "MODEL_CATALOG_IDS", ["pp-ocrv6"]),
+            patch.object(self.server, "run_ppocrv6_request", new=AsyncMock(return_value={"markdown": "ok"})) as runner,
+        ):
+            response = self.client.post(
+                "/api/parse",
+                data={"modelId": "pp-ocrv6", "fileType": "1"},
+                files={"file": ("sample.png", b"image", "image/png")},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"markdown": "ok"})
+        runner.assert_awaited_once()
+
+        unknown = self.client.post(
+            "/api/parse",
+            data={"modelId": "unknown", "fileType": "1"},
+            files={"file": ("sample.png", b"image", "image/png")},
+        )
+        self.assertEqual(unknown.status_code, 400)
+
     def test_model_list_includes_vl_and_ppocrv6(self):
         response = self.client.get("/api/models")
         self.assertEqual(response.status_code, 200)

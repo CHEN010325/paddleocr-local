@@ -1,0 +1,58 @@
+name: Hardware Report
+description: 分享某个模型在你的硬件上的成功或失败结果
+title: "[Hardware] "
+labels: ["hardware", "community-report"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 项目版本 / Commit
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: 系统与架构
+      placeholder: Ubuntu 24.04 x86-64
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU/芯片与内存
+      placeholder: RTX 3060 12 GB
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: 驱动、CUDA、Docker
+  - type: input
+    id: model
+    attributes:
+      label: 模型、后端与关键参数
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: 结果
+      options: [启动并解析成功, 启动成功但解析失败, 启动失败]
+    validations:
+      required: true
+  - type: textarea
+    id: measurement
+    attributes:
+      label: 测量结果
+      description: 页数、耗时、峰值显存；没有测量的项目请留空，不要估算。
+  - type: textarea
+    id: notes
+    attributes:
+      label: 备注与脱敏日志
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 内容不含 Token、凭据或敏感文档数据。
+          required: true

@@ -260,6 +260,53 @@
         }
       }
     },
+    "/api/tasks/{source_task_id}/clone-source/{target_task_id}": {
+      "post": {
+        "summary": "Clone Task Source",
+        "description": "Clone a task source without sending a large local document through the browser again.",
+        "operationId": "clone_task_source_api_tasks__source_task_id__clone_source__target_task_id__post",
+        "parameters": [
+          {
+            "name": "source_task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Task Id"
+            }
+          },
+          {
+            "name": "target_task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/{task_id}/source/pages": {
       "get": {
         "summary": "Get Task Source Pages",
@@ -491,6 +538,23 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/parse": {
+      "post": {
+        "summary": "Parse With Selected Model",
+        "description": "Stable model-agnostic OCR endpoint selected by the modelId field.",
+        "operationId": "parse_with_selected_model_api_parse_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

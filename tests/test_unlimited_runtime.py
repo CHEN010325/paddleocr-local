@@ -724,6 +724,72 @@ class UnlimitedRuntimeTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_buffered_sglang_streams_yield_to_health_checks(self):
+        async def scenario():
+            lines = [
+                "data: " + json.dumps({"choices": [{"delta": {"content": "token "}}]})
+                for _ in range(64)
+            ]
+
+            collect_heartbeat_ran = False
+            collect_observations = []
+
+            async def collect_heartbeat():
+                nonlocal collect_heartbeat_ran
+                collect_heartbeat_ran = True
+
+            collect_task = asyncio.create_task(collect_heartbeat())
+
+            def observe_collect(_text):
+                collect_observations.append(collect_heartbeat_ran)
+                return None
+
+            with patch.object(
+                adapter, "detect_degenerate_repetition", side_effect=observe_collect
+            ):
+                text = await adapter.collect_streaming_response(StreamResponse(lines=lines))
+            await collect_task
+            self.assertTrue(text)
+            self.assertTrue(collect_observations)
+            self.assertTrue(collect_observations[0])
+
+            event_heartbeat_ran = False
+            event_observations = []
+
+            async def event_heartbeat():
+                nonlocal event_heartbeat_ran
+                event_heartbeat_ran = True
+
+            event_task = asyncio.create_task(event_heartbeat())
+
+            def observe_events(_text):
+                event_observations.append(event_heartbeat_ran)
+                return None
+
+            with patch.object(
+                adapter.httpx,
+                "AsyncClient",
+                return_value=FakeClient([StreamResponse(lines=lines)]),
+            ), patch.object(
+                adapter, "detect_degenerate_repetition", side_effect=observe_events
+            ), patch.object(
+                adapter, "render_streaming_markdown", return_value=("", {})
+            ), patch.object(
+                adapter, "should_emit_stream_progress", return_value=False
+            ):
+                events = [
+                    event
+                    async for event in adapter.stream_sglang_payload_events(
+                        {"images_config": {}}, [b"page"], 1
+                    )
+                ]
+            await event_task
+            self.assertEqual(events[-1]["type"], "final")
+            self.assertTrue(event_observations)
+            self.assertTrue(event_observations[0])
+
+        asyncio.run(scenario())
+
     def test_sglang_stream_retries_are_bounded_and_sequential(self):
         async def collect(events):
             return [event async for event in events]

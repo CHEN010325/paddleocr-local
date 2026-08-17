@@ -930,6 +930,9 @@ async def collect_streaming_response(response: httpx.Response) -> str:
             continue
         if delta:
             chunks.append(delta)
+            # Buffered HTTP chunks can arrive without yielding between lines.
+            # Let health checks and disconnect handling run before CPU parsing.
+            await asyncio.sleep(0)
             reason = detect_degenerate_repetition("".join(chunks))
             if reason:
                 raise DegenerateGenerationError(reason)
@@ -1468,6 +1471,9 @@ async def stream_sglang_payload_events(
                         if not delta:
                             continue
                         raw_chunks.append(delta)
+                        # Keep the adapter responsive when httpx drains several
+                        # already-buffered SSE lines without an I/O suspension.
+                        await asyncio.sleep(0)
                         raw_text = "".join(raw_chunks)
                         repetition = detect_degenerate_repetition(raw_text)
                         if repetition:

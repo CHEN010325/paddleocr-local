@@ -1112,12 +1112,16 @@ async function ensureModelRuntimeReadyForTask(task, model) {
 
 function updateActiveModelDisplay(task = null) {
     const selectedModel = getSelectedModel();
-    const activeModel = task ? getTaskActionModel(task) : selectedModel;
+    // The pane describes the result currently on screen, so keep its model
+    // attribution tied to the task even when the runtime has since switched
+    // to another model. Re-processing actions may still use the selected
+    // runtime model through getTaskActionModel().
+    const resultModel = task ? getTaskModel(task) : selectedModel;
     renderUnlimitedOcrBackendSelect();
     els.statusDot.className = modelRuntimeDotClass(selectedModel.id);
     els.statusText.textContent = modelRuntimeStatusText(selectedModel);
     els.statusText.title = modelRuntimeFailureDetail(selectedModel.id);
-    els.activeModelName.textContent = modelShortName(activeModel);
+    els.activeModelName.textContent = modelShortName(resultModel);
     renderGpuPreflightPanel();
 }
 

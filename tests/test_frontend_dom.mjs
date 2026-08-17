@@ -2613,6 +2613,32 @@ test('final seven branch decisions take their alternate paths', async () => {
 });
 
 
+test('completed result keeps its task model label after the runtime switches', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+
+    window.eval(`
+      availableModels.push({id:'hpd-parsing',label:'HPD-Parsing',endpoint:'/api/hpd-parsing'});
+      selectedModelId='hpd-parsing';
+      modelRuntime={
+        controlAvailable:true,
+        activeModelId:'hpd-parsing',
+        runningModelIds:['hpd-parsing'],
+        readyModelIds:['hpd-parsing'],
+        models:{
+          'paddleocr-vl-1.6':{ready:false,state:'stopped'},
+          'hpd-parsing':{ready:true,state:'running'}
+        }
+      };
+      updateActiveModelDisplay(getActiveTask());
+    `);
+
+    assert.equal(window.document.getElementById('active-model-name').textContent, 'PaddleOCR');
+    assert.match(window.document.getElementById('model-status-text').textContent, /HPD-Parsing/);
+    dom.window.close();
+});
+
+
 test('model comparison locks task deletion and history clearing in logic and UI', async () => {
     const { dom, window } = createBrowser();
     await boot(window);

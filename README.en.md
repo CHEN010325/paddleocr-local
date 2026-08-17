@@ -70,7 +70,7 @@ Then open <http://localhost:8000>. Each logical model is guarded by its own Comp
 
 ## Quality and security
 
-- 234 Python tests and 46 frontend tests with 95%+ coverage gates
+- 234 Python tests and 47 frontend tests with 95%+ coverage gates
 - Dependency vulnerability audits in CI
 - Pinned container images, Actions, and model revisions
 - Isolated Web, Docker controller, and LibreOffice converter services

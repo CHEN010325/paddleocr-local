@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -7,6 +8,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_tracked_gitlinks_have_gitmodules_paths_and_urls():
+    tracked = subprocess.run(
+        ["git", "ls-files", "--stage"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout.splitlines()
+    gitlinks = {
+        line.split(maxsplit=3)[3]
+        for line in tracked
+        if line.startswith("160000 ")
+    }
+    if not gitlinks:
+        return
+
+    gitmodules = ROOT / ".gitmodules"
+    assert gitmodules.is_file(), f"tracked gitlinks lack .gitmodules: {sorted(gitlinks)}"
+    configured_paths = set()
+    for block in re.findall(
+        r'^\[submodule "[^"]+"\]\s*\n(?P<body>.*?)(?=^\[|\Z)',
+        gitmodules.read_text(encoding="utf-8"),
+        re.MULTILINE | re.DOTALL,
+    ):
+        path = re.search(r"^\s*path\s*=\s*(.+?)\s*$", block, re.MULTILINE)
+        url = re.search(r"^\s*url\s*=\s*(.+?)\s*$", block, re.MULTILINE)
+        if path:
+            assert url and url.group(1).strip(), f"submodule path lacks a URL: {path.group(1)}"
+            configured_paths.add(path.group(1))
+    assert gitlinks <= configured_paths, (
+        f"tracked gitlinks lack .gitmodules path entries: {sorted(gitlinks - configured_paths)}"
+    )
 
 
 def compose_service_block(compose: str, service: str) -> str:

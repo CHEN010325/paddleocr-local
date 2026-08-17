@@ -2338,6 +2338,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 SAFE_API_METHODS = {"GET", "HEAD", "OPTIONS"}
+BROWSER_CODE_ASSET_PATHS = {
+    "/static/app.js",
+    "/static/bootstrap.mjs",
+    "/static/i18n.js",
+    "/static/index.html",
+    "/static/style.css",
+}
 
 
 def normalize_origin(value: str) -> str:
@@ -2390,6 +2397,11 @@ async def enforce_request_security(request: Request, call_next):
                 pass
 
     response = await call_next(request)
+    if request.url.path in BROWSER_CODE_ASSET_PATHS:
+        # Module imports can otherwise survive a normal browser reload after a
+        # container upgrade. Revalidate the small application assets so the UI
+        # and the running API always come from the same deployed revision.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")

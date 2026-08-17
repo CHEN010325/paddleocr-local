@@ -82,7 +82,7 @@ cp env.docker env.txt
 
 ## 项目质量
 
-- Python：234 项测试，覆盖率门禁 95%+
+- Python：235 项测试，覆盖率门禁 95%+
 - 前端：47 项测试，语句和分支覆盖率门禁 95%+
 - npm 与全部 Python 依赖清单进行漏洞扫描
 - Docker 镜像、Actions 和模型 revision 固定版本

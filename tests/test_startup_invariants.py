@@ -91,6 +91,26 @@ def test_windows_local_build_embeds_non_secret_version_metadata():
     assert "PANDOCR_MODEL_CONTROLLER_TOKEN" not in build_section
 
 
+def test_browser_entrypoint_revalidates_code_and_escapes_legacy_cache_keys():
+    index = read("static/index.html")
+    bootstrap = read("static/bootstrap.mjs")
+    server = read("server.py")
+
+    bootstrap_version = re.search(r"/static/bootstrap\.mjs\?v=(\d+)", index)
+    app_version = re.search(r"\./app\.js\?v=(\d+)", bootstrap)
+    assert bootstrap_version and int(bootstrap_version.group(1)) >= 3
+    assert app_version and int(app_version.group(1)) >= 101
+    for asset_path in (
+        "/static/app.js",
+        "/static/bootstrap.mjs",
+        "/static/i18n.js",
+        "/static/index.html",
+        "/static/style.css",
+    ):
+        assert f'"{asset_path}"' in server
+    assert 'response.headers["Cache-Control"] = "no-cache, must-revalidate"' in server
+
+
 def test_controller_healthcheck_expands_its_internal_token():
     compose = read("docker-compose.yml")
     controller = compose_service_block(compose, "pandocr-controller")

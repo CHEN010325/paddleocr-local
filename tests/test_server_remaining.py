@@ -250,7 +250,27 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.server, "API_TOKEN", "secret"):
             self.assertFalse(self.server.request_is_authenticated(Request(scope)))
 
-        self.assertEqual(self.client.get("/").status_code, 200)
+        root_response = self.client.get("/")
+        self.assertEqual(root_response.status_code, 200)
+        self.assertIn("no-cache", root_response.headers["cache-control"])
+        for asset_path in self.server.BROWSER_CODE_ASSET_PATHS:
+            asset_response = self.client.get(f"{asset_path}?cache-contract=1")
+            self.assertEqual(asset_response.status_code, 200, asset_path)
+            self.assertEqual(
+                asset_response.headers["cache-control"],
+                "no-cache, must-revalidate",
+                asset_path,
+            )
+        bootstrap_response = self.client.get("/static/bootstrap.mjs?v=3")
+        conditional_response = self.client.get(
+            "/static/bootstrap.mjs?v=3",
+            headers={"If-None-Match": bootstrap_response.headers["etag"]},
+        )
+        self.assertEqual(conditional_response.status_code, 304)
+        self.assertEqual(
+            conditional_response.headers["cache-control"],
+            "no-cache, must-revalidate",
+        )
         invalid_length = self.client.post(
             "/api/paddleocr-vl-1.6",
             content=b"{}",

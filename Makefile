@@ -1,4 +1,9 @@
-.PHONY: help doctor check build deploy up down restart logs test clean mac-one-click mac-setup mac-setup-mlx mac-setup-unlimited-ocr mac-up mac-up-mlx mac-up-unlimited-ocr mac-down mac-test mac-test-mlx mac-test-unlimited-ocr mac-logs
+.PHONY: help doctor check check-controller-token build deploy up down restart logs test clean mac-one-click mac-setup mac-setup-mlx mac-setup-unlimited-ocr mac-up mac-up-mlx mac-up-unlimited-ocr mac-down mac-test mac-test-mlx mac-test-unlimited-ocr mac-logs
+
+RUNTIME_ENV ?= tmp/pandocr-runtime.env
+COMPOSE_CORE = docker compose --env-file env.txt --env-file $(RUNTIME_ENV) --profile paddleocr-vl --profile pp-ocrv6
+COMPOSE_ALL = $(COMPOSE_CORE) --profile unlimited-ocr --profile ovisocr2 --profile hpd-parsing
+CORE_SERVICES = pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api
 
 # 默认目标
 help:
@@ -34,11 +39,14 @@ doctor:
 check:
 	bash scripts/check-local.sh
 
+check-controller-token:
+	@bash scripts/prepare-runtime-env.sh env.txt $(RUNTIME_ENV) >/dev/null
+
 # 构建镜像
-build:
+build: check-controller-token
 	@echo "🔨 构建 Docker 镜像..."
-	docker compose --env-file env.txt pull paddleocr-vlm-server paddleocr-vl-api
-	docker compose --env-file env.txt build paddleocr-ocr-api pandocr-web
+	$(COMPOSE_CORE) pull paddleocr-vlm-server paddleocr-vl-api
+	$(COMPOSE_CORE) build paddleocr-ocr-api pandocr-web pandocr-office-converter
 
 # 部署（构建 + 启动）
 deploy: build up
@@ -46,36 +54,35 @@ deploy: build up
 	@echo "访问地址: http://localhost:8000"
 
 # 启动服务
-up:
+up: check-controller-token
 	@echo "▶️  启动服务..."
-	docker compose --env-file env.txt up -d --no-start
-	docker compose --env-file env.txt stop pandocr-web paddleocr-vl-api paddleocr-vlm-server paddleocr-ocr-api > /dev/null 2>&1 || true
-	docker compose --env-file env.txt start pandocr-web
+	$(COMPOSE_CORE) up -d --no-start --force-recreate $(CORE_SERVICES)
+	$(COMPOSE_CORE) start pandocr-controller pandocr-office-converter pandocr-web
 	@echo "⏳ 等待服务就绪..."
 	@sleep 5
 	@make test
 
 # 停止服务
-down:
+down: check-controller-token
 	@echo "🛑 停止服务..."
-	docker compose --env-file env.txt down
+	$(COMPOSE_ALL) down
 
 # 重启服务
-restart:
+restart: check-controller-token
 	@echo "🔄 重启服务..."
-	docker compose --env-file env.txt restart pandocr-web
+	$(COMPOSE_CORE) restart pandocr-web
 
 # 查看日志
-logs:
-	docker compose --env-file env.txt logs -f
+logs: check-controller-token
+	$(COMPOSE_ALL) logs -f
 
 # 只查看前端日志
-logs-web:
-	docker compose --env-file env.txt logs -f pandocr-web
+logs-web: check-controller-token
+	$(COMPOSE_CORE) logs -f pandocr-web
 
 # 只查看 API 日志
-logs-api:
-	docker compose --env-file env.txt logs -f paddleocr-vl-api
+logs-api: check-controller-token
+	$(COMPOSE_CORE) logs -f paddleocr-vl-api
 
 # 测试连接
 test:
@@ -83,22 +90,22 @@ test:
 	@bash test-connection.sh
 
 # 清理资源
-clean:
+clean: check-controller-token
 	@echo "🧹 清理所有资源..."
-	docker compose --env-file env.txt down -v
+	$(COMPOSE_ALL) down -v
 	docker system prune -f
 
 # 查看服务状态
-status:
-	docker compose --env-file env.txt ps
+status: check-controller-token
+	$(COMPOSE_ALL) ps
 
 # 进入前端容器
-shell-web:
-	docker compose --env-file env.txt exec pandocr-web /bin/bash
+shell-web: check-controller-token
+	$(COMPOSE_CORE) exec pandocr-web /bin/bash
 
 # 进入 API 容器
-shell-api:
-	docker compose --env-file env.txt exec paddleocr-vl-api /bin/bash
+shell-api: check-controller-token
+	$(COMPOSE_CORE) exec paddleocr-vl-api /bin/bash
 
 # Apple Silicon 本地部署
 mac-one-click:
@@ -114,25 +121,25 @@ mac-setup-unlimited-ocr:
 	bash scripts/setup-macos-unlimited-ocr.sh
 
 mac-up:
-	bash scripts/start-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=1 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=0 PANDOCR_ENABLE_OVISOCR2=0 PANDOCR_ACTIVE_MODEL_ON_START=paddleocr-vl-1.6 PANDOCR_MODEL_CATALOG=paddleocr-vl-1.6 bash scripts/start-macos.sh
 
 mac-up-mlx:
-	PANDOCR_MACOS_BACKEND=mlx bash scripts/start-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=1 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=0 PANDOCR_ENABLE_OVISOCR2=0 PANDOCR_ACTIVE_MODEL_ON_START=paddleocr-vl-1.6 PANDOCR_MODEL_CATALOG=paddleocr-vl-1.6 PANDOCR_MACOS_BACKEND=mlx bash scripts/start-macos.sh
 
 mac-up-unlimited-ocr:
-	PANDOCR_ENABLE_UNLIMITED_OCR=1 PANDOCR_MACOS_BACKEND=mlx bash scripts/start-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=0 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=1 PANDOCR_ENABLE_OVISOCR2=0 PANDOCR_ACTIVE_MODEL_ON_START=unlimited-ocr PANDOCR_MODEL_CATALOG=unlimited-ocr PANDOCR_MACOS_BACKEND=mlx bash scripts/start-macos.sh
 
 mac-down:
 	bash scripts/stop-macos.sh
 
 mac-test:
-	bash scripts/test-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=1 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=0 PANDOCR_ENABLE_OVISOCR2=0 bash scripts/test-macos.sh
 
 mac-test-mlx:
-	PANDOCR_MACOS_BACKEND=mlx bash scripts/test-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=1 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=0 PANDOCR_ENABLE_OVISOCR2=0 PANDOCR_MACOS_BACKEND=mlx bash scripts/test-macos.sh
 
 mac-test-unlimited-ocr:
-	PANDOCR_ENABLE_UNLIMITED_OCR=1 PANDOCR_MACOS_BACKEND=mlx bash scripts/test-macos.sh
+	PANDOCR_ENABLE_PADDLEOCR_VL=0 PANDOCR_ENABLE_PPOCRV6=0 PANDOCR_ENABLE_UNLIMITED_OCR=1 PANDOCR_ENABLE_OVISOCR2=0 PANDOCR_MACOS_BACKEND=mlx bash scripts/test-macos.sh
 
 mac-logs:
 	tail -f logs/paddlex.log logs/pandocr-web.log logs/mlx-vlm.log logs/unlimited-ocr.log

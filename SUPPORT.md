@@ -11,8 +11,10 @@ Windows：
 
 ```powershell
 .\windows-one-click.bat -DryRun
-docker compose --env-file env.docker ps
-docker compose --env-file env.docker logs --tail=200
+$baseEnv = (Resolve-Path .\env.docker).Path
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile "*" ps
+docker compose --env-file $baseEnv --env-file $runtimeEnv --profile "*" logs --tail=200
 ```
 
 macOS：
@@ -26,9 +28,12 @@ Linux：
 
 ```bash
 ./scripts/doctor.sh
-docker compose --env-file env.docker ps
-docker compose --env-file env.docker logs --tail=200
+runtime_env="$(bash ./scripts/prepare-runtime-env.sh env.docker)"
+docker compose --env-file env.docker --env-file "$runtime_env" --profile "*" ps
+docker compose --env-file env.docker --env-file "$runtime_env" --profile "*" logs --tail=200
 ```
+
+helper 会复用 Git 已忽略的 `tmp/pandocr-runtime.env`，不会把 controller token 写入 `env.docker`。即使只查看状态或日志，也保留第二个 `--env-file`，避免复制命令用于后续重建时意外换密钥。
 
 ## 日志安全
 

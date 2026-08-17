@@ -961,6 +961,11 @@ svg {
     background: #edf4ff;
 }
 
+.drop-zone.input-locked {
+    cursor: not-allowed;
+    opacity: 0.62;
+}
+
 .drop-zone svg {
     width: 54px;
     height: 54px;

@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import builtins
 import importlib
 import io
 import json
@@ -19,6 +18,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from pypdf import PdfWriter
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 
 
 def response(status=200, *, payload=None, text=None):
@@ -804,6 +804,176 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
             ]
         self.assertIn("stream crashed", output[0])
 
+    async def test_streaming_response_releases_slot_once_for_all_response_exits(self):
+        scope = {
+            "type": "http",
+            "asgi": {"spec_version": "2.4"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/unlimited-ocr/stream",
+            "raw_path": b"/api/unlimited-ocr/stream",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 8000),
+        }
+
+        async def exercise(fail_on: str | None):
+            lease_id = f"lease-{fail_on or 'normal'}"
+            release_guard = self.server.OCRSlotReleaseGuard(lease_id)
+            body = self.server.stream_unlimited_ocr_events(
+                self.server.OCRRequest(fileType=1),
+                b"image",
+                lease_id,
+                release_guard,
+            )
+            response = self.server.OCRSlotStreamingResponse(
+                body,
+                release_guard=release_guard,
+                media_type="application/x-ndjson",
+            )
+            sent_messages = []
+            first_chunk_sent = asyncio.Event()
+
+            async def receive():
+                if fail_on == "receive-after-first-chunk":
+                    await first_chunk_sent.wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                sent_messages.append(message)
+                if fail_on == "before-first-chunk" and message["type"] == "http.response.start":
+                    raise OSError("client disconnected before response body")
+                if (
+                    fail_on == "after-first-chunk"
+                    and message["type"] == "http.response.body"
+                    and message.get("body")
+                ):
+                    raise OSError("client disconnected after first response chunk")
+                if (
+                    fail_on == "receive-after-first-chunk"
+                    and message["type"] == "http.response.body"
+                    and message.get("body")
+                ):
+                    first_chunk_sent.set()
+
+            class BlockingStream(FakeStream):
+                async def aiter_lines(self):
+                    yield '{"type":"progress","markdown":"ok"}'
+                    await asyncio.Event().wait()
+
+            controller_api = AsyncMock(return_value={})
+            semaphore = asyncio.Semaphore(0)
+            upstream_stream = (
+                BlockingStream(200)
+                if fail_on == "receive-after-first-chunk"
+                else FakeStream(
+                    200,
+                    lines=['{"type":"progress","markdown":"ok"}'],
+                )
+            )
+            upstream_client = MagicMock(
+                return_value=FakeClient(
+                    stream_response=upstream_stream
+                )
+            )
+            with (
+                patch.object(self.server, "MODEL_CONTROL_MODE", "remote"),
+                patch.object(self.server, "ocr_active_count", 1),
+                patch.object(self.server, "ocr_semaphore", semaphore),
+                patch.object(
+                    self.server,
+                    "controller_api_request",
+                    new=controller_api,
+                ),
+                patch.object(
+                    self.server.httpx,
+                    "AsyncClient",
+                    new=upstream_client,
+                ),
+            ):
+                case_scope = dict(scope)
+                if fail_on == "receive-after-first-chunk":
+                    case_scope["asgi"] = {"spec_version": "2.3"}
+                    await response(case_scope, receive, send)
+                elif fail_on:
+                    with self.assertRaises(ClientDisconnect):
+                        await response(case_scope, receive, send)
+                else:
+                    await response(case_scope, receive, send)
+
+                controller_api.assert_awaited_once_with(
+                    "DELETE", f"/ocr-leases/{lease_id}"
+                )
+                self.assertEqual(self.server.ocr_active_count, 0)
+                self.assertEqual(semaphore._value, 1)
+
+            if fail_on == "before-first-chunk":
+                upstream_client.assert_not_called()
+            else:
+                upstream_client.assert_called_once()
+            return sent_messages
+
+        await exercise("before-first-chunk")
+        await exercise("after-first-chunk")
+        await exercise("receive-after-first-chunk")
+        normal_messages = await exercise(None)
+        self.assertEqual(normal_messages[-1]["type"], "http.response.body")
+        self.assertFalse(normal_messages[-1]["more_body"])
+
+    async def test_streaming_response_close_fallback_branches(self):
+        scope = {
+            "type": "http",
+            "asgi": {"spec_version": "2.4"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/stream",
+            "raw_path": b"/stream",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 8000),
+        }
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(_message):
+            return None
+
+        class IteratorWithoutClose:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        release_without_close = SimpleNamespace(release_once=AsyncMock())
+        response_without_close = self.server.OCRSlotStreamingResponse(
+            IteratorWithoutClose(),
+            release_guard=release_without_close,
+        )
+        await response_without_close(scope, receive, send)
+        release_without_close.release_once.assert_awaited_once()
+
+        class IteratorWithFailingClose(IteratorWithoutClose):
+            async def aclose(self):
+                raise RuntimeError("iterator close failed")
+
+        release_after_close_error = SimpleNamespace(release_once=AsyncMock())
+        response_with_close_error = self.server.OCRSlotStreamingResponse(
+            IteratorWithFailingClose(),
+            release_guard=release_after_close_error,
+        )
+        with patch.object(self.server.logger, "exception") as log_exception:
+            await response_with_close_error(scope, receive, send)
+        log_exception.assert_called_once_with(
+            "Failed to close Unlimited-OCR response iterator"
+        )
+        release_after_close_error.release_once.assert_awaited_once()
+
     async def test_proxy_size_and_generic_exception_wrappers(self):
         with patch.object(self.server, "MAX_REQUEST_BYTES", 10):
             self.assertEqual(self.server.validate_proxy_input_size("abc"), 3)
@@ -829,8 +999,33 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
                 result = self.client.post(
                     endpoint,
                     json={"image": "AA==", "fileType": 1},
-                )
+            )
             self.assertEqual(result.status_code, 500)
+
+        with (
+            patch.object(
+                self.server,
+                "parse_ocr_input",
+                new=AsyncMock(side_effect=RuntimeError("unified crashed")),
+            ),
+            patch.object(self.server.logger, "exception") as log_exception,
+        ):
+            with self.assertRaises(HTTPException) as unified_error:
+                await self.server.parse_with_selected_model(object())
+        self.assertEqual(unified_error.exception.status_code, 500)
+        self.assertEqual(unified_error.exception.detail, "unified crashed")
+        self.assertIsInstance(unified_error.exception.__cause__, RuntimeError)
+        log_exception.assert_called_once_with("Unified OCR endpoint error")
+
+        original_hpd_error = HTTPException(status_code=409, detail="hpd busy")
+        with patch.object(
+            self.server,
+            "parse_ocr_input",
+            new=AsyncMock(side_effect=original_hpd_error),
+        ):
+            with self.assertRaises(HTTPException) as hpd_error:
+                await self.server.proxy_hpd_parsing(object())
+        self.assertIs(hpd_error.exception, original_hpd_error)
 
         with patch.object(self.server, "ENABLE_UNLIMITED_OCR", False):
             response_value = self.client.post(

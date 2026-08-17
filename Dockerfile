@@ -22,6 +22,13 @@ COPY Dockerfile.hpd-parsing-adapter ./
 COPY start-hpd-parsing.sh ./
 COPY static/ ./static/
 
+# Embed non-secret build provenance so comparison reports can identify the
+# exact application image. Runtime environment variables may override these.
+ARG PANDOCR_APP_VERSION=0.2.0
+ARG PANDOCR_GIT_COMMIT=
+ENV PANDOCR_APP_VERSION=${PANDOCR_APP_VERSION} \
+    PANDOCR_GIT_COMMIT=${PANDOCR_GIT_COMMIT}
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

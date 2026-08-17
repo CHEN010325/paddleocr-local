@@ -549,6 +549,399 @@
         "summary": "Parse With Selected Model",
         "description": "Stable model-agnostic OCR endpoint selected by the modelId field.",
         "operationId": "parse_with_selected_model_api_parse_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Image or PDF file to parse."
+                  },
+                  "modelId": {
+                    "type": "string",
+                    "enum": [
+                      "paddleocr-vl-1.6",
+                      "pp-ocrv6",
+                      "unlimited-ocr",
+                      "ovisocr2",
+                      "hpd-parsing"
+                    ],
+                    "description": "An enabled OCR model ID. Omit to use the server default."
+                  },
+                  "fileType": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Filetype"
+                  },
+                  "useLayoutDetection": {
+                    "type": "boolean",
+                    "title": "Uselayoutdetection",
+                    "default": true
+                  },
+                  "useDocUnwarping": {
+                    "type": "boolean",
+                    "title": "Usedocunwarping",
+                    "default": false
+                  },
+                  "useDocOrientationClassify": {
+                    "type": "boolean",
+                    "title": "Usedocorientationclassify",
+                    "default": false
+                  },
+                  "useTextlineOrientation": {
+                    "type": "boolean",
+                    "title": "Usetextlineorientation",
+                    "default": false
+                  },
+                  "useChartRecognition": {
+                    "type": "boolean",
+                    "title": "Usechartrecognition",
+                    "default": false
+                  },
+                  "useSealRecognition": {
+                    "type": "boolean",
+                    "title": "Usesealrecognition",
+                    "default": true
+                  },
+                  "formatBlockContent": {
+                    "type": "boolean",
+                    "title": "Formatblockcontent",
+                    "default": true
+                  },
+                  "showFormulaNumber": {
+                    "type": "boolean",
+                    "title": "Showformulanumber",
+                    "default": true
+                  },
+                  "markdownIgnoreLabels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array",
+                    "title": "Markdownignorelabels"
+                  },
+                  "layoutThreshold": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutthreshold"
+                  },
+                  "layoutNms": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutnms"
+                  },
+                  "layoutUnclipRatio": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutunclipratio"
+                  },
+                  "layoutMergeBboxesMode": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutmergebboxesmode"
+                  },
+                  "repetitionPenalty": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Repetitionpenalty"
+                  },
+                  "temperature": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Temperature"
+                  },
+                  "topP": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Topp"
+                  },
+                  "minPixels": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Minpixels"
+                  },
+                  "maxPixels": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Maxpixels"
+                  },
+                  "visualize": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Visualize"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "file"
+                ]
+              }
+            },
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "image": {
+                    "type": "string",
+                    "description": "Base64 data or a data URL containing the image/PDF payload."
+                  },
+                  "modelId": {
+                    "type": "string",
+                    "enum": [
+                      "paddleocr-vl-1.6",
+                      "pp-ocrv6",
+                      "unlimited-ocr",
+                      "ovisocr2",
+                      "hpd-parsing"
+                    ],
+                    "description": "An enabled OCR model ID. Omit to use the server default."
+                  },
+                  "fileType": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Filetype"
+                  },
+                  "useLayoutDetection": {
+                    "type": "boolean",
+                    "title": "Uselayoutdetection",
+                    "default": true
+                  },
+                  "useDocUnwarping": {
+                    "type": "boolean",
+                    "title": "Usedocunwarping",
+                    "default": false
+                  },
+                  "useDocOrientationClassify": {
+                    "type": "boolean",
+                    "title": "Usedocorientationclassify",
+                    "default": false
+                  },
+                  "useTextlineOrientation": {
+                    "type": "boolean",
+                    "title": "Usetextlineorientation",
+                    "default": false
+                  },
+                  "useChartRecognition": {
+                    "type": "boolean",
+                    "title": "Usechartrecognition",
+                    "default": false
+                  },
+                  "useSealRecognition": {
+                    "type": "boolean",
+                    "title": "Usesealrecognition",
+                    "default": true
+                  },
+                  "formatBlockContent": {
+                    "type": "boolean",
+                    "title": "Formatblockcontent",
+                    "default": true
+                  },
+                  "showFormulaNumber": {
+                    "type": "boolean",
+                    "title": "Showformulanumber",
+                    "default": true
+                  },
+                  "markdownIgnoreLabels": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array",
+                    "title": "Markdownignorelabels"
+                  },
+                  "layoutThreshold": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutthreshold"
+                  },
+                  "layoutNms": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutnms"
+                  },
+                  "layoutUnclipRatio": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutunclipratio"
+                  },
+                  "layoutMergeBboxesMode": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Layoutmergebboxesmode"
+                  },
+                  "repetitionPenalty": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Repetitionpenalty"
+                  },
+                  "temperature": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Temperature"
+                  },
+                  "topP": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Topp"
+                  },
+                  "minPixels": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Minpixels"
+                  },
+                  "maxPixels": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Maxpixels"
+                  },
+                  "visualize": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Visualize"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "image"
+                ],
+                "title": "OCRRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -557,6 +950,18 @@
                 "schema": {}
               }
             }
+          },
+          "400": {
+            "description": "Invalid input or unknown/disabled modelId"
+          },
+          "409": {
+            "description": "Model runtime is switching or busy"
+          },
+          "413": {
+            "description": "OCR input exceeds the configured size limit"
+          },
+          "503": {
+            "description": "Selected model is not ready"
           }
         }
       }

@@ -37,7 +37,17 @@ stop_pid_file() {
     done
     if kill -0 "$pid" >/dev/null 2>&1; then
       echo "Force stopping $name ($pid)"
-      kill -9 "$pid" || true
+      kill -9 "$pid"
+      for _ in {1..5}; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        echo "$name ($pid) did not stop; refusing to start another model." >&2
+        return 1
+      fi
     fi
   else
     echo "$name pid file was stale."

@@ -8,6 +8,11 @@ if "%PANDOCR_ENV_FILE%"=="" (
     set "ENV_FILE=%PANDOCR_ENV_FILE%"
 )
 if not "%~1"=="" set "ENV_FILE=%~1"
+if "%PANDOCR_RUNTIME_ENV_FILE%"=="" (
+    set "RUNTIME_ENV=%~dp0tmp\pandocr-runtime.env"
+) else (
+    set "RUNTIME_ENV=%PANDOCR_RUNTIME_ENV_FILE%"
+)
 
 echo 🔍 测试 PaddleOCR Local 服务连接...
 echo    Env file: %ENV_FILE%
@@ -17,6 +22,14 @@ if not exist "%ENV_FILE%" (
     echo ❌ 环境文件不存在: %ENV_FILE%
     exit /b 1
 )
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-runtime-env.ps1" -BaseEnvFile "%ENV_FILE%" -RuntimeEnvFile "%RUNTIME_ENV%" >nul
+if errorlevel 1 (
+    echo ❌ 无法准备持久 controller token
+    exit /b 1
+)
+set "PANDOCR_MODEL_CONTROLLER_TOKEN="
+set "COMPOSE=docker compose --env-file "%ENV_FILE%" --env-file "%RUNTIME_ENV%" --profile "*""
 
 REM 测试前端服务
 echo 1️⃣  测试前端服务 (localhost:8000)...
@@ -56,7 +69,7 @@ if not errorlevel 1 (
 
 REM 测试网络连接
 echo 5️⃣  测试 Docker 内部网络...
-docker compose --env-file "%ENV_FILE%" exec -T pandocr-web curl -s -o /dev/null -w "%%{http_code}" http://localhost:8000/api/model-runtime 2>nul | findstr "200" >nul
+%COMPOSE% exec -T pandocr-web curl -s -o /dev/null -w "%%{http_code}" http://localhost:8000/api/model-runtime 2>nul | findstr "200" >nul
 if not errorlevel 1 (
     echo    ✅ 内部网络正常
 ) else (
@@ -65,20 +78,20 @@ if not errorlevel 1 (
 
 REM 测试 GPU 可用性
 echo 6️⃣  测试 GPU 可用性...
-docker compose --env-file "%ENV_FILE%" exec -T paddleocr-vlm-server nvidia-smi >nul 2>&1
+%COMPOSE% run --rm --no-deps paddleocr-vlm-server nvidia-smi >nul 2>&1
 if not errorlevel 1 (
     echo    ✅ GPU 可用
 ) else (
-    echo    ⚠️  GPU 当前不可用（如果 VL 容器待启动，这是正常的）
+    echo    ⚠️  Docker GPU 当前不可用
 )
 
 echo.
 echo 📊 服务状态总览:
-docker compose --env-file "%ENV_FILE%" ps -a
+%COMPOSE% ps -a
 
 echo.
 echo 💡 提示:
-echo    - 如果服务异常，查看日志: docker compose --env-file "%ENV_FILE%" logs -f
+echo    - 如果服务异常，查看日志: docker compose --env-file "%ENV_FILE%" --env-file "%RUNTIME_ENV%" --profile "*" logs -f
 echo    - 如果正在启动中，等待 3-5 分钟后重试
 echo.
 pause

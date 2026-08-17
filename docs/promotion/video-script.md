@@ -77,7 +77,7 @@ python pandocr_cli.py watch incoming --model pp-ocrv6
 
 旁白：
 
-> 没有独显可以先用 PP-OCRv6，Apple Silicon 可以使用 OvisOCR2 MLX。复杂文档模型通常需要 8 到 16GB 显存，项目会明确提示，而不是等容器崩溃后只留下一句启动失败。
+> 没有独显时，Apple Silicon 可以使用 OvisOCR2 MLX；Windows/Linux CPU Lite 仍在路线图中。复杂文档模型通常需要 8 到 16GB 显存，项目会明确提示，而不是等容器崩溃后只留下一句启动失败。
 
 ### 4:30～结束
 

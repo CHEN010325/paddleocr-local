@@ -90,9 +90,11 @@ PANDOCR_ENFORCE_ORIGIN_CHECK=1
 make check
 node --check static/app.js
 python -m py_compile server.py
-docker compose --env-file env.txt config --quiet
-docker compose --env-file env.txt build pandocr-web
-docker compose --env-file env.txt up -d --no-deps --force-recreate pandocr-web
+$baseEnv = "env.txt"
+$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
+docker compose --env-file $baseEnv --env-file $runtimeEnv config --quiet
+docker compose --env-file $baseEnv --env-file $runtimeEnv build pandocr-web
+docker compose --env-file $baseEnv --env-file $runtimeEnv up -d --no-deps --force-recreate pandocr-controller pandocr-web
 curl http://localhost:8000/api/models
 curl http://localhost:8000/api/model-runtime
 curl http://localhost:8081/health

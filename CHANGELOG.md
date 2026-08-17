@@ -12,6 +12,15 @@
 
 - 新增稳定的模型无关接口 `POST /api/parse`，通过 `modelId` 选择已启用模型。
 - 新增 `pandocr_cli.py`，支持环境诊断、批量解析、多模型对比和 Watch Folder。
+- CLI 会保存 Markdown 引用的图片资源、避免多页正文重复与同名文件覆盖，并在单模型失败后继续完成其余对比。
+
+### 单模型显存互斥与可靠性
+
+- 将五个逻辑模型全部放入独立 Compose profile；所有部署入口只预创建模型容器，由 controller 启动用户当前选择的唯一模型。
+- 新增 controller 原子 OCR lease，消除 Web OCR 与远程模型切换之间的并发竞态；有在途 OCR 时切换、部署和后端变更均会失败闭锁。
+- 模型切换严格执行“停止并复检全部非目标模型 → GPU 预检 → 启动目标 → 唯一 running/ready 复检”，失败时清理半启动目标。
+- 运行状态新增 `runningModelIds`、`readyModelIds` 与 `exclusivityViolation`，不再隐藏异常的多模型残留。
+- 修复 macOS 默认双模型启动、Windows 完成条件未检查非目标模型、OvisOCR2 在 Ubuntu 24.04 的 Python PEP 668 构建失败等问题。
 
 ### 开源发布
 

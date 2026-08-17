@@ -1,5 +1,4 @@
 import asyncio
-import io
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -54,6 +53,96 @@ def test_remote_controller_rejects_switch_while_ocr_runs():
             run(server.deploy_model_runtime(server.ModelDeployRequest(modelId="pp-ocrv6")))
         with pytest.raises(HTTPException):
             run(server.switch_unlimited_ocr_backend(server.UnlimitedOcrBackendRequest(backend="sglang")))
+
+
+def test_remote_ocr_slot_uses_controller_lease_for_full_request_lifetime():
+    api = AsyncMock(
+        side_effect=[
+            {"leaseId": "lease-123", "modelId": "paddleocr-vl-1.6"},
+            {"ok": True, "released": True},
+        ]
+    )
+
+    async def scenario():
+        lease_id = await server.acquire_ocr_slot(
+            "paddleocr-vl-1.6",
+            "not ready",
+        )
+        assert lease_id == "lease-123"
+        assert server.ocr_active_count == 1
+        await server.release_ocr_slot(lease_id)
+        assert server.ocr_active_count == 0
+
+    with (
+        patch.object(server, "MODEL_CONTROL_MODE", "remote"),
+        patch.object(server, "controller_api_request", api),
+        patch.object(server, "model_runtime_lock", asyncio.Lock()),
+        patch.object(server, "ocr_semaphore", asyncio.Semaphore(1)),
+        patch.object(server, "ocr_active_count", 0),
+    ):
+        run(scenario())
+
+    assert api.await_args_list[0].args == ("POST", "/ocr-leases/acquire")
+    assert api.await_args_list[0].kwargs == {"json": {"modelId": "paddleocr-vl-1.6"}}
+    assert api.await_args_list[1].args == ("DELETE", "/ocr-leases/lease-123")
+
+
+def test_remote_ocr_slot_lease_error_and_fail_closed_release_branches():
+    semaphore = asyncio.Semaphore(1)
+    with (
+        patch.object(server, "MODEL_CONTROL_MODE", "remote"),
+        patch.object(server, "controller_api_request", AsyncMock(return_value={})),
+        patch.object(server, "model_runtime_operation", {"state": "idle"}),
+        patch.object(server, "model_runtime_lock", asyncio.Lock()),
+        patch.object(server, "ocr_semaphore", semaphore),
+        patch.object(server, "ocr_active_count", 0),
+    ):
+        with pytest.raises(HTTPException) as omitted:
+            run(server.acquire_ocr_slot("paddleocr-vl-1.6", "not ready"))
+        assert omitted.value.status_code == 502
+        assert semaphore._value == 1
+
+    class ExplodingCount:
+        def __add__(self, _value):
+            raise RuntimeError("counter update failed")
+
+    api = AsyncMock(
+        side_effect=[
+            {"leaseId": "lease-cleanup"},
+            {"ok": True, "released": True},
+        ]
+    )
+    semaphore = asyncio.Semaphore(1)
+    with (
+        patch.object(server, "MODEL_CONTROL_MODE", "remote"),
+        patch.object(server, "controller_api_request", api),
+        patch.object(server, "model_runtime_operation", {"state": "idle"}),
+        patch.object(server, "model_runtime_lock", asyncio.Lock()),
+        patch.object(server, "ocr_semaphore", semaphore),
+        patch.object(server, "ocr_active_count", ExplodingCount()),
+    ):
+        with pytest.raises(RuntimeError, match="counter update failed"):
+            run(server.acquire_ocr_slot("paddleocr-vl-1.6", "not ready"))
+        assert semaphore._value == 1
+    assert api.await_args_list[1].args == ("DELETE", "/ocr-leases/lease-cleanup")
+
+    semaphore = asyncio.Semaphore(0)
+    with (
+        patch.object(server, "MODEL_CONTROL_MODE", "remote"),
+        patch.object(
+            server,
+            "controller_api_request",
+            AsyncMock(side_effect=RuntimeError("controller unavailable")),
+        ),
+        patch.object(server, "model_runtime_lock", asyncio.Lock()),
+        patch.object(server, "ocr_semaphore", semaphore),
+        patch.object(server, "ocr_active_count", 1),
+        patch.object(server.logger, "exception") as logged,
+    ):
+        run(server.release_ocr_slot("lease-stale"))
+        assert server.ocr_active_count == 0
+        assert semaphore._value == 1
+    logged.assert_called_once()
 
 
 class FakeResponse:
@@ -186,6 +275,22 @@ def test_controller_auth_lifespan_and_remaining_handlers():
     ):
         assert run(controller.switch_model(server.ModelSwitchRequest(modelId="pp-ocrv6"))) == {"switched": True}
         activate.assert_awaited_once_with("pp-ocrv6")
+    with patch.object(
+        controller.server,
+        "acquire_controller_ocr_lease",
+        AsyncMock(return_value={"leaseId": "lease-123"}),
+    ) as acquire:
+        assert run(controller.acquire_ocr_lease(server.OCRLeaseRequest(modelId="pp-ocrv6"))) == {
+            "leaseId": "lease-123"
+        }
+        acquire.assert_awaited_once_with("pp-ocrv6")
+    with patch.object(
+        controller.server,
+        "release_controller_ocr_lease",
+        AsyncMock(return_value=True),
+    ) as release:
+        assert run(controller.release_ocr_lease("lease-123")) == {"ok": True, "released": True}
+        release.assert_awaited_once_with("lease-123")
     with patch.object(controller.server, "schedule_model_runtime_deploy", AsyncMock()) as deploy, patch.object(
         controller.server, "build_model_runtime_payload", AsyncMock(return_value={"deployed": True})
     ):

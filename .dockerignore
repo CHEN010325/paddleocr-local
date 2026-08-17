@@ -57,6 +57,7 @@ ocr_results_*.zip
 *.log
 .playwright-cli/
 output/
+tmp/
 node_modules/
 .coverage
 coverage/

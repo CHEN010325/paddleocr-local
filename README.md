@@ -53,11 +53,12 @@
 ### Linux / Docker
 
 ```bash
-cp env.docker .env
-docker compose --env-file .env up -d --build
+cp env.docker env.txt
+./build.sh
+./deploy.sh
 ```
 
-部署完成后打开 <http://localhost:8000>。首次运行需要下载镜像或模型，耗时取决于网络和所选模型。高级配置请查看 [Docker 部署文档](DOCKER_DEPLOY.md)。
+部署完成后打开 <http://localhost:8000>。五个逻辑模型分别受 Compose profile 保护；部署脚本只创建未运行的待机容器，由控制器启动一个选定模型。切换时必须先完整停止旧模型并释放显存，确认后才启动新模型，因此任意时刻显存只驻留当前选择的一个逻辑模型；绝不会通过裸 `docker compose up` 同时加载多个模型。首次运行需要下载镜像或模型，耗时取决于网络和所选模型。高级配置请查看 [Docker 部署文档](DOCKER_DEPLOY.md)。
 
 ## 主要能力
 
@@ -81,8 +82,8 @@ docker compose --env-file .env up -d --build
 
 ## 项目质量
 
-- Python：170 项测试，覆盖率门禁 95%+
-- 前端：38 项测试，语句和分支覆盖率门禁 95%+
+- Python：234 项测试，覆盖率门禁 95%+
+- 前端：46 项测试，语句和分支覆盖率门禁 95%+
 - npm 与全部 Python 依赖清单进行漏洞扫描
 - Docker 镜像、Actions 和模型 revision 固定版本
 - Web、Docker 控制器和 LibreOffice 转换器隔离运行

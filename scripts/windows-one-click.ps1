@@ -320,6 +320,33 @@ function Get-ModelDisplayName {
     }
 }
 
+function Get-ModelGpuRequirement {
+    param([string]$ModelId)
+
+    switch ($ModelId) {
+        "paddleocr-vl-1.6" { return [pscustomobject]@{ TotalMiB = 11264; FreeMiB = 6656 } }
+        "pp-ocrv6" { return [pscustomobject]@{ TotalMiB = 4096; FreeMiB = 4096 } }
+        "unlimited-ocr" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
+        "ovisocr2" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
+        "hpd-parsing" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
+        default { throw "No GPU requirement is defined for model '$ModelId'." }
+    }
+}
+
+function Get-DeploymentGpuRequirement {
+    param([string[]]$ModelIds)
+
+    if (-not $ModelIds -or $ModelIds.Count -eq 0) {
+        throw "At least one deployment model is required for GPU validation."
+    }
+
+    $requirements = @($ModelIds | ForEach-Object { Get-ModelGpuRequirement $_ })
+    return [pscustomobject]@{
+        TotalMiB = [int](($requirements | Measure-Object -Property TotalMiB -Maximum).Maximum)
+        FreeMiB = [int](($requirements | Measure-Object -Property FreeMiB -Maximum).Maximum)
+    }
+}
+
 function Read-FriendlyDeploymentSelection {
     Write-Section "Choose the model to start first"
     Write-Host "Only this model is downloaded and started by default."
@@ -638,13 +665,34 @@ function New-RuntimeEnvFile {
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
     $runtimeEnv = Join-Path $tmpDir "windows-one-click.env"
+    $controllerRuntimeEnv = Join-Path $tmpDir "pandocr-runtime.env"
+    $controllerRuntimeScript = Join-Path $script:RepoRoot "scripts\prepare-runtime-env.ps1"
+    $null = & $controllerRuntimeScript -BaseEnvFile $BaseEnvFile -RuntimeEnvFile $controllerRuntimeEnv
+    $controllerRuntimePrepared = $?
+    if (-not $controllerRuntimePrepared -or -not (Test-Path -LiteralPath $controllerRuntimeEnv -PathType Leaf)) {
+        throw "Failed to prepare the persistent model-controller credential."
+    }
+    $controllerLines = [string[]](Get-Content -LiteralPath $controllerRuntimeEnv -Encoding UTF8)
+    $controllerToken = Get-EnvLineValue -Lines $controllerLines -Key "PANDOCR_MODEL_CONTROLLER_TOKEN" -DefaultValue ""
+    if ([string]::IsNullOrWhiteSpace($controllerToken)) {
+        throw "Persistent model-controller credential is empty."
+    }
+
     $lines = [string[]](Get-Content -Path $BaseEnvFile -Encoding UTF8)
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_GPU_DEVICE_ID" -Value ([string]$Gpu.Index)
-    $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CONTROL" -Value "docker"
-    $controllerToken = Get-EnvLineValue -Lines $lines -Key "PANDOCR_MODEL_CONTROLLER_TOKEN" -DefaultValue ""
-    if ([string]::IsNullOrWhiteSpace($controllerToken) -or $controllerToken -eq "change-this-to-a-random-long-value") {
-        $controllerToken = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
+    $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_APP_VERSION" -Value "0.2.0"
+    $gitCommit = ""
+    try {
+        $gitCommitOutput = & git -C $script:RepoRoot rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($gitCommitOutput)) {
+            $gitCommit = ([string]$gitCommitOutput).Trim()
+        }
     }
+    catch {
+        $gitCommit = ""
+    }
+    $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_GIT_COMMIT" -Value $gitCommit
+    $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CONTROL" -Value "docker"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CONTROLLER_TOKEN" -Value $controllerToken
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -Value $script:ActiveModel
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CATALOG" -Value ($script:ModelCatalogIds -join ",")
@@ -706,6 +754,12 @@ function Get-ComposeArgs {
         [switch]$IncludeOptionalProfiles
     )
     $args = @("compose", "--env-file", $script:RuntimeEnv)
+    if ($script:DeployModelIds -contains "paddleocr-vl-1.6" -or $IncludeOptionalProfiles) {
+        $args += @("--profile", "paddleocr-vl")
+    }
+    if ($script:DeployModelIds -contains "pp-ocrv6" -or $IncludeOptionalProfiles) {
+        $args += @("--profile", "pp-ocrv6")
+    }
     if ($script:EnableUnlimitedOcr -or $IncludeOptionalProfiles) {
         $args += @("--profile", "unlimited-ocr")
     }
@@ -771,6 +825,43 @@ function Get-ContainerStatus {
     return $output.Trim()
 }
 
+function Test-ContainerStatusRunning {
+    param([string]$Status)
+
+    return $Status -match "^running\|"
+}
+
+function Get-RunningLogicalModels {
+    param(
+        [string]$VlmStatus,
+        [string]$VlApiStatus,
+        [string]$PpOcrStatus,
+        [string]$UnlimitedSglangStatus,
+        [string]$UnlimitedApiStatus,
+        [string]$OvisStatus,
+        [string]$HpdServerStatus,
+        [string]$HpdApiStatus
+    )
+
+    $running = New-Object System.Collections.Generic.List[string]
+    if ((Test-ContainerStatusRunning $VlmStatus) -or (Test-ContainerStatusRunning $VlApiStatus)) {
+        $running.Add("paddleocr-vl-1.6")
+    }
+    if (Test-ContainerStatusRunning $PpOcrStatus) {
+        $running.Add("pp-ocrv6")
+    }
+    if ((Test-ContainerStatusRunning $UnlimitedSglangStatus) -or (Test-ContainerStatusRunning $UnlimitedApiStatus)) {
+        $running.Add("unlimited-ocr")
+    }
+    if (Test-ContainerStatusRunning $OvisStatus) {
+        $running.Add("ovisocr2")
+    }
+    if ((Test-ContainerStatusRunning $HpdServerStatus) -or (Test-ContainerStatusRunning $HpdApiStatus)) {
+        $running.Add("hpd-parsing")
+    }
+    return [string[]]$running.ToArray()
+}
+
 function Show-Diagnostics {
     if ($script:DiagnosticsShown -or [string]::IsNullOrWhiteSpace($script:RuntimeEnv)) {
         return
@@ -801,11 +892,11 @@ function Wait-ForServices {
         $vlm = Get-ContainerStatus "paddleocr-vlm-server"
         $api = Get-ContainerStatus "paddleocr-vl-api"
         $ocr = Get-ContainerStatus "paddleocr-ocr-api"
-        $uow = if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") { Get-ContainerStatus "unlimited-ocr-sglang" } else { "disabled|none" }
-        $uowApi = if ($script:EnableUnlimitedOcr) { Get-ContainerStatus "unlimited-ocr-api" } else { "disabled|none" }
-        $ovis = if ($script:EnableOvisOcr2) { Get-ContainerStatus "ovisocr2-api" } else { "disabled|none" }
-        $hpdServer = if ($script:EnableHpdParsing) { Get-ContainerStatus "hpd-parsing-server" } else { "disabled|none" }
-        $hpdApi = if ($script:EnableHpdParsing) { Get-ContainerStatus "hpd-parsing-api" } else { "disabled|none" }
+        $uow = Get-ContainerStatus "unlimited-ocr-sglang"
+        $uowApi = Get-ContainerStatus "unlimited-ocr-api"
+        $ovis = Get-ContainerStatus "ovisocr2-api"
+        $hpdServer = Get-ContainerStatus "hpd-parsing-server"
+        $hpdApi = Get-ContainerStatus "hpd-parsing-api"
         $web = Get-ContainerStatus "pandocr-web"
         $apiOk = Test-HttpOk "http://localhost:8081/health"
         $ocrOk = Test-HttpOk "http://localhost:8082/health"
@@ -819,6 +910,15 @@ function Wait-ForServices {
         $runtimeState = if ($activeRuntimeStatus) { [string]$activeRuntimeStatus.state } else { "unavailable" }
         $operationState = if ($runtime -and $runtime.operation) { [string]$runtime.operation.state } else { "unavailable" }
         $operationTarget = if ($runtime -and $runtime.operation) { [string]$runtime.operation.targetModelId } else { "" }
+        $runningLogicalModels = @(Get-RunningLogicalModels `
+            -VlmStatus $vlm `
+            -VlApiStatus $api `
+            -PpOcrStatus $ocr `
+            -UnlimitedSglangStatus $uow `
+            -UnlimitedApiStatus $uowApi `
+            -OvisStatus $ovis `
+            -HpdServerStatus $hpdServer `
+            -HpdApiStatus $hpdApi)
 
         $activeStatuses = @()
         if ($script:ActiveModel -eq "pp-ocrv6") {
@@ -842,8 +942,18 @@ function Wait-ForServices {
             throw "WebUI is running, but Docker model runtime control is not available."
         }
 
+        if ($runningLogicalModels.Count -gt 1) {
+            Show-Diagnostics
+            throw "Single-model invariant violated. Running logical models: $($runningLogicalModels -join ', ')."
+        }
+
         if ($runtimeReady -and $webOk) {
-            Write-Ok "WebUI runtime reports $script:ActiveModel is ready. The other model remains on standby."
+            if ($runningLogicalModels.Count -ne 1 -or $runningLogicalModels[0] -ne $script:ActiveModel) {
+                Show-Diagnostics
+                $actual = if ($runningLogicalModels.Count -eq 0) { "none" } else { $runningLogicalModels -join ", " }
+                throw "Runtime reported $script:ActiveModel ready, but running logical models were: $actual."
+            }
+            Write-Ok "WebUI runtime reports only $script:ActiveModel is running and ready."
             return
         }
 
@@ -919,14 +1029,17 @@ try {
         Write-Ok "Unlimited-OCR backend: $script:UnlimitedOcrBackend"
     }
 
-    if ($gpu.TotalMiB -lt 8192) {
-        throw "GPU $($gpu.Index) has only $($gpu.TotalMiB) MiB VRAM. The selected OCR model deployment requires at least 8192 MiB."
+    $gpuRequirement = Get-DeploymentGpuRequirement -ModelIds $script:DeployModelIds
+    $selectedModelNames = (@($script:DeployModelIds | ForEach-Object { Get-ModelDisplayName $_ })) -join ", "
+    Write-Ok "Selected model GPU requirement: total >= $($gpuRequirement.TotalMiB) MiB, currently free >= $($gpuRequirement.FreeMiB) MiB."
+    if ($gpu.TotalMiB -lt $gpuRequirement.TotalMiB) {
+        throw "GPU $($gpu.Index) has only $($gpu.TotalMiB) MiB total VRAM. Selected models ($selectedModelNames) require at least $($gpuRequirement.TotalMiB) MiB."
     }
     if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") {
         Test-GpuSupportsSglang -Gpu $gpu
     }
-    if ($gpu.FreeMiB -lt 6656) {
-        throw "GPU $($gpu.Index) has only $($gpu.FreeMiB) MiB free VRAM. Close GPU-heavy apps or choose another GPU with -GpuId."
+    if ($gpu.FreeMiB -lt $gpuRequirement.FreeMiB) {
+        throw "GPU $($gpu.Index) has only $($gpu.FreeMiB) MiB free VRAM. Selected models ($selectedModelNames) require at least $($gpuRequirement.FreeMiB) MiB currently free. Close GPU-heavy apps or choose another GPU with -GpuId."
     }
 
     $baseEnv = Resolve-BaseEnvFile -Gpu $gpu -RequestedEnvFile $EnvFile
@@ -1009,7 +1122,12 @@ try {
         @("run", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")
     }
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $gpuCheckCommand) -Description "Checking Docker GPU access"
-    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("up", "-d", "--no-start", "--force-recreate") + (Get-DeploymentServiceList))) -Description "Creating selected PaddleOCR Local containers"
+    $createArguments = @("up", "-d", "--no-start", "--force-recreate")
+    if ($SkipBuild) {
+        $createArguments += "--no-build"
+    }
+    $createArguments += Get-DeploymentServiceList
+    Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $createArguments) -Description "Creating selected PaddleOCR Local containers"
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("start", "pandocr-controller", "pandocr-office-converter", "pandocr-web")) -Description "Starting WebUI and isolated support services"
 
     Wait-ForServices -Timeout $TimeoutSeconds
@@ -1031,8 +1149,8 @@ try {
     if ($script:EnableHpdParsing) {
         Write-Host "HPD-Parsing API health: http://localhost:8085/health"
     }
-    Write-Host "Active model on startup: $script:ActiveModel. Select another model in the UI to stop this one and start the others."
-    Write-Host "Useful logs: docker compose --env-file `"$script:RuntimeEnv`" logs -f"
+    Write-Host "Active model on startup: $script:ActiveModel. When you select another model, the controller fully stops the current model and releases its GPU memory before starting the selected model."
+    Write-Host "Useful logs: docker compose --env-file `"$script:RuntimeEnv`" --profile `"*`" logs -f"
 
     if (-not $NoOpen) {
         Start-Process "http://localhost:8000"

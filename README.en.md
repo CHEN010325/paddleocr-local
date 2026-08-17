@@ -48,11 +48,12 @@ macOS Apple Silicon:
 Linux / Docker:
 
 ```bash
-cp env.docker .env
-docker compose --env-file .env up -d --build
+cp env.docker env.txt
+./build.sh
+./deploy.sh
 ```
 
-Then open <http://localhost:8000>. The first run downloads images or model weights. See [Docker deployment](DOCKER_DEPLOY.md) for advanced configuration.
+Then open <http://localhost:8000>. Each logical model is guarded by its own Compose profile. The deployment script creates stopped standby containers and lets the controller start exactly one selected model. A switch fully stops the old model and releases its GPU memory before the new model starts, so GPU memory contains only the currently selected logical model at every moment. The scripts never use a bare `docker compose up` that could load multiple models. The first run downloads images or model weights. See [Docker deployment](DOCKER_DEPLOY.md) for advanced configuration.
 
 ## Features
 
@@ -69,7 +70,7 @@ Then open <http://localhost:8000>. The first run downloads images or model weigh
 
 ## Quality and security
 
-- 170 Python tests and 38 frontend tests with 95%+ coverage gates
+- 234 Python tests and 46 frontend tests with 95%+ coverage gates
 - Dependency vulnerability audits in CI
 - Pinned container images, Actions, and model revisions
 - Isolated Web, Docker controller, and LibreOffice converter services

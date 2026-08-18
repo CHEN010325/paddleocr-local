@@ -67,6 +67,7 @@ let modelRuntimeLoadInFlight = false;
 let modelSwitchInFlight = false;
 let unlimitedOcrBackendSwitchInFlight = false;
 let selectedUnlimitedOcrBackend = 'transformers';
+let activeOcrAbortController = null;
 let maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES;
 let appMetadata = { version: DEFAULT_APP_VERSION, commit: '' };
 let currentLanguage = normalizeLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY) || I18N_CONFIG.defaultLanguage);
@@ -189,7 +190,13 @@ function setupEventListeners() {
 
     els.taskSearch.addEventListener('input', renderTaskList);
     els.clearHistoryBtn.addEventListener('click', clearHistory);
-    els.startBtn.addEventListener('click', () => processActiveTask());
+    els.startBtn.addEventListener('click', () => {
+        if (activeOcrAbortController) {
+            activeOcrAbortController.abort();
+            return;
+        }
+        processActiveTask();
+    });
     els.editBtn?.addEventListener('click', startMarkdownEdit);
     els.copyBtn.addEventListener('click', copyActiveResult);
     els.downloadBtn.addEventListener('click', downloadActiveTask);
@@ -2808,6 +2815,8 @@ async function processTask(task, { confirmCompleted = true } = {}) {
     if (!task || isProcessing || processingTaskId) return false;
     if (confirmCompleted && task.status === 'completed' && !confirm(t('这个任务已经解析完成，要重新解析吗？'))) return;
 
+    const abortController = new AbortController();
+    activeOcrAbortController = abortController;
     const resumeExistingResults = shouldResumeTask(task);
     const targetModel = resumeExistingResults
         ? getTaskModel(task)
@@ -2817,6 +2826,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
     try {
         const modelReady = await ensureModelRuntimeReadyForTask(task, targetModel);
         if (!modelReady) return;
+        if (abortController.signal.aborted) return false;
 
         isProcessing = true;
         const benchmarkStartedAt = Date.now();
@@ -2869,7 +2879,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                     : null;
                 try {
                     await ensureBatchPayload(task, batch);
-                    result = await callOCR(batch, task);
+                    result = await callOCR(batch, task, abortController.signal);
                 } finally {
                     if (progressTimer) window.clearInterval(progressTimer);
                     delete batch._progressStartedAt;
@@ -2890,12 +2900,21 @@ async function processTask(task, { confirmCompleted = true } = {}) {
             task.status = 'completed';
         } catch (error) {
             console.error(error);
-            task.status = 'error';
-            task.error = error.message;
             const failedBatch = task.batches?.find((batch) => batch.status === 'processing');
-            if (failedBatch) {
-                failedBatch.status = 'error';
-                failedBatch.error = error.message;
+            if (abortController.signal.aborted || error?.name === 'AbortError') {
+                task.status = 'pending';
+                task.error = null;
+                if (failedBatch) {
+                    failedBatch.status = 'pending';
+                    failedBatch.error = null;
+                }
+            } else {
+                task.status = 'error';
+                task.error = error.message;
+                if (failedBatch) {
+                    failedBatch.status = 'error';
+                    failedBatch.error = error.message;
+                }
             }
         } finally {
             isProcessing = false;
@@ -2907,6 +2926,9 @@ async function processTask(task, { confirmCompleted = true } = {}) {
         }
         return task.status === 'completed';
     } finally {
+        if (activeOcrAbortController === abortController) {
+            activeOcrAbortController = null;
+        }
         if (processingTaskId === task.id) {
             isProcessing = false;
             processingTaskId = null;
@@ -3085,7 +3107,7 @@ function scrollSourceToStreamingPosition(position) {
     updatePdfControls();
 }
 
-async function callOCR(batch, task) {
+async function callOCR(batch, task, signal = activeOcrAbortController?.signal) {
     const model = getTaskModel(task);
     const parsingSettings = {
         ...currentParsingSettingsSnapshot(),
@@ -3117,12 +3139,13 @@ async function callOCR(batch, task) {
 
     if (model.id === 'unlimited-ocr') {
         formData.append('backend', selectedUnlimitedOcrBackend);
-        return callStreamingUnlimitedOCR(batch, task, formData, model);
+        return callStreamingUnlimitedOCR(batch, task, formData, model, signal);
     }
 
     const response = await apiFetch(modelApiUrl(model), {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal
     });
     if (!response.ok) {
         throw new Error(await responseErrorText(response));
@@ -3145,11 +3168,12 @@ async function callOCR(batch, task) {
     }
 }
 
-async function callStreamingUnlimitedOCR(batch, task, formData, model) {
+async function callStreamingUnlimitedOCR(batch, task, formData, model, signal = activeOcrAbortController?.signal) {
     const streamUrl = `${modelApiUrl(model).replace(/\/$/, '')}/stream`;
     const response = await apiFetch(streamUrl, {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal
     });
     if (!response.ok) {
         throw new Error(await responseErrorText(response));
@@ -3193,6 +3217,7 @@ async function callStreamingUnlimitedOCR(batch, task, formData, model) {
     };
 
     while (true) {
+        if (signal?.aborted) throw new DOMException('The OCR request was cancelled.', 'AbortError');
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -3402,12 +3427,15 @@ function updateActionState(task) {
             || isModelRuntimeSwitching()
         );
     }
-    els.startBtn.disabled = !task
-        || !isTaskDetailLoaded(task)
-        || isProcessing
-        || Boolean(processingTaskId)
-        || modelStarting
-        || (!modelReady && !canStartAfterSwitch && !canDeployMissingModel);
+    const canCancel = Boolean(activeOcrAbortController && processingTaskId === task?.id);
+    els.startBtn.disabled = canCancel
+        ? false
+        : !task
+            || !isTaskDetailLoaded(task)
+            || isProcessing
+            || Boolean(processingTaskId)
+            || modelStarting
+            || (!modelReady && !canStartAfterSwitch && !canDeployMissingModel);
     if (els.editBtn) {
         els.editBtn.disabled = !task
             || isProcessing
@@ -3426,7 +3454,9 @@ function updateActionState(task) {
     els.downloadBtn.disabled = !hasResult;
     const startLabel = startButtonLabel(task);
     const showProcessing = (isProcessing && task?.status === 'processing') || modelStarting;
-    const startButtonHtml = showProcessing
+    const startButtonHtml = canCancel
+        ? `<span class="stop-icon">■</span>${t('停止解析')}`
+        : showProcessing
         ? `<span class="spinner"></span>${modelStarting ? t('模型启动中') : t('解析中')}`
         : `<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>${startLabel}`;
     if (els.startBtn.dataset.renderedHtml !== startButtonHtml) {

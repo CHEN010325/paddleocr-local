@@ -2693,6 +2693,10 @@ test('ordinary OCR and model switching lock all history mutations in logic and U
     `);
 
     assert.equal(window.eval('processingTaskId'), 'task-1');
+    assert.equal(window.document.getElementById('start-btn').disabled, false);
+    assert.match(window.document.getElementById('start-btn').textContent, /停止解析/);
+    window.document.getElementById('start-btn').click();
+    assert.equal(window.eval('activeOcrAbortController.signal.aborted'), true);
     assert.equal(window.document.getElementById('clear-history-btn').disabled, true);
     assert.equal(window.document.querySelector('.task-delete').disabled, true);
     await window.eval("deleteTask('task-1')");

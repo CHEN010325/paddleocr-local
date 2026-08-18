@@ -120,6 +120,7 @@ window.PANDOCR_I18N = {
             '字符，片段：': 'characters, preview: ',
             '模型启动中': 'Starting model',
             '解析中': 'Parsing',
+            '停止解析': 'Stop parsing',
             '启动模型并解析': 'Start model and parse',
             '重新解析': 'Parse again',
             '重试解析': 'Retry parsing',

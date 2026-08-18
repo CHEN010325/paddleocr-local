@@ -1171,6 +1171,18 @@ def detect_degenerate_repetition(text: str) -> str | None:
         return None
 
     tail = normalize_newlines(str(text))[-max(512, DEGENERATION_WINDOW_CHARS) :].lower()
+    # SGLang can occasionally enter a line-level loop that changes only a
+    # replacement glyph or trailing coordinate. Word n-grams are too sparse
+    # for that shape, so fail closed when the same long line is emitted again
+    # and again in the recent tail.
+    recent_lines = [re.sub(r"\s+", " ", line).strip() for line in tail.splitlines()]
+    recent_lines = [line for line in recent_lines if len(line) >= 24]
+    if recent_lines:
+        line_counts: dict[str, int] = {}
+        for line in recent_lines[-32:]:
+            line_counts[line] = line_counts.get(line, 0) + 1
+            if line_counts[line] >= 4:
+                return line[:160]
     words = WORD_RE.findall(tail)
     if len(words) < 48:
         return None

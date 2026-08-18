@@ -458,6 +458,8 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         self.assertIsNone(adapter.detect_degenerate_repetition("short"))
         repeat = ("longword anotherword thirdword " * 30)
         self.assertIsNotNone(adapter.detect_degenerate_repetition(repeat))
+        repeated_line = "\n".join(["29: end while Output: \u00e2 . text [509, 565, 704, 635]"] * 8)
+        self.assertIn("end while output", adapter.detect_degenerate_repetition(repeated_line))
         self.assertEqual(adapter.streaming_source_position("plain", 1), {"pageIndex": 0, "pageProgress": 0})
         position = adapter.streaming_source_position("<|det|>text [0,0,100,100]<|/det|>body", 1)
         self.assertEqual(position["pageNumber"], 1)

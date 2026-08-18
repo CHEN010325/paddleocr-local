@@ -1020,7 +1020,9 @@ test('download, JSON normalization, result labels, image readiness, and PDF navi
       sourceLabel({sourceKind:'office',originalName:'x'}); sourceLabel({sourceKind:'pdf'});
       currentLanguage='en'; formatPageCount(1); formatPageCount(2);
       selectedModelId='unlimited-ocr'; els.pdfBatchSizeInput.value='10'; applyModelBatchSizeRecommendation();
+      window.__unlimitedPdfBatchSize=getPdfBatchSizeForModel('unlimited-ocr');
     `);
+    assert.equal(window.__unlimitedPdfBatchSize, 1);
 
     evaluate(`
       currentPdf={numPages:2,getPage:async()=>({

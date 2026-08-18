@@ -1409,7 +1409,7 @@ async function createPdfTask(fileOrBlob, name, extra = {}) {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0), isEvalSupported: false }).promise;
     const pageCount = pdf.numPages;
     const thumbnail = await renderPDFPageDataUrl(pdf, 1, 0.35);
-    const pdfBatchSize = getConfiguredPdfBatchSize();
+    const pdfBatchSize = getPdfBatchSizeForModel(selectedModelId);
     const batches = createPdfBatchDescriptors(pageCount, pdfBatchSize);
 
     const now = Date.now();
@@ -2974,7 +2974,7 @@ function shouldRebuildPdfBatchPlan(task) {
     const batches = Array.isArray(task.batches) ? task.batches : [];
     const completedCount = batches.filter((batch) => batch.status === 'completed').length;
     if (completedCount > 0) return false;
-    const configuredBatchSize = getConfiguredPdfBatchSize();
+    const configuredBatchSize = getPdfBatchSizeForModel(getTaskModel(task)?.id);
     if (batches.length === 0) return true;
     if (Number(task.pdfBatchSize || 0) !== configuredBatchSize) return true;
     return Number(task.pdfBatchSize || 0) > MAX_PDF_BATCH_SIZE
@@ -2983,7 +2983,7 @@ function shouldRebuildPdfBatchPlan(task) {
 
 function rebuildPdfBatchPlan(task) {
     const pageCount = Number(task.pageCount || 1);
-    const batchSize = getConfiguredPdfBatchSize();
+    const batchSize = getPdfBatchSizeForModel(getTaskModel(task)?.id);
     task.pdfBatchSize = batchSize;
     task.batches = createPdfBatchDescriptors(pageCount, batchSize, task.sourceDataUrl);
     task.markdown = '';
@@ -5090,6 +5090,14 @@ function handlePdfBatchSizeInput() {
 function getConfiguredPdfBatchSize() {
     const rawValue = els.pdfBatchSizeInput?.value || localStorage.getItem(PDF_BATCH_SIZE_STORAGE_KEY);
     return clampPdfBatchSize(rawValue);
+}
+
+function getPdfBatchSizeForModel(modelId = selectedModelId) {
+    // Unlimited-OCR's long-horizon R-SWA state can enter a repetition loop on
+    // dense multi-page PDFs. Keep WebUI requests page-local so each page gets
+    // a fresh vision/decode context; the API/CLI may still use multi-page mode.
+    if (modelId === UNLIMITED_OCR_MODEL_ID) return UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE;
+    return getConfiguredPdfBatchSize();
 }
 
 function clampPdfBatchSize(value) {

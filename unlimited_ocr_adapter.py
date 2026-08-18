@@ -221,6 +221,10 @@ COMMON_LAYOUT_GRAMS = {
     "left right left",
 }
 COMMON_LAYOUT_WORDS = {"td", "tr", "th", "li", "left", "right", "text", "rowspan", "colspan"}
+_UNLIMITED_LATEX_COMMAND_RUN_RE = re.compile(
+    r"(?:\\(?:left|right|middle|text|frac|begin|end)\s*){6,}",
+    re.IGNORECASE,
+)
 SGLANG_CONTEXT_ERROR_RE = re.compile(
     r"maximum context length of\s+(\d+)\s+tokens.*?"
     r"(\d+)\s+tokens from the input messages and\s+(\d+)\s+tokens for the completion",
@@ -1275,6 +1279,13 @@ def detect_degenerate_repetition(text: str) -> str | None:
         return None
 
     tail = normalize_newlines(str(text))[-max(512, DEGENERATION_WINDOW_CHARS) :].lower()
+    # A valid formula may contain an occasional ``\\left``/``\\right``;
+    # dozens of adjacent commands are a decoder loop.  Check this before the
+    # det/layout exceptions so malformed structured output cannot bypass the
+    # guard (the UI otherwise shows a wall of repeated LaTeX commands).
+    latex_run = _UNLIMITED_LATEX_COMMAND_RUN_RE.search(tail)
+    if latex_run:
+        return "repeated LaTeX command"
     # SGLang can occasionally enter a line-level loop that changes only a
     # replacement glyph or trailing coordinate. Word n-grams are too sparse
     # for that shape, so fail closed when the same long line is emitted again

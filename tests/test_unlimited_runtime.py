@@ -464,6 +464,10 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         self.assertIsNone(adapter.detect_degenerate_repetition("short"))
         self.assertIsNone(adapter.detect_degenerate_repetition("td 100 td td 100 " * 20))
         self.assertIsNone(adapter.detect_degenerate_repetition("2017 2017 2017 " * 20))
+        self.assertEqual(
+            adapter.detect_degenerate_repetition("\\left" * 20),
+            "repeated LaTeX command",
+        )
         repeat = ("longword anotherword thirdword " * 30)
         self.assertIsNotNone(adapter.detect_degenerate_repetition(repeat))
         repeated_line = "\n".join(["29: end while Output: \u00e2 . text [509, 565, 704, 635]"] * 8)

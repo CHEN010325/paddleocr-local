@@ -364,9 +364,15 @@ class UnlimitedRuntimeTests(unittest.TestCase):
             adapter.run_transformers_inference_sync("t", fail_model, [png_bytes()], 1)
 
     def test_payload_context_stream_parsers_and_generation(self):
+        original = png_bytes((2000, 3000))
+        resized = adapter.resize_sglang_pdf_page(original)
+        self.assertLessEqual(max(Image.open(io.BytesIO(resized)).size), adapter.SGLANG_PDF_MAX_DIMENSION)
+        self.assertEqual(adapter.resize_sglang_pdf_page(png_bytes((20, 20))), png_bytes((20, 20)))
         with patch.object(adapter, "get_no_repeat_processor_str", return_value="processor"):
             payload = adapter.build_sglang_payload([b"a", b"b"], 0)
         self.assertIn("custom_params", payload)
+        self.assertEqual(adapter.build_sglang_payload([b"a"], 0)["images_config"]["image_mode"], "base")
+        self.assertEqual(adapter.build_sglang_payload([b"a"], 1)["images_config"]["image_mode"], adapter.SINGLE_IMAGE_MODE)
         with patch.object(adapter, "SGLANG_MAX_TOKENS", 0), patch.object(
             adapter, "get_no_repeat_processor_str", return_value=None
         ):
@@ -460,6 +466,16 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(adapter.detect_degenerate_repetition(repeat))
         repeated_line = "\n".join(["29: end while Output: \u00e2 . text [509, 565, 704, 635]"] * 8)
         self.assertIn("end while output", adapter.detect_degenerate_repetition(repeated_line))
+        leaked_trace = "\n".join(
+            [
+                "22: d(l_k) 23: d(l_k, ..., d_lk)",
+                "22: d(l_k, text [516, text [516, 116, 882, 130]",
+                "22: end while Output: \u00e2 . text [509, 565, 704, 635]",
+            ]
+        )
+        self.assertEqual(adapter.detect_unlimited_structural_artifacts(leaked_trace), "layout coordinate trace")
+        self.assertEqual(adapter.sanitize_unlimited_ocr_fallback(leaked_trace), "")
+        self.assertEqual(adapter.render_streaming_markdown(leaked_trace), ("", {}))
         self.assertEqual(adapter.streaming_source_position("plain", 1), {"pageIndex": 0, "pageProgress": 0})
         position = adapter.streaming_source_position("<|det|>text [0,0,100,100]<|/det|>body", 1)
         self.assertEqual(position["pageNumber"], 1)

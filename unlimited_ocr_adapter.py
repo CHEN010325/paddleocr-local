@@ -73,10 +73,12 @@ DEFAULT_MODEL_REVISIONS = {
 MODEL_REVISION = os.getenv("UNLIMITED_OCR_MODEL_REVISION", DEFAULT_MODEL_REVISIONS.get(MODEL_NAME, "main"))
 REQUEST_TIMEOUT = float(os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200"))
 PDF_DPI = int(os.getenv("UNLIMITED_OCR_PDF_DPI", "300"))
+SGLANG_PDF_DPI = int(os.getenv("UNLIMITED_OCR_SGLANG_PDF_DPI", "96"))
 MAX_PAGES_PER_REQUEST = int(os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50"))
 MAX_RENDER_PIXELS = int(os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000"))
 SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
+SGLANG_PDF_MAX_DIMENSION = int(os.getenv("UNLIMITED_OCR_SGLANG_PDF_MAX_DIMENSION", "1120"))
 SINGLE_PROMPT = os.getenv("UNLIMITED_OCR_SINGLE_PROMPT", "document parsing.")
 MULTI_PROMPT = os.getenv("UNLIMITED_OCR_MULTI_PROMPT", "Multi page parsing.")
 NO_REPEAT_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35"))
@@ -329,10 +331,14 @@ def extract_pdf_page_texts(file_bytes: bytes) -> list[str]:
         document.close()
 
 
-def prepare_image_pages_and_texts(file_bytes: bytes, file_type: int) -> tuple[list[bytes], list[str]]:
+def prepare_image_pages_and_texts(
+    file_bytes: bytes,
+    file_type: int,
+    pdf_dpi: int | None = None,
+) -> tuple[list[bytes], list[str]]:
     if file_type == 0:
         page_texts = extract_pdf_page_texts(file_bytes)
-        return pdf_to_png_pages(file_bytes, PDF_DPI), page_texts
+        return pdf_to_png_pages(file_bytes, int(pdf_dpi or PDF_DPI)), page_texts
     if file_type == 1:
         return [image_bytes_to_png(file_bytes)], []
     raise HTTPException(status_code=400, detail="Unsupported fileType. Use 0 for PDF or 1 for image.")
@@ -341,6 +347,37 @@ def prepare_image_pages_and_texts(file_bytes: bytes, file_type: int) -> tuple[li
 def encode_image_content(image_bytes: bytes, mime: str = "image/png") -> dict:
     data = base64.b64encode(image_bytes).decode("utf-8")
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
+
+
+def resize_sglang_pdf_page(image_bytes: bytes) -> bytes:
+    """Bound PDF raster dimensions for SGLang's base layout mode.
+
+    The model's PDF path is unusually sensitive to oversized raster pages:
+    dense equation/algorithm pages can fall into a decoder trace even though
+    the same page at the model's native layout scale parses correctly.  Keep
+    the original page bytes for cropping/results; only the request image is
+    resized.
+    """
+    limit = max(0, int(SGLANG_PDF_MAX_DIMENSION))
+    if limit <= 0:
+        return image_bytes
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        width, height = image.size
+        longest = max(width, height)
+        if longest <= limit:
+            return image_bytes
+        scale = limit / longest
+        resized = image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+        output = io.BytesIO()
+        resized.save(output, format="PNG", optimize=True)
+        return output.getvalue()
+    except Exception:
+        logger.warning("Failed to resize PDF page for SGLang; using original bytes", exc_info=True)
+        return image_bytes
 
 
 def select_transformers_device(torch_module) -> str:
@@ -854,16 +891,25 @@ def get_no_repeat_processor_str() -> str | None:
 def build_sglang_payload(image_pages: list[bytes], file_type: int) -> dict:
     is_multi_page = len(image_pages) > 1
     prompt = MULTI_PROMPT if is_multi_page else SINGLE_PROMPT
-    image_mode = MULTI_IMAGE_MODE if is_multi_page else SINGLE_IMAGE_MODE
+    # Dense PDF pages (especially algorithms/equations) are more stable in
+    # Unlimited-OCR's ``base`` layout mode.  ``gundam`` remains the default
+    # for standalone images, while every PDF page uses the same deterministic
+    # mode even when the WebUI sends one page per request.
+    image_mode = MULTI_IMAGE_MODE if is_multi_page or file_type == 0 else SINGLE_IMAGE_MODE
     ngram_window = MULTI_NGRAM_WINDOW if is_multi_page else SINGLE_NGRAM_WINDOW
 
+    request_pages = (
+        [resize_sglang_pdf_page(page) for page in image_pages]
+        if file_type == 0
+        else image_pages
+    )
     payload = {
         "model": SERVED_MODEL_NAME,
         "messages": [
             {
                 "role": "user",
                 "content": [{"type": "text", "text": prompt}]
-                + [encode_image_content(image_bytes) for image_bytes in image_pages],
+                + [encode_image_content(image_bytes) for image_bytes in request_pages],
             }
         ],
         "temperature": 0,
@@ -1047,6 +1093,47 @@ def compact_block_text(text: str) -> str:
     return text.strip()
 
 
+_UNLIMITED_BBOX_ARTIFACT_RE = re.compile(
+    r"\btext\s*\[(?=[^\]\n]*(?:-?\d+(?:\.\d+)?\s*,\s*){3}-?\d+(?:\.\d+)?\s*\])[^\]\n]*\]",
+    re.IGNORECASE,
+)
+_UNLIMITED_NUMBERED_LINE_RE = re.compile(r"^\s*\d{1,3}\s*:\s*")
+
+
+def detect_unlimited_structural_artifacts(text: str) -> str | None:
+    """Detect leaked layout/decoder scaffolding in an unstructured stream.
+
+    Unlimited-OCR normally emits ``<|det|>...`` blocks.  During a bad
+    generation it can instead print its internal algorithm trace, including
+    line numbers and ``text [x, y, w, h]`` coordinates.  That trace must never
+    be presented as document text or allowed to grow the browser DOM forever.
+    """
+    normalized = normalize_newlines(str(text))
+    bbox_count = len(_UNLIMITED_BBOX_ARTIFACT_RE.findall(normalized))
+    numbered_lines = sum(
+        1 for line in normalized.splitlines() if _UNLIMITED_NUMBERED_LINE_RE.match(line)
+    )
+    trace_words = len(re.findall(r"\b(?:end\s+while|end\s+if|output:)\b", normalized, re.IGNORECASE))
+    if bbox_count >= 2 and (numbered_lines >= 3 or trace_words >= 2):
+        return "layout coordinate trace"
+    if numbered_lines >= 6 and trace_words >= 2:
+        return "decoder trace"
+    return None
+
+
+def sanitize_unlimited_ocr_fallback(text: str) -> str:
+    """Return safe fallback text when det blocks are temporarily unavailable.
+
+    A suspicious trace is hidden rather than rendered.  The stream-level
+    degeneration guard will request a bounded retry; this function is the
+    final presentation barrier for partial events and persisted responses.
+    """
+    normalized = normalize_newlines(str(text))
+    if detect_unlimited_structural_artifacts(normalized):
+        return ""
+    return compact_block_text(normalized)
+
+
 def parse_bbox(raw_bbox: str | None) -> list[float] | None:
     if not raw_bbox:
         return None
@@ -1183,6 +1270,9 @@ def detect_degenerate_repetition(text: str) -> str | None:
             line_counts[line] = line_counts.get(line, 0) + 1
             if line_counts[line] >= 4:
                 return line[:160]
+    structural_artifact = detect_unlimited_structural_artifacts(tail)
+    if structural_artifact:
+        return structural_artifact
     words = WORD_RE.findall(tail)
     if len(words) < 48:
         return None
@@ -1336,7 +1426,7 @@ def render_unlimited_ocr_document(
     text = normalize_newlines(markdown)
     matches = list(DET_BLOCK_RE.finditer(text))
     if not matches:
-        return compact_block_text(text), {}
+        return sanitize_unlimited_ocr_fallback(text), {}
 
     blocks: list[str] = []
     images: dict[str, str] = {}
@@ -1430,7 +1520,7 @@ def normalize_markdown(markdown: str) -> str:
     if "<|det|>" in text:
         rendered, _ = render_unlimited_ocr_document(text)
         return rendered
-    return compact_block_text(text)
+    return sanitize_unlimited_ocr_fallback(text)
 
 
 def render_streaming_markdown(
@@ -1441,7 +1531,7 @@ def render_streaming_markdown(
     text = str(markdown)
     if "<|det|>" in text:
         return render_unlimited_ocr_document(text, image_pages, page_texts)
-    return compact_block_text(text), {}
+    return sanitize_unlimited_ocr_fallback(text), {}
 
 
 def unsent_images(images: dict[str, str], sent_images: dict[str, str]) -> dict[str, str]:
@@ -1723,6 +1813,7 @@ async def ocr(request: Request):
         prepare_image_pages_and_texts,
         file_bytes,
         file_type,
+        SGLANG_PDF_DPI if backend == "sglang" else None,
     )
 
     if not image_pages:
@@ -1747,6 +1838,7 @@ async def ocr_stream(request: Request):
         prepare_image_pages_and_texts,
         file_bytes,
         file_type,
+        SGLANG_PDF_DPI if backend == "sglang" else None,
     )
 
     if not image_pages:
@@ -1771,6 +1863,7 @@ async def ocr_multipart(
         prepare_image_pages_and_texts,
         file_bytes,
         resolved_type,
+        SGLANG_PDF_DPI if resolved_backend == "sglang" else None,
     )
 
     markdown, images_config = await generate_markdown(image_pages, resolved_type, resolved_backend)

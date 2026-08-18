@@ -8,7 +8,6 @@
 | --- | ---: | ---: | --- |
 | PaddleOCR-VL 1.6 | NVIDIA 11,264 MiB | 12～16 GB+ | CPU 路径不作为默认推荐 |
 | PP-OCRv6 | NVIDIA 4,096 MiB | 4 GB+ | CPU Lite 一键路径仍在路线图中 |
-| Unlimited-OCR | NVIDIA 7,680 MiB | 12 GB+ | macOS 有独立安装路径 |
 | OvisOCR2 | NVIDIA 7,680 MiB | 8～16 GB+ | Apple Silicon 默认 MLX |
 | HPD-Parsing | NVIDIA 7,680 MiB | 12 GB+ | 当前不支持 Apple Silicon 一键部署 |
 
@@ -20,8 +19,8 @@
 | --- | --- | --- | --- | --- |
 | RTX 4070 Laptop 8 GB / Ubuntu 24 | PaddleOCR-VL 1.6 | 不满足当前预检 | 推荐 PP-OCRv6 或 8 GB 适配模型 | Issue #7 |
 | Apple M1/M2/M3/M4 | OvisOCR2 | 提供 MLX 路径 | 仍需更多芯片/内存/速度报告 | 项目安装脚本 |
-| RTX 30/40 | 五模型 | 提供 Docker 路径 | 按模型显存要求选择 | `env.docker` |
-| RTX 50 / Blackwell | 五模型 | 提供 SM120 路径 | 使用 `env.txt` | `env.txt` |
+| RTX 30/40 | 四个默认模型 | 提供 Docker 路径 | 按模型显存要求选择 | `env.docker` |
+| RTX 50 / Blackwell | 四个默认模型 | 提供 SM120 路径 | 使用 `env.txt` | `env.txt` |
 
 没有社区报告的组合不会被标记为“已实测”。
 

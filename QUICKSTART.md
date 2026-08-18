@@ -27,7 +27,6 @@ Apple M1/M2/M3/M4 一键部署：
 ```bash
 ./macos-one-click.command --model paddleocr-vl-1.6
 ./macos-one-click.command --model pp-ocrv6
-./macos-one-click.command --model unlimited-ocr
 ./macos-one-click.command --model ovisocr2
 ```
 
@@ -74,7 +73,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务、WebUI 及两个隔离支持服务。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
+脚本会让用户从 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`OvisOCR2`、`HPD-Parsing` 中选择首次部署模型，只拉取或构建对应服务、WebUI 及两个隔离支持服务。Unlimited-OCR 已从默认环境停用，不会出现在 WebUI 模型目录中。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
 
 只做预检、不启动服务：
 
@@ -92,7 +91,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 
 ```powershell
 .\windows-one-click.bat -Model hpd-parsing
-.\windows-one-click.bat -Models all-five -ActiveModel hpd-parsing
+.\windows-one-click.bat -Model hpd-parsing
 ```
 
 HPD-Parsing 官方运行时要求 NVIDIA GPU、Linux x86-64 容器和支持 CUDA 12.8+ 的驱动；Apple Silicon 一键脚本暂不提供该模型。
@@ -121,7 +120,6 @@ WebUI 会在模型启动前通过一个短生命周期的 `nvidia-smi` 容器读
 | --- | ---: | --- |
 | PaddleOCR-VL 1.6 | 11264 MiB（12 GB 级别） | `PANDOCR_VLLM_MIN_REQUIRED_MIB=6656`、`PANDOCR_VLLM_RESERVE_MIB=512`、并发 1 |
 | PP-OCRv6 | 4096 MiB | `PANDOCR_MAX_CONCURRENT_OCR=1` |
-| Unlimited-OCR | 7680 MiB | RTX 50 / Blackwell 使用 CUDA 12.9.1 的 `sglang`；其他显卡可选 `transformers`，并设置 `UNLIMITED_OCR_MAX_TOKENS=8192` |
 | OvisOCR2 | 7680 MiB | `OVISOCR2_KV_CACHE_MEMORY_MB=256`、`OVISOCR2_MAX_TOKENS=4096` |
 | HPD-Parsing | 7680 MiB | `HPD_PARSING_GPU_MEMORY_TARGET_MIB=6144`、`HPD_PARSING_MAX_MODEL_LEN=8192`、`HPD_PARSING_MAX_TOKENS=4096` |
 
@@ -166,20 +164,17 @@ curl http://localhost:8081/health
 - `paddleocr-vlm-server`
 - `paddleocr-vl-api`
 - `paddleocr-ocr-api`
-- `unlimited-ocr-api`
-- `unlimited-ocr-sglang`
 - `ovisocr2-api`
 - `hpd-parsing-server`
 - `hpd-parsing-api`
 - `pandocr-web`
 
-`/api/models` 应返回 `paddleocr-vl-1.6`、`pp-ocrv6`、`unlimited-ocr`、`ovisocr2` 和 `hpd-parsing`；未部署模型会显示为待部署。`/api/model-runtime` 应返回当前活跃模型和每个模型的真实运行状态。
+`/api/models` 应返回 `paddleocr-vl-1.6`、`pp-ocrv6`、`ovisocr2` 和 `hpd-parsing`；未部署模型会显示为待部署。`/api/model-runtime` 应返回当前活跃模型和每个模型的真实运行状态。
 
 模型健康检查端口：
 
 - PaddleOCR-VL: http://localhost:8081/health
 - PP-OCRv6: http://localhost:8082/health
-- Unlimited-OCR: http://localhost:8083/health
 - OvisOCR2: http://localhost:8084/health
 - HPD-Parsing: http://localhost:8085/health
 

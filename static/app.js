@@ -1633,10 +1633,8 @@ async function renderPdfDocument(renderToken = sourceRenderToken, scrollAnchor =
     if (!currentPdf) return;
     currentPage = Math.min(Math.max(currentPage, 1), currentPdf.numPages);
     updatePdfControls();
-    els.sourceViewer.innerHTML = '';
     const flow = document.createElement('div');
     flow.className = 'pdf-document-flow';
-    els.sourceViewer.appendChild(flow);
 
     for (let pageNumber = 1; pageNumber <= currentPdf.numPages; pageNumber += 1) {
         if (renderToken !== sourceRenderToken) return;
@@ -1661,6 +1659,15 @@ async function renderPdfDocument(renderToken = sourceRenderToken, scrollAnchor =
         flow.appendChild(wrap);
 
         await page.render({ canvasContext: context, viewport }).promise;
+    }
+
+    // Render off-screen first so zooming a later page never flashes the
+    // live viewer back to page 1 while the replacement canvases are built.
+    const previousFlow = els.sourceViewer.querySelector('.pdf-document-flow');
+    if (previousFlow) {
+        previousFlow.replaceWith(flow);
+    } else {
+        els.sourceViewer.appendChild(flow);
     }
 
     if (scrollAnchor) {

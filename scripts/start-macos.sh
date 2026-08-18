@@ -13,10 +13,10 @@ truthy() {
 }
 
 VENV_DIR="${PANDOCR_MACOS_VENV:-.venv-macos}"
-UNLIMITED_OCR_MACOS_VENV="${UNLIMITED_OCR_MACOS_VENV:-.venv-unlimited-ocr-macos}"
 OVISOCR2_MACOS_VENV="${OVISOCR2_MACOS_VENV:-.venv-ovisocr2-macos}"
+HPD_PARSING_MACOS_VENV="${HPD_PARSING_MACOS_VENV:-.venv-hpd-parsing-macos}"
 MODEL_ENABLE_FLAGS_EXPLICIT=0
-if [[ -n "${PANDOCR_ENABLE_PADDLEOCR_VL+x}${PANDOCR_ENABLE_PPOCRV6+x}${PANDOCR_ENABLE_UNLIMITED_OCR+x}${PANDOCR_ENABLE_OVISOCR2+x}" ]]; then
+if [[ -n "${PANDOCR_ENABLE_PADDLEOCR_VL+x}${PANDOCR_ENABLE_PPOCRV6+x}${PANDOCR_ENABLE_HPD_PARSING+x}${PANDOCR_ENABLE_OVISOCR2+x}" ]]; then
   MODEL_ENABLE_FLAGS_EXPLICIT=1
 fi
 ACTIVE_MODEL_EXPLICIT=0
@@ -27,18 +27,22 @@ fi
 PANDOCR_ACTIVE_MODEL_ON_START="${PANDOCR_ACTIVE_MODEL_ON_START:-paddleocr-vl-1.6}"
 PANDOCR_ENABLE_PADDLEOCR_VL="${PANDOCR_ENABLE_PADDLEOCR_VL:-0}"
 PANDOCR_ENABLE_PPOCRV6="${PANDOCR_ENABLE_PPOCRV6:-0}"
-PANDOCR_ENABLE_UNLIMITED_OCR="${PANDOCR_ENABLE_UNLIMITED_OCR:-0}"
+PANDOCR_ENABLE_HPD_PARSING="${PANDOCR_ENABLE_HPD_PARSING:-0}"
 PANDOCR_ENABLE_OVISOCR2="${PANDOCR_ENABLE_OVISOCR2:-0}"
+PANDOCR_SKIP_WEB="${PANDOCR_SKIP_WEB:-0}"
+PANDOCR_MODEL_CONTROL="${PANDOCR_MODEL_CONTROL:-none}"
+PANDOCR_MODEL_CONTROLLER_URL="${PANDOCR_MODEL_CONTROLLER_URL:-}"
+PANDOCR_MODEL_CONTROLLER_TOKEN="${PANDOCR_MODEL_CONTROLLER_TOKEN:-}"
 
 if (( MODEL_ENABLE_FLAGS_EXPLICIT == 0 )); then
   case "$PANDOCR_ACTIVE_MODEL_ON_START" in
     paddleocr-vl-1.6) PANDOCR_ENABLE_PADDLEOCR_VL=1 ;;
     pp-ocrv6) PANDOCR_ENABLE_PPOCRV6=1 ;;
-    unlimited-ocr) PANDOCR_ENABLE_UNLIMITED_OCR=1 ;;
+    hpd-parsing) PANDOCR_ENABLE_HPD_PARSING=1 ;;
     ovisocr2) PANDOCR_ENABLE_OVISOCR2=1 ;;
     *)
       echo "Unsupported macOS model: $PANDOCR_ACTIVE_MODEL_ON_START"
-      echo "Supported values: paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2"
+      echo "Supported values: paddleocr-vl-1.6, pp-ocrv6, ovisocr2, hpd-parsing"
       exit 1
       ;;
   esac
@@ -54,9 +58,9 @@ if truthy "$PANDOCR_ENABLE_PPOCRV6"; then
   ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
   ENABLED_MODEL_ID="pp-ocrv6"
 fi
-if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
+if truthy "$PANDOCR_ENABLE_HPD_PARSING"; then
   ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
-  ENABLED_MODEL_ID="unlimited-ocr"
+  ENABLED_MODEL_ID="hpd-parsing"
 fi
 if truthy "$PANDOCR_ENABLE_OVISOCR2"; then
   ENABLED_MODEL_COUNT=$((ENABLED_MODEL_COUNT + 1))
@@ -76,9 +80,8 @@ fi
 PANDOCR_ACTIVE_MODEL_ON_START="$ENABLED_MODEL_ID"
 PANDOCR_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG:-$ENABLED_MODEL_ID}"
 NORMALIZED_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG//[[:space:]]/}"
-if [[ "$NORMALIZED_MODEL_CATALOG" != "$ENABLED_MODEL_ID" ]]; then
-  echo "PANDOCR_MODEL_CATALOG must contain only the enabled macOS model: $ENABLED_MODEL_ID"
-  exit 1
+if [[ -z "$NORMALIZED_MODEL_CATALOG" ]]; then
+  PANDOCR_MODEL_CATALOG="$ENABLED_MODEL_ID"
 fi
 
 echo "Selected macOS logical model: $ENABLED_MODEL_ID"
@@ -97,8 +100,8 @@ if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" || truthy "$PANDOCR_ENABLE_PPOCRV6"; th
   # shellcheck disable=SC1090
   source "$VENV_DIR/bin/activate"
   LAUNCHER_PYTHON="$VENV_DIR/bin/python"
-elif truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  LAUNCHER_PYTHON="$UNLIMITED_OCR_MACOS_VENV/bin/python"
+elif truthy "$PANDOCR_ENABLE_HPD_PARSING"; then
+  LAUNCHER_PYTHON="$HPD_PARSING_MACOS_VENV/bin/python"
 elif truthy "$PANDOCR_ENABLE_OVISOCR2"; then
   LAUNCHER_PYTHON="$OVISOCR2_MACOS_VENV/bin/python"
 else
@@ -122,26 +125,6 @@ MLX_PORT="${MLX_PORT:-8111}"
 MLX_MODEL="${MLX_MODEL:-PaddlePaddle/PaddleOCR-VL-1.6}"
 PADDLE_OCR_HOST="${PADDLE_OCR_HOST:-127.0.0.1}"
 PADDLE_OCR_PORT="${PADDLE_OCR_PORT:-8082}"
-UNLIMITED_OCR_HOST="${UNLIMITED_OCR_HOST:-127.0.0.1}"
-UNLIMITED_OCR_API_PORT="${UNLIMITED_OCR_API_PORT:-8083}"
-UNLIMITED_OCR_MODEL_NAME="${UNLIMITED_OCR_MODEL_NAME:-sabafallah/Unlimited-OCR-Universal}"
-UNLIMITED_OCR_MODEL_REVISION="${UNLIMITED_OCR_MODEL_REVISION:-bc00ae36def7fe8d23980adf5a901125fe0040a2}"
-UNLIMITED_OCR_BACKEND="${UNLIMITED_OCR_BACKEND:-transformers}"
-UNLIMITED_OCR_SUPPORTED_BACKENDS="${UNLIMITED_OCR_SUPPORTED_BACKENDS:-transformers}"
-UNLIMITED_OCR_PRELOAD="${UNLIMITED_OCR_PRELOAD:-0}"
-UNLIMITED_OCR_HF_HOME="${UNLIMITED_OCR_HF_HOME:-$ROOT_DIR/model_cache_unlimited_ocr_macos}"
-UNLIMITED_OCR_TRANSFORMERS_DEVICE="${UNLIMITED_OCR_TRANSFORMERS_DEVICE:-auto}"
-UNLIMITED_OCR_TRANSFORMERS_DTYPE="${UNLIMITED_OCR_TRANSFORMERS_DTYPE:-auto}"
-UNLIMITED_OCR_ATTENTION_IMPLEMENTATION="${UNLIMITED_OCR_ATTENTION_IMPLEMENTATION:-eager}"
-UNLIMITED_OCR_DISABLE_XET="${UNLIMITED_OCR_DISABLE_XET:-1}"
-UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT="${UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT:-${HF_HUB_DOWNLOAD_TIMEOUT:-120}}"
-UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT="${UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT:-${HF_HUB_ETAG_TIMEOUT:-30}}"
-UNLIMITED_OCR_PDF_DPI="${UNLIMITED_OCR_PDF_DPI:-180}"
-UNLIMITED_OCR_MAX_TOKENS="${UNLIMITED_OCR_MAX_TOKENS:-4096}"
-UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS="${UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS:-20}"
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY:-1}"
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE:-640}"
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS:-4096}"
 OVISOCR2_HOST="${OVISOCR2_HOST:-127.0.0.1}"
 OVISOCR2_API_PORT="${OVISOCR2_API_PORT:-8084}"
 OVISOCR2_MODEL_NAME="${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}"
@@ -218,27 +201,11 @@ PANDOCR_ENABLE_PADDLEOCR_VL=$PANDOCR_ENABLE_PADDLEOCR_VL
 PANDOCR_ENABLE_PPOCRV6=$PANDOCR_ENABLE_PPOCRV6
 PADDLE_OCR_HOST=$PADDLE_OCR_HOST
 PADDLE_OCR_PORT=$PADDLE_OCR_PORT
-PANDOCR_ENABLE_UNLIMITED_OCR=$PANDOCR_ENABLE_UNLIMITED_OCR
-UNLIMITED_OCR_HOST=$UNLIMITED_OCR_HOST
-UNLIMITED_OCR_API_PORT=$UNLIMITED_OCR_API_PORT
-UNLIMITED_OCR_MACOS_VENV=$UNLIMITED_OCR_MACOS_VENV
-UNLIMITED_OCR_MODEL_NAME=$UNLIMITED_OCR_MODEL_NAME
-UNLIMITED_OCR_BACKEND=$UNLIMITED_OCR_BACKEND
-UNLIMITED_OCR_SUPPORTED_BACKENDS=$UNLIMITED_OCR_SUPPORTED_BACKENDS
-UNLIMITED_OCR_PRELOAD=$UNLIMITED_OCR_PRELOAD
-UNLIMITED_OCR_HF_HOME=$UNLIMITED_OCR_HF_HOME
-UNLIMITED_OCR_TRANSFORMERS_DEVICE=$UNLIMITED_OCR_TRANSFORMERS_DEVICE
-UNLIMITED_OCR_TRANSFORMERS_DTYPE=$UNLIMITED_OCR_TRANSFORMERS_DTYPE
-UNLIMITED_OCR_ATTENTION_IMPLEMENTATION=$UNLIMITED_OCR_ATTENTION_IMPLEMENTATION
-UNLIMITED_OCR_DISABLE_XET=$UNLIMITED_OCR_DISABLE_XET
-UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT=$UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT
-UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT=$UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT
-UNLIMITED_OCR_PDF_DPI=$UNLIMITED_OCR_PDF_DPI
-UNLIMITED_OCR_MAX_TOKENS=$UNLIMITED_OCR_MAX_TOKENS
-UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS=$UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY=$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE=$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE
-UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS=$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS
+PANDOCR_ENABLE_HPD_PARSING=$PANDOCR_ENABLE_HPD_PARSING
+HPD_PARSING_MACOS_VENV=$HPD_PARSING_MACOS_VENV
+HPD_PARSING_HOST=${HPD_PARSING_HOST:-127.0.0.1}
+HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
+HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
 PANDOCR_ENABLE_OVISOCR2=$PANDOCR_ENABLE_OVISOCR2
 OVISOCR2_HOST=$OVISOCR2_HOST
 OVISOCR2_API_PORT=$OVISOCR2_API_PORT
@@ -285,24 +252,24 @@ is_expected_process() {
 }
 
 has_running_service() {
-  is_running run/pandocr-web.pid || is_running run/paddlex.pid || is_running run/ppocrv6.pid || is_running run/mlx-vlm.pid || is_running run/unlimited-ocr.pid || is_running run/ovisocr2.pid
+  is_running run/pandocr-web.pid || is_running run/paddlex.pid || is_running run/ppocrv6.pid || is_running run/mlx-vlm.pid || is_running run/hpd-parsing.pid || is_running run/ovisocr2.pid
 }
 
 has_running_non_target_model() {
   case "$ENABLED_MODEL_ID" in
     paddleocr-vl-1.6)
       is_expected_process run/ppocrv6.pid "paddlex --serve" ||
-        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app" ||
+        is_expected_process run/hpd-parsing.pid "hpd_parsing_macos_server:app" ||
         is_expected_process run/ovisocr2.pid "ovisocr2_adapter:app" ||
         { [[ "$PANDOCR_MACOS_BACKEND" != "mlx" ]] && is_expected_process run/mlx-vlm.pid "mlx_vlm.server"; }
       ;;
     pp-ocrv6)
       is_expected_process run/paddlex.pid "paddlex --serve" ||
         is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
-        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app" ||
+        is_expected_process run/hpd-parsing.pid "hpd_parsing_macos_server:app" ||
         is_expected_process run/ovisocr2.pid "ovisocr2_adapter:app"
       ;;
-    unlimited-ocr)
+    hpd-parsing)
       is_expected_process run/paddlex.pid "paddlex --serve" ||
         is_expected_process run/ppocrv6.pid "paddlex --serve" ||
         is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
@@ -312,7 +279,7 @@ has_running_non_target_model() {
       is_expected_process run/paddlex.pid "paddlex --serve" ||
         is_expected_process run/ppocrv6.pid "paddlex --serve" ||
         is_expected_process run/mlx-vlm.pid "mlx_vlm.server" ||
-        is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app"
+        is_expected_process run/hpd-parsing.pid "hpd_parsing_macos_server:app"
       ;;
   esac
 }
@@ -365,7 +332,7 @@ fi
 
 write_expected_state
 
-if has_running_service && ! cmp -s "$STATE_FILE" "$EXPECTED_STATE_FILE"; then
+if [[ "$PANDOCR_SKIP_WEB" != "1" ]] && has_running_service && ! cmp -s "$STATE_FILE" "$EXPECTED_STATE_FILE"; then
   echo "Existing macOS services use a different configuration; restarting them."
   bash scripts/stop-macos.sh
   if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" && "$PADDLEX_PIPELINE_IS_CUSTOM" == "0" ]]; then
@@ -376,7 +343,11 @@ fi
 
 if has_running_non_target_model; then
   echo "A non-selected macOS model is still running; stopping and verifying all old model processes before starting $ENABLED_MODEL_ID."
-  bash scripts/stop-macos.sh
+  if [[ "$PANDOCR_SKIP_WEB" == "1" ]]; then
+    bash scripts/stop-macos-models.sh
+  else
+    bash scripts/stop-macos.sh
+  fi
   if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" && "$PADDLEX_PIPELINE_IS_CUSTOM" == "0" ]]; then
     generate_mlx_pipeline_config
   fi
@@ -456,49 +427,46 @@ wait_for_http "http://${PADDLE_OCR_HOST}:${PADDLE_OCR_PORT}/health" "PP-OCRv6 se
 }
 fi
 
-if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  if [[ ! -x "$UNLIMITED_OCR_MACOS_VENV/bin/python" ]]; then
-    echo "Unlimited-OCR virtual environment not found: $UNLIMITED_OCR_MACOS_VENV"
-    echo "Run: bash scripts/setup-macos-unlimited-ocr.sh"
+if truthy "$PANDOCR_ENABLE_HPD_PARSING"; then
+  HPD_PARSING_HOST="${HPD_PARSING_HOST:-127.0.0.1}"
+  HPD_PARSING_API_PORT="${HPD_PARSING_API_PORT:-8085}"
+  HPD_PARSING_MODEL_NAME="${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}"
+  HPD_PARSING_HF_HOME="${HPD_PARSING_HF_HOME:-$ROOT_DIR/model_cache_hpd_parsing_macos}"
+  if [[ ! -x "$HPD_PARSING_MACOS_VENV/bin/python" ]]; then
+    echo "HPD-Parsing virtual environment not found: $HPD_PARSING_MACOS_VENV"
+    echo "Run: bash scripts/setup-macos-hpd-parsing.sh"
     exit 1
   fi
 
-  mkdir -p "$UNLIMITED_OCR_HF_HOME"
-  if is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app"; then
-    echo "Unlimited-OCR adapter already running: $(cat run/unlimited-ocr.pid)"
+  mkdir -p "$HPD_PARSING_HF_HOME"
+  if is_expected_process run/hpd-parsing-backend.pid "hpd_parsing_macos_server:app" && is_expected_process run/hpd-parsing.pid "hpd_parsing_adapter:app"; then
+    echo "HPD-Parsing MPS service already running: $(cat run/hpd-parsing.pid)"
   else
-    rm -f run/unlimited-ocr.pid
-    echo "Starting Unlimited-OCR adapter on ${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT} with ${UNLIMITED_OCR_MODEL_NAME}"
-    : > logs/unlimited-ocr.log
-    HF_HOME="$UNLIMITED_OCR_HF_HOME" \
-    HF_HUB_DISABLE_XET="$UNLIMITED_OCR_DISABLE_XET" \
-    HF_HUB_DOWNLOAD_TIMEOUT="$UNLIMITED_OCR_HF_HUB_DOWNLOAD_TIMEOUT" \
-    HF_HUB_ETAG_TIMEOUT="$UNLIMITED_OCR_HF_HUB_ETAG_TIMEOUT" \
-    PYTORCH_ENABLE_MPS_FALLBACK="${PYTORCH_ENABLE_MPS_FALLBACK:-1}" \
-    UNLIMITED_OCR_MODEL_NAME="$UNLIMITED_OCR_MODEL_NAME" \
-    UNLIMITED_OCR_MODEL_REVISION="$UNLIMITED_OCR_MODEL_REVISION" \
-    UNLIMITED_OCR_BACKEND="$UNLIMITED_OCR_BACKEND" \
-    UNLIMITED_OCR_SUPPORTED_BACKENDS="$UNLIMITED_OCR_SUPPORTED_BACKENDS" \
-    UNLIMITED_OCR_PRELOAD="$UNLIMITED_OCR_PRELOAD" \
-    UNLIMITED_OCR_TRANSFORMERS_DEVICE="$UNLIMITED_OCR_TRANSFORMERS_DEVICE" \
-    UNLIMITED_OCR_TRANSFORMERS_DTYPE="$UNLIMITED_OCR_TRANSFORMERS_DTYPE" \
-    UNLIMITED_OCR_ATTENTION_IMPLEMENTATION="$UNLIMITED_OCR_ATTENTION_IMPLEMENTATION" \
-    UNLIMITED_OCR_PDF_DPI="$UNLIMITED_OCR_PDF_DPI" \
-    UNLIMITED_OCR_MAX_TOKENS="$UNLIMITED_OCR_MAX_TOKENS" \
-    UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS="$UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS" \
-    UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY="$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY" \
-    UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE="$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE" \
-    UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS="$UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS" \
-    PANDOCR_RUNTIME_SETTINGS_FILE="$ROOT_DIR/data/runtime-settings.json" \
-      start_detached logs/unlimited-ocr.log \
-        "$UNLIMITED_OCR_MACOS_VENV/bin/python" -m uvicorn unlimited_ocr_adapter:app \
-        --host "$UNLIMITED_OCR_HOST" \
-        --port "$UNLIMITED_OCR_API_PORT" \
-        > run/unlimited-ocr.pid
+    rm -f run/hpd-parsing.pid
+    echo "Starting HPD-Parsing MPS service on ${HPD_PARSING_HOST}:${HPD_PARSING_API_PORT} with ${HPD_PARSING_MODEL_NAME}"
+    : > logs/hpd-parsing.log
+    HF_HOME="$HPD_PARSING_HF_HOME" \
+    HPD_PARSING_HF_HOME="$HPD_PARSING_HF_HOME" \
+    HPD_PARSING_MODEL_NAME="$HPD_PARSING_MODEL_NAME" \
+    HPD_PARSING_SERVED_MODEL_NAME="${HPD_PARSING_SERVED_MODEL_NAME:-HPD-Parsing}" \
+    HPD_PARSING_MAX_TOKENS="${HPD_PARSING_MAX_TOKENS:-4096}" \
+    HPD_PARSING_BACKEND="transformers-mps" \
+    HPD_PARSING_DEVICE="${HPD_PARSING_DEVICE:-mps}" \
+      start_detached logs/hpd-parsing.log \
+        "$HPD_PARSING_MACOS_VENV/bin/python" -m uvicorn hpd_parsing_macos_server:app \
+        --host "$HPD_PARSING_HOST" \
+        --port 8118 \
+        > run/hpd-parsing-backend.pid
+    HPD_PARSING_SERVER_URL="http://${HPD_PARSING_HOST}:8118" \
+      start_detached logs/hpd-parsing.log \
+        "$HPD_PARSING_MACOS_VENV/bin/python" -m uvicorn hpd_parsing_adapter:app \
+        --host "$HPD_PARSING_HOST" \
+        --port "$HPD_PARSING_API_PORT" \
+        > run/hpd-parsing.pid
   fi
 
-  wait_for_http "http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health" "Unlimited-OCR adapter" || {
-    tail -n 80 logs/unlimited-ocr.log || true
+  wait_for_http "http://${HPD_PARSING_HOST}:${HPD_PARSING_API_PORT}/health" "HPD-Parsing MPS service" || {
+    tail -n 100 logs/hpd-parsing.log || true
     exit 1
   }
 fi
@@ -542,7 +510,9 @@ if truthy "$PANDOCR_ENABLE_OVISOCR2"; then
   }
 fi
 
-if is_expected_process run/pandocr-web.pid "server.py"; then
+if [[ "$PANDOCR_SKIP_WEB" == "1" ]]; then
+  echo "Keeping existing PaddleOCR Local WebUI while switching models."
+elif is_expected_process run/pandocr-web.pid "server.py"; then
   echo "PaddleOCR Local Web service already running: $(cat run/pandocr-web.pid)"
 else
   rm -f run/pandocr-web.pid
@@ -550,17 +520,10 @@ else
   : > logs/pandocr-web.log
   PADDLE_SERVICE_URL="http://${PADDLEX_HOST}:${PADDLEX_PORT}/layout-parsing" \
   PADDLE_OCR_SERVICE_URL="http://${PADDLE_OCR_HOST}:${PADDLE_OCR_PORT}/ocr" \
-  UNLIMITED_OCR_SERVICE_URL="http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/ocr" \
+  HPD_PARSING_SERVICE_URL="http://${HPD_PARSING_HOST:-127.0.0.1}:${HPD_PARSING_API_PORT:-8085}/ocr" \
   OVISOCR2_SERVICE_URL="http://${OVISOCR2_HOST}:${OVISOCR2_API_PORT}/ocr" \
   PADDLEOCR_VL_MODEL_NAME="$PADDLEOCR_VL_MODEL_NAME" \
   PPOCR_V6_MODEL_NAME="$PPOCR_V6_MODEL_NAME" \
-  UNLIMITED_OCR_MODEL_NAME="$UNLIMITED_OCR_MODEL_NAME" \
-  UNLIMITED_OCR_BACKEND="$UNLIMITED_OCR_BACKEND" \
-  UNLIMITED_OCR_PRELOAD="$UNLIMITED_OCR_PRELOAD" \
-  UNLIMITED_OCR_API_PORT="$UNLIMITED_OCR_API_PORT" \
-  UNLIMITED_OCR_SUPPORTED_BACKENDS="$UNLIMITED_OCR_SUPPORTED_BACKENDS" \
-  UNLIMITED_OCR_PDF_DPI="$UNLIMITED_OCR_PDF_DPI" \
-  UNLIMITED_OCR_MAX_TOKENS="$UNLIMITED_OCR_MAX_TOKENS" \
   OVISOCR2_MODEL_NAME="$OVISOCR2_MODEL_NAME" \
   OVISOCR2_API_PORT="$OVISOCR2_API_PORT" \
   PADDLE_REQUEST_TIMEOUT="$PADDLE_REQUEST_TIMEOUT" \
@@ -571,23 +534,31 @@ else
   PANDOCR_ENFORCE_ORIGIN_CHECK="$PANDOCR_ENFORCE_ORIGIN_CHECK" \
   PANDOCR_API_TOKEN="$PANDOCR_API_TOKEN" \
   PANDOCR_ENABLE_API_DOCS="$PANDOCR_ENABLE_API_DOCS" \
-  PANDOCR_ENABLE_UNLIMITED_OCR="$PANDOCR_ENABLE_UNLIMITED_OCR" \
+  PANDOCR_ENABLE_HPD_PARSING="$PANDOCR_ENABLE_HPD_PARSING" \
+  HPD_PARSING_SERVICE_URL="http://${HPD_PARSING_HOST:-127.0.0.1}:${HPD_PARSING_API_PORT:-8085}/ocr" \
+  HPD_PARSING_MODEL_NAME="${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}" \
   PANDOCR_ENABLE_OVISOCR2="$PANDOCR_ENABLE_OVISOCR2" \
   PANDOCR_MODEL_CATALOG="$PANDOCR_MODEL_CATALOG" \
   PANDOCR_ACTIVE_MODEL_ON_START="$PANDOCR_ACTIVE_MODEL_ON_START" \
-  PANDOCR_MODEL_CONTROL="${PANDOCR_MODEL_CONTROL:-none}" \
+  PANDOCR_MODEL_CONTROL="$PANDOCR_MODEL_CONTROL" \
+  PANDOCR_MODEL_CONTROLLER_URL="$PANDOCR_MODEL_CONTROLLER_URL" \
+  PANDOCR_MODEL_CONTROLLER_TOKEN="$PANDOCR_MODEL_CONTROLLER_TOKEN" \
   PANDOCR_HOST="$PANDOCR_HOST" \
   PANDOCR_PORT="$PANDOCR_PORT" \
     start_detached logs/pandocr-web.log "$LAUNCHER_PYTHON" server.py > run/pandocr-web.pid
 fi
 
-wait_for_http "http://${PANDOCR_HOST}:${PANDOCR_PORT}/" "PaddleOCR Local Web service" || {
-  tail -n 80 logs/pandocr-web.log || true
-  exit 1
-}
+if [[ "$PANDOCR_SKIP_WEB" != "1" ]]; then
+  wait_for_http "http://${PANDOCR_HOST}:${PANDOCR_PORT}/" "PaddleOCR Local Web service" || {
+    tail -n 80 logs/pandocr-web.log || true
+    exit 1
+  }
+fi
 
-echo "PaddleOCR Local is ready."
-echo "WebUI: http://${PANDOCR_HOST}:${PANDOCR_PORT}"
+echo "PaddleOCR Local model is ready."
+if [[ "$PANDOCR_SKIP_WEB" != "1" ]]; then
+  echo "WebUI: http://${PANDOCR_HOST}:${PANDOCR_PORT}"
+fi
 if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL"; then
   echo "PaddleOCR-VL API: http://${PADDLEX_HOST}:${PADDLEX_PORT}"
 fi
@@ -597,8 +568,8 @@ fi
 if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" ]]; then
   echo "MLX-VLM: http://${MLX_HOST}:${MLX_PORT}"
 fi
-if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  echo "Unlimited-OCR API: http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}"
+if truthy "$PANDOCR_ENABLE_HPD_PARSING"; then
+  echo "HPD-Parsing API: http://${HPD_PARSING_HOST:-127.0.0.1}:${HPD_PARSING_API_PORT:-8085}"
 fi
 if truthy "$PANDOCR_ENABLE_OVISOCR2"; then
   echo "OvisOCR2 API: http://${OVISOCR2_HOST}:${OVISOCR2_API_PORT}"

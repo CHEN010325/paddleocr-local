@@ -4754,8 +4754,16 @@ function activateLinkedBlock(markdownElement, block, { scrollMarkdown = false, s
     }
     if (scrollSource) {
         const sourceSurface = sourcePageSurface(block.page);
-        if (sourceSurface?.container && !isElementMostlyVisible(sourceSurface.container, els.sourceViewer)) {
+        if (sourceSurface?.container && sourceSurface.element) {
+            // Scrolling the page into view is not enough: a page can already
+            // be visible while the clicked block is below the viewport. Use
+            // the block's bbox to place its center in the source viewport.
+            scrollSourceToLayoutBlock(block, 'smooth');
+        } else {
+            // Some PDF pages are rendered lazily. Bring the page in first,
+            // then retry after the browser has laid out its canvas.
             scrollPdfPageIntoView(block.page, 'smooth');
+            requestAnimationFrame(() => scrollSourceToLayoutBlock(block, 'smooth'));
         }
     }
 }

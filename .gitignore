@@ -51,7 +51,9 @@ model_cache_ovisocr2_vllm/
 model_cache_hpd_parsing/
 model_cache_ovisocr2_macos/
 model_cache_unlimited_ocr_macos/
+model_cache_hpd_parsing_macos/
 .venv-ovisocr2-macos/
+.venv-hpd-parsing-macos/
 data/runtime-settings.json
 data/controller-ocr-leases.json
 data/tasks/

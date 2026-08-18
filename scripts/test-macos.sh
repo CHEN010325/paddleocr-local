@@ -8,12 +8,12 @@ PADDLEX_HOST="${PADDLEX_HOST:-127.0.0.1}"
 PADDLEX_PORT="${PADDLEX_PORT:-8081}"
 PADDLE_OCR_HOST="${PADDLE_OCR_HOST:-127.0.0.1}"
 PADDLE_OCR_PORT="${PADDLE_OCR_PORT:-8082}"
-PANDOCR_ENABLE_UNLIMITED_OCR="${PANDOCR_ENABLE_UNLIMITED_OCR:-0}"
+PANDOCR_ENABLE_HPD_PARSING="${PANDOCR_ENABLE_HPD_PARSING:-0}"
 PANDOCR_ENABLE_OVISOCR2="${PANDOCR_ENABLE_OVISOCR2:-0}"
 PANDOCR_ENABLE_PADDLEOCR_VL="${PANDOCR_ENABLE_PADDLEOCR_VL:-1}"
 PANDOCR_ENABLE_PPOCRV6="${PANDOCR_ENABLE_PPOCRV6:-0}"
-UNLIMITED_OCR_HOST="${UNLIMITED_OCR_HOST:-127.0.0.1}"
-UNLIMITED_OCR_API_PORT="${UNLIMITED_OCR_API_PORT:-8083}"
+HPD_PARSING_HOST="${HPD_PARSING_HOST:-127.0.0.1}"
+HPD_PARSING_API_PORT="${HPD_PARSING_API_PORT:-8085}"
 OVISOCR2_HOST="${OVISOCR2_HOST:-127.0.0.1}"
 OVISOCR2_API_PORT="${OVISOCR2_API_PORT:-8084}"
 PANDOCR_MACOS_BACKEND="${PANDOCR_MACOS_BACKEND:-native}"
@@ -53,12 +53,12 @@ if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx"
   echo
 fi
 
-if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  echo "Testing Unlimited-OCR adapter health..."
-  curl -fsS "http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health"
+if truthy "$PANDOCR_ENABLE_HPD_PARSING"; then
+  echo "Testing HPD-Parsing adapter health..."
+  curl -fsS "http://${HPD_PARSING_HOST}:${HPD_PARSING_API_PORT}/health"
   echo
 
-  echo "Checking WebUI model catalog includes Unlimited-OCR..."
+  echo "Checking WebUI model catalog includes HPD-Parsing..."
   python - "$PANDOCR_HOST" "$PANDOCR_PORT" <<'PY'
 import json
 import sys
@@ -68,9 +68,9 @@ host, port = sys.argv[1:]
 with urllib.request.urlopen(f"http://{host}:{port}/api/models", timeout=5) as response:
     payload = json.load(response)
 ids = {item.get("id") for item in payload.get("data", [])}
-if "unlimited-ocr" not in ids:
-    raise SystemExit("Unlimited-OCR is missing from /api/models")
-print("Unlimited-OCR model catalog OK")
+if "hpd-parsing" not in ids:
+    raise SystemExit("HPD-Parsing is missing from /api/models")
+print("HPD-Parsing model catalog OK")
 PY
 fi
 

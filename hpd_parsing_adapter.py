@@ -21,6 +21,7 @@ logger = logging.getLogger("hpd-parsing-adapter")
 
 SERVER_URL = os.getenv("HPD_PARSING_SERVER_URL", "http://hpd-parsing-server:8118").rstrip("/")
 MODEL_NAME = os.getenv("HPD_PARSING_SERVED_MODEL_NAME", "HPD-Parsing")
+BACKEND_NAME = os.getenv("HPD_PARSING_BACKEND", "vllm")
 MAX_TOKENS = int(os.getenv("HPD_PARSING_MAX_TOKENS", "8000"))
 PDF_DPI = int(os.getenv("HPD_PARSING_PDF_DPI", "200"))
 MAX_PAGES = int(os.getenv("HPD_PARSING_MAX_PAGES_PER_REQUEST", "50"))
@@ -755,7 +756,7 @@ async def health() -> dict[str, Any]:
         ready = False
     if not ready:
         raise HTTPException(status_code=503, detail="HPD-Parsing server is not ready")
-    return {"status": "ok", "model": MODEL_NAME, "backend": "vllm"}
+    return {"status": "ok", "model": MODEL_NAME, "backend": BACKEND_NAME}
 
 
 @app.post("/ocr")

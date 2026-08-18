@@ -215,7 +215,8 @@ def test_macos_launcher_requires_exactly_one_model():
     assert 'PANDOCR_ENABLE_PADDLEOCR_VL="${PANDOCR_ENABLE_PADDLEOCR_VL:-0}"' in script
     assert 'PANDOCR_ENABLE_PPOCRV6="${PANDOCR_ENABLE_PPOCRV6:-0}"' in script
     assert "ENABLED_MODEL_COUNT != 1" in script
-    assert 'PANDOCR_MODEL_CATALOG must contain only the enabled macOS model' in script
+    assert 'PANDOCR_MODEL_CATALOG="${PANDOCR_MODEL_CATALOG:-$ENABLED_MODEL_ID}"' in script
+    assert 'PANDOCR_ENABLE_HPD_PARSING="${PANDOCR_ENABLE_HPD_PARSING:-0}"' in script
     assert "PANDOCR_MODEL_SELECTION_CHECK_ONLY" in script
     assert "has_running_non_target_model" in script
     assert "A non-selected macOS model is still running" in script

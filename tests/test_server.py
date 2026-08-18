@@ -579,7 +579,8 @@ class ServerTaskApiTests(unittest.TestCase):
     def test_unlimited_ocr_sglang_payload_reserves_context_for_input(self):
         adapter = importlib.import_module("unlimited_ocr_adapter")
 
-        payload = adapter.build_sglang_payload([b"not-real-image"], 1)
+        with patch.object(adapter, "ENABLE_NO_REPEAT_PROCESSOR", True):
+            payload = adapter.build_sglang_payload([b"not-real-image"], 1)
 
         self.assertEqual(payload["images_config"]["backend"], "sglang")
         self.assertLess(payload["max_tokens"], adapter.MAX_TOKENS)

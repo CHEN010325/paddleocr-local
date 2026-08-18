@@ -315,6 +315,9 @@ services:
       - UNLIMITED_OCR_SINGLE_IMAGE_MODE=${UNLIMITED_OCR_SINGLE_IMAGE_MODE:-gundam}
       - UNLIMITED_OCR_MULTI_IMAGE_MODE=${UNLIMITED_OCR_MULTI_IMAGE_MODE:-base}
       - UNLIMITED_OCR_SGLANG_PDF_DPI=${UNLIMITED_OCR_SGLANG_PDF_DPI:-96}
+      # The bundled custom no-repeat processor can over-constrain dense
+      # tables/equations; the bounded detector/retry handles those safely.
+      - UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR=${UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR:-0}
       # Keep completion bounded: long PDF pages otherwise have enough room to
       # enter a repeated decoder trace after the real document is complete.
       - UNLIMITED_OCR_MAX_TOKENS=${UNLIMITED_OCR_MAX_TOKENS:-8192}

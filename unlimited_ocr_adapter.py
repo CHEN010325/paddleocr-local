@@ -112,7 +112,7 @@ DEGENERATION_REPEAT_MAX_EXTRA_GAP = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RE
 DEGENERATION_WINDOW_CHARS = int(os.getenv("UNLIMITED_OCR_DEGENERATION_WINDOW_CHARS", "4000"))
 DEGENERATION_RETRY_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_NGRAM_SIZE", "8"))
 DEGENERATION_RETRY_WINDOW = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_WINDOW", "512"))
-ENABLE_NO_REPEAT_PROCESSOR = os.getenv("UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR", "1").strip().lower() not in {
+ENABLE_NO_REPEAT_PROCESSOR = os.getenv("UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR", "0").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -209,6 +209,18 @@ ANCHOR_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 COMMON_BIBLIOGRAPHY_GRAMS = {
     "arxiv preprint arxiv",
 }
+COMMON_LAYOUT_GRAMS = {
+    "td td td",
+    "td td td td",
+    "tr td td",
+    "td tr td",
+    "th th th",
+    "li li li",
+    "left left left",
+    "right right right",
+    "left right left",
+}
+COMMON_LAYOUT_WORDS = {"td", "tr", "th", "li", "left", "right", "text", "rowspan", "colspan"}
 SGLANG_CONTEXT_ERROR_RE = re.compile(
     r"maximum context length of\s+(\d+)\s+tokens.*?"
     r"(\d+)\s+tokens from the input messages and\s+(\d+)\s+tokens for the completion",
@@ -1109,6 +1121,11 @@ def detect_unlimited_structural_artifacts(text: str) -> str | None:
     be presented as document text or allowed to grow the browser DOM forever.
     """
     normalized = normalize_newlines(str(text))
+    # Once a real det block exists, numbered lines may be legitimate paper
+    # content (algorithm pseudocode).  Only apply the fallback-trace detector
+    # to the unstructured stream prefix where layout metadata has leaked.
+    if "<|det|>" in normalized:
+        return None
     bbox_count = len(_UNLIMITED_BBOX_ARTIFACT_RE.findall(normalized))
     numbered_lines = sum(
         1 for line in normalized.splitlines() if _UNLIMITED_NUMBERED_LINE_RE.match(line)
@@ -1285,7 +1302,24 @@ def detect_degenerate_repetition(text: str) -> str | None:
             gram_words = words[index : index + gram_size]
             if sum(len(word) for word in gram_words) < 12:
                 continue
+            # Tables frequently repeat years, page numbers, or metric values
+            # in adjacent cells.  A run made entirely of numeric tokens is
+            # valid document structure, not a decoder loop.
+            if all(re.fullmatch(r"\d+(?:[.,]\d+)?", word) for word in gram_words):
+                continue
             gram = " ".join(gram_words)
+            # Tables/algorithms legitimately repeat short layout tokens around
+            # numeric cell values (for example ``td 100 td td 100``).  Treat a
+            # gram containing multiple layout markers as structural markup,
+            # not decoder degeneration; otherwise dense PDF tables are aborted
+            # even though the generated document is valid.
+            layout_word_count = sum(word in COMMON_LAYOUT_WORDS for word in gram_words)
+            if (
+                gram in COMMON_LAYOUT_GRAMS
+                or all(word in COMMON_LAYOUT_WORDS for word in gram_words)
+                or layout_word_count >= 2
+            ):
+                continue
             counts[gram] = counts.get(gram, 0) + 1
             positions = positions_by_gram.setdefault(gram, [])
             positions.append(index)

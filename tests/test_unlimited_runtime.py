@@ -462,6 +462,8 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         with patch.object(adapter, "ENABLE_DEGENERATION_GUARD", False):
             self.assertIsNone(adapter.detect_degenerate_repetition("x " * 100))
         self.assertIsNone(adapter.detect_degenerate_repetition("short"))
+        self.assertIsNone(adapter.detect_degenerate_repetition("td 100 td td 100 " * 20))
+        self.assertIsNone(adapter.detect_degenerate_repetition("2017 2017 2017 " * 20))
         repeat = ("longword anotherword thirdword " * 30)
         self.assertIsNotNone(adapter.detect_degenerate_repetition(repeat))
         repeated_line = "\n".join(["29: end while Output: \u00e2 . text [509, 565, 704, 635]"] * 8)
@@ -565,12 +567,14 @@ class UnlimitedRuntimeTests(unittest.TestCase):
         with patch.object(adapter, "ENABLE_NO_REPEAT_PROCESSOR", False):
             self.assertIsNone(adapter.get_no_repeat_processor_str())
         adapter.NO_REPEAT_PROCESSOR_STR = "cached"
-        self.assertEqual(adapter.get_no_repeat_processor_str(), "cached")
+        with patch.object(adapter, "ENABLE_NO_REPEAT_PROCESSOR", True):
+            self.assertEqual(adapter.get_no_repeat_processor_str(), "cached")
         adapter.NO_REPEAT_PROCESSOR_STR = None
         processor_class = SimpleNamespace(to_str=MagicMock(return_value="generated"))
         module = SimpleNamespace(DeepseekOCRNoRepeatNGramLogitProcessor=processor_class)
         with patch.dict(sys.modules, {"sglang": MagicMock(), "sglang.srt": MagicMock(), "sglang.srt.sampling": MagicMock(), "sglang.srt.sampling.custom_logit_processor": module}):
-            self.assertEqual(adapter.get_no_repeat_processor_str(), "generated")
+            with patch.object(adapter, "ENABLE_NO_REPEAT_PROCESSOR", True):
+                self.assertEqual(adapter.get_no_repeat_processor_str(), "generated")
         adapter.NO_REPEAT_PROCESSOR_STR = None
         with patch.dict(sys.modules, {"sglang": None}), patch.object(adapter, "DEFAULT_NO_REPEAT_PROCESSOR_STR", ""):
             self.assertIsNone(adapter.get_no_repeat_processor_str())

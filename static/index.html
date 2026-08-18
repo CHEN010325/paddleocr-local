@@ -26,7 +26,7 @@
                 <div class="brand-mark">P</div>
                 <div>
                     <div class="brand-name">PaddleOCR Local</div>
-                    <div class="brand-subtitle">本地多模型文档解析工作台</div>
+                    <div class="brand-subtitle">本地 PaddleOCR 多模型解析</div>
                 </div>
             </div>
             <div class="topbar-actions">
@@ -152,13 +152,6 @@
                                     <svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>
                                     开始解析
                                 </button>
-                                <button class="secondary-button compare-button" id="compare-btn" title="使用多个模型解析同一文件">
-                                    <svg viewBox="0 0 24 24"><path d="M8 4h8M8 20h8M6 8l-3 4 3 4M18 8l3 4-3 4"/></svg>
-                                    多模型对比
-                                </button>
-                                <button class="icon-button" id="edit-btn" title="编辑 Markdown">
-                                    <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
-                                </button>
                                 <button class="icon-button" id="copy-btn" title="复制 Markdown">
                                     <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                                 </button>
@@ -170,7 +163,6 @@
                         <div class="view-tabs">
                             <button class="view-tab active" data-view="markdown">文档解析</button>
                             <button class="view-tab" data-view="json">JSON</button>
-                            <button class="view-tab comparison-tab hidden" data-view="comparison">模型对比</button>
                         </div>
                     </div>
                     <div class="result-viewer">
@@ -178,7 +170,6 @@
                             <div class="empty-result">选择左侧任务，或上传一个新文件开始解析。</div>
                         </div>
                         <div class="json-preview hidden" id="json-view"></div>
-                        <div class="comparison-preview hidden" id="comparison-view"></div>
                     </div>
                 </section>
             </main>
@@ -186,26 +177,6 @@
 
         <input type="file" id="file-input" multiple accept=".pdf,.png,.jpg,.jpeg,.bmp,.webp,.tiff,.tif,.gif,.ppt,.pptx,.doc,.docx" hidden>
     </div>
-
-    <dialog id="compare-dialog" class="compare-dialog">
-        <form method="dialog" id="compare-form">
-            <div class="dialog-header">
-                <div>
-                    <div class="pane-kicker">OCR Arena</div>
-                    <h2>选择对比模型</h2>
-                </div>
-                <button class="icon-button" value="cancel" aria-label="关闭">
-                    <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
-                </button>
-            </div>
-            <p class="dialog-help">模型会依次运行，适合单 GPU。未部署的模型会在开始前提示部署。</p>
-            <div id="compare-model-list" class="compare-model-list"></div>
-            <div class="dialog-actions">
-                <button class="secondary-button" value="cancel">取消</button>
-                <button class="primary-button" id="compare-start-btn" value="default">开始对比</button>
-            </div>
-        </form>
-    </dialog>
 
     <template id="task-item-template">
         <div class="task-item" role="button" tabindex="0">

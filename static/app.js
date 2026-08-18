@@ -65,8 +65,6 @@ let modelRuntime = null;
 let modelRuntimePollTimer = null;
 let modelRuntimeLoadInFlight = false;
 let modelSwitchInFlight = false;
-let comparisonInFlight = false;
-let activeComparisonGroupId = null;
 let unlimitedOcrBackendSwitchInFlight = false;
 let selectedUnlimitedOcrBackend = 'transformers';
 let maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES;
@@ -76,7 +74,6 @@ const sourcePdfCache = new Map();
 const sourceBytesCache = new Map();
 const linkedLayoutBlockByElement = new WeakMap();
 let linkedLayoutEntries = [];
-const comparisonGroupsLoading = new Set();
 const i18nTextSources = new WeakMap();
 const i18nAttributeSources = new WeakMap();
 const I18N_ATTRIBUTES = ['title', 'placeholder', 'aria-label'];
@@ -118,18 +115,11 @@ const els = {
     resetZoomBtn: document.getElementById('reset-zoom-btn'),
     resultTitle: document.getElementById('result-title'),
     startBtn: document.getElementById('start-btn'),
-    compareBtn: document.getElementById('compare-btn'),
     editBtn: document.getElementById('edit-btn'),
     copyBtn: document.getElementById('copy-btn'),
     downloadBtn: document.getElementById('download-btn'),
     markdownView: document.getElementById('markdown-view'),
     jsonView: document.getElementById('json-view'),
-    comparisonView: document.getElementById('comparison-view'),
-    comparisonTab: document.querySelector('.comparison-tab'),
-    compareDialog: document.getElementById('compare-dialog'),
-    compareForm: document.getElementById('compare-form'),
-    compareModelList: document.getElementById('compare-model-list'),
-    compareStartBtn: document.getElementById('compare-start-btn'),
     chartRecognitionSwitch: document.getElementById('chart-recognition-switch'),
     docUnwarpingSwitch: document.getElementById('doc-unwarping-switch'),
     docOrientationSwitch: document.getElementById('doc-orientation-switch'),
@@ -178,7 +168,7 @@ function setupEventListeners() {
     ['dragenter', 'dragover'].forEach((name) => {
         document.addEventListener(name, (event) => {
             event.preventDefault();
-            if (!comparisonInFlight) els.dropZone?.classList.add('drag-over');
+            els.dropZone?.classList.add('drag-over');
         });
     });
 
@@ -200,7 +190,6 @@ function setupEventListeners() {
     els.taskSearch.addEventListener('input', renderTaskList);
     els.clearHistoryBtn.addEventListener('click', clearHistory);
     els.startBtn.addEventListener('click', () => processActiveTask());
-    els.compareBtn?.addEventListener('click', openComparisonDialog);
     els.editBtn?.addEventListener('click', startMarkdownEdit);
     els.copyBtn.addEventListener('click', copyActiveResult);
     els.downloadBtn.addEventListener('click', downloadActiveTask);
@@ -212,7 +201,6 @@ function setupEventListeners() {
     els.sourceViewer.addEventListener('scroll', handleSourceViewerScroll);
     els.markdownView.addEventListener('scroll', handlePPOCRMarkdownScroll);
     els.jsonView.addEventListener('scroll', renderVisibleJsonLines);
-    els.compareForm?.addEventListener('submit', handleComparisonSubmit);
     els.modelSelect?.addEventListener('change', handleModelSelectionChange);
     els.unlimitedBackendSelect?.addEventListener('change', handleUnlimitedOcrBackendChange);
     els.languageToggle?.addEventListener('click', toggleLanguage);
@@ -674,7 +662,7 @@ function syncSelectedModelWithRuntime() {
 async function handleUnlimitedOcrBackendChange() {
     if (!els.unlimitedBackendSelect) return;
     const nextBackend = normalizeUnlimitedOcrBackend(els.unlimitedBackendSelect.value);
-    if (isProcessing || processingTaskId || comparisonInFlight || modelSwitchInFlight || unlimitedOcrBackendSwitchInFlight || isModelRuntimeSwitching()) {
+    if (isProcessing || processingTaskId || modelSwitchInFlight || unlimitedOcrBackendSwitchInFlight || isModelRuntimeSwitching()) {
         els.unlimitedBackendSelect.value = selectedUnlimitedOcrBackend;
         alert(t('当前正在解析或切换模型，请完成后再切换。'));
         return;
@@ -697,7 +685,7 @@ async function handleUnlimitedOcrBackendChange() {
 
 async function handleModelSelectionChange() {
     const nextModelId = els.modelSelect.value || DEFAULT_MODEL_ID;
-    if (isProcessing || processingTaskId || comparisonInFlight || modelSwitchInFlight) {
+    if (isProcessing || processingTaskId || modelSwitchInFlight) {
         els.modelSelect.value = selectedModelId;
         alert(t('当前正在解析或切换模型，请完成后再切换。'));
         return;
@@ -1191,7 +1179,6 @@ function dedupeTasks(taskItems) {
             task.size || 0,
             task.pageCount || 0,
             task.modelId || '',
-            task.comparisonGroupId || ''
         ].join('|');
         const existing = byFingerprint.get(fingerprint);
         if (!existing || (task.updatedAt || 0) > (existing.updatedAt || 0)) {
@@ -1266,10 +1253,6 @@ async function deleteTaskById(taskId) {
 }
 
 async function handleFiles(files) {
-    if (comparisonInFlight) {
-        alert(t('模型对比正在进行，完成后再添加文件。'));
-        return [];
-    }
     if (!files || files.length === 0) return [];
 
     const previousActiveTaskId = activeTaskId;
@@ -1524,10 +1507,6 @@ function renderTaskList() {
 async function deleteTask(taskId) {
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
-    if (comparisonInFlight) {
-        alert(t('模型对比正在进行，完成后再删除任务。'));
-        return;
-    }
     if (historyMutationsLocked()) {
         alert(t('当前正在解析或切换模型，完成后再删除任务。'));
         return;
@@ -1742,16 +1721,10 @@ function resetResultScrollPositions() {
     els.markdownView.scrollLeft = 0;
     els.jsonView.scrollTop = 0;
     els.jsonView.scrollLeft = 0;
-    if (els.comparisonView) {
-        els.comparisonView.scrollTop = 0;
-        els.comparisonView.scrollLeft = 0;
-    }
 }
 
 function captureResultScrollState() {
-    const element = activeResultView === 'json'
-        ? els.jsonView
-        : (activeResultView === 'comparison' ? els.comparisonView : els.markdownView);
+    const element = activeResultView === 'json' ? els.jsonView : els.markdownView;
     const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
     const bottomOffset = maxScrollTop - element.scrollTop;
     return {
@@ -1781,10 +1754,8 @@ function restoreResultScrollState(state) {
 
 function showResultView(view) {
     const showJson = view === 'json';
-    const showComparison = view === 'comparison';
-    els.markdownView.classList.toggle('hidden', showJson || showComparison);
+    els.markdownView.classList.toggle('hidden', showJson);
     els.jsonView.classList.toggle('hidden', !showJson);
-    els.comparisonView?.classList.toggle('hidden', !showComparison);
 }
 
 function renderResultPane(task, { deferJson = false, preserveScroll = true } = {}) {
@@ -1797,7 +1768,6 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
         els.resultTitle.textContent = t('解析结果');
         els.markdownView.innerHTML = `<div class="empty-result">${escapeHtml(t('选择左侧任务，或上传一个新文件开始解析。'))}</div>`;
         els.jsonView.textContent = '';
-        if (els.comparisonView) els.comparisonView.textContent = '';
         return;
     }
 
@@ -1818,13 +1788,6 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
     if (activeResultView === 'json') {
         showResultView('json');
         renderJsonResult(task, { defer: deferJson, scrollState });
-        return;
-    }
-
-    if (activeResultView === 'comparison') {
-        showResultView('comparison');
-        renderComparisonResult(task);
-        restoreResultScrollState(scrollState);
         return;
     }
 
@@ -1942,15 +1905,6 @@ function updateResultViewLabels(task) {
     const markdownTab = document.querySelector('.view-tab[data-view="markdown"]');
     if (!markdownTab) return;
     markdownTab.textContent = isPPOCRVisualTask(task) ? t('文字识别') : t('文档解析');
-    const groupTasks = comparisonTasksFor(task);
-    const hasComparison = groupTasks.length > 1;
-    els.comparisonTab?.classList.toggle('hidden', !hasComparison);
-    if (!hasComparison && activeResultView === 'comparison') {
-        activeResultView = 'markdown';
-        document.querySelectorAll('.view-tab').forEach((tab) => {
-            tab.classList.toggle('active', tab.dataset.view === 'markdown');
-        });
-    }
 }
 
 function syncResultMode(task) {
@@ -2758,414 +2712,9 @@ async function processActiveTask() {
     await processTask(task, { confirmCompleted: true });
 }
 
-function openComparisonDialog() {
-    const task = getActiveTask();
-    if (!task || isProcessing || processingTaskId || comparisonInFlight || modelSwitchInFlight) return;
-    els.compareModelList.innerHTML = '';
-    availableModels.forEach((model) => {
-        const status = getModelRuntimeStatus(model.id);
-        const option = document.createElement('label');
-        option.className = 'compare-model-option';
-        const checked = model.id === task.modelId || model.id === selectedModelId;
-        option.innerHTML = `
-            <input type="checkbox" name="compare-model" value="${escapeHtml(model.id)}" ${checked ? 'checked' : ''}>
-            <span>${escapeHtml(modelDisplayName(model))}</span>
-            <small>${escapeHtml(status?.state === 'missing' ? t('未部署') : (status?.ready ? t('就绪') : t('待启动')))}</small>
-        `;
-        els.compareModelList.appendChild(option);
-    });
-    if (els.compareModelList.querySelectorAll('input:checked').length < 2) {
-        const fallback = els.compareModelList.querySelector('input:not(:checked)');
-        if (fallback) fallback.checked = true;
-    }
-    els.compareDialog?.showModal();
-}
-
-async function handleComparisonSubmit(event) {
-    event.preventDefault();
-    if (event.submitter?.value === 'cancel') {
-        els.compareDialog?.close();
-        return;
-    }
-    if (comparisonInFlight || isProcessing || processingTaskId || modelSwitchInFlight) return;
-    const modelIds = Array.from(els.compareModelList.querySelectorAll('input:checked')).map((input) => input.value);
-    if (modelIds.length < 2) {
-        alert(t('请至少选择两个模型。'));
-        return;
-    }
-    const sourceTask = getActiveTask();
-    if (!sourceTask) return;
-    els.compareDialog?.close();
-    await runModelComparison(sourceTask, modelIds);
-}
-
-async function cloneTaskSource(sourceTaskId, targetTaskId) {
-    const response = await apiFetch(
-        `${API_BASE}/tasks/${encodeURIComponent(sourceTaskId)}/clone-source/${encodeURIComponent(targetTaskId)}`,
-        { method: 'POST' }
-    );
-    if (!response.ok) throw new Error(await responseErrorText(response));
-    const data = await response.json();
-    return data.url;
-}
-
-async function copyComparisonSource(sourceTask, targetTaskId) {
-    if (sourceTask.sourceUrl) {
-        try {
-            return await cloneTaskSource(sourceTask.id, targetTaskId);
-        } catch (error) {
-            if (!sourceTask.sourceDataUrl) throw error;
-            console.warn('Stored source clone failed; migrating the legacy inline source.', error);
-        }
-    }
-    if (!sourceTask.sourceDataUrl) {
-        throw new Error(t('源文件不可用，请重新上传后再对比。'));
-    }
-    const blob = dataUrlToBlob(sourceTask.sourceDataUrl);
-    return uploadTaskSource(
-        targetTaskId,
-        blob,
-        sourceTask.originalName || sourceTask.name || 'source.bin',
-        sourceTask.mimeType || blob.type || 'application/octet-stream'
-    );
-}
-
-function comparisonTaskName(sourceTask, model) {
-    const sourceName = String(sourceTask?.name || sourceTask?.originalName || t('未命名任务'));
-    return `${sourceName.replace(/\s·\s.+$/, '')} · ${modelShortName(model)}`;
-}
-
-function comparisonTaskBase(sourceTask, model, groupId, id, comparisonStartedAt) {
-    const pageCount = Number(sourceTask.pageCount || 1);
-    const pdfBatchSize = Number(sourceTask.pdfBatchSize || getConfiguredPdfBatchSize());
-    const now = Date.now();
-    return {
-        id,
-        name: comparisonTaskName(sourceTask, model),
-        sourceKind: sourceTask.sourceKind,
-        originalName: sourceTask.originalName || sourceTask.name,
-        mimeType: sourceTask.mimeType,
-        size: sourceTask.size,
-        createdAt: now,
-        updatedAt: now,
-        status: 'pending',
-        pageCount,
-        pdfBatchSize,
-        thumbnail: sourceTask.thumbnail,
-        modelId: model.id,
-        modelName: modelDisplayName(model),
-        modelEndpoint: model.endpoint,
-        comparisonGroupId: groupId,
-        comparisonStartedAt,
-        comparisonSourceName: sourceTask.originalName || sourceTask.name
-    };
-}
-
-async function createComparisonTask(sourceTask, model, groupId, comparisonStartedAt = Date.now()) {
-    const id = createId();
-    const sourceUrl = await copyComparisonSource(sourceTask, id);
-    const task = comparisonTaskBase(sourceTask, model, groupId, id, comparisonStartedAt);
-    const batches = task.sourceKind === 'image'
-        ? [{ id: createId(), label: formatPageLabel(1), fileType: 1, pageCount: 1, status: 'pending' }]
-        : createPdfBatchDescriptors(task.pageCount, task.pdfBatchSize);
-    return {
-        ...task,
-        sourceUrl,
-        batches,
-        markdown: '',
-        images: {},
-        ocrResults: []
-    };
-}
-
-function comparisonFailureDetail(error) {
-    if (error instanceof Error && error.message) return error.message;
-    return String(error || t('未知错误'));
-}
-
-function markComparisonTaskFailed(task, model, error, startedAt = Date.now()) {
-    const completedAt = Date.now();
-    task.status = 'error';
-    task.error = task.error || comparisonFailureDetail(error);
-    task.updatedAt = completedAt;
-    task.benchmark = {
-        ...createBenchmarkSnapshot(task, model, startedAt),
-        ...(task.benchmark || {}),
-        completedAt: task.benchmark?.completedAt || completedAt,
-        durationMs: Number.isFinite(Number(task.benchmark?.durationMs))
-            ? Number(task.benchmark.durationMs)
-            : Math.max(0, completedAt - startedAt)
-    };
-    return task;
-}
-
-function createComparisonFailureTask(sourceTask, model, groupId, error, comparisonStartedAt, startedAt) {
-    const task = comparisonTaskBase(sourceTask, model, groupId, createId(), comparisonStartedAt);
-    task.sourceUrl = sourceTask.sourceUrl || '';
-    if (!task.sourceUrl && sourceTask.sourceDataUrl) task.sourceDataUrl = sourceTask.sourceDataUrl;
-    task.batches = [];
-    task.markdown = '';
-    task.images = {};
-    task.ocrResults = [];
-    return markComparisonTaskFailed(task, model, error, startedAt);
-}
-
-async function saveComparisonFailure(task) {
-    try {
-        await saveTask(task);
-    } catch (error) {
-        console.error('Failed to persist comparison failure record', error);
-    }
-}
-
-async function runModelComparison(sourceTask, modelIds) {
-    if (!sourceTask || isProcessing || processingTaskId || comparisonInFlight || modelSwitchInFlight) return [];
-    const models = Array.from(new Set(Array.isArray(modelIds) ? modelIds : []))
-        .map((id) => availableModels.find((model) => model.id === id))
-        .filter(Boolean);
-    if (models.length < 2) return [];
-    const groupId = `compare-${createId()}`;
-    activeComparisonGroupId = groupId;
-    comparisonInFlight = true;
-    updateActionState(sourceTask);
-    const comparisonStartedAt = Date.now();
-    const comparisonTasks = [];
-    try {
-        for (const model of models) {
-            const attemptStartedAt = Date.now();
-            let task = null;
-            try {
-                task = await createComparisonTask(sourceTask, model, groupId, comparisonStartedAt);
-                comparisonTasks.push(task);
-                tasks.unshift(task);
-                await saveTask(task);
-                activeTaskId = task.id;
-                renderTaskList();
-                await selectTask(task.id);
-                const completed = await processTask(task, { confirmCompleted: false });
-                if (!completed) {
-                    markComparisonTaskFailed(
-                        task,
-                        model,
-                        task.error || t('模型未就绪或启动已取消。'),
-                        attemptStartedAt
-                    );
-                    await saveComparisonFailure(task);
-                    refreshTaskUi(task);
-                }
-            } catch (error) {
-                console.error(error);
-                if (!task) {
-                    task = createComparisonFailureTask(
-                        sourceTask,
-                        model,
-                        groupId,
-                        error,
-                        comparisonStartedAt,
-                        attemptStartedAt
-                    );
-                    comparisonTasks.push(task);
-                    tasks.unshift(task);
-                } else {
-                    markComparisonTaskFailed(task, model, error, attemptStartedAt);
-                }
-                await saveComparisonFailure(task);
-                renderTaskList();
-            }
-        }
-    } finally {
-        const target = comparisonTasks[comparisonTasks.length - 1];
-        try {
-            if (target) {
-                try {
-                    await selectTask(target.id);
-                } catch (error) {
-                    console.error('Failed to render the final comparison task', error);
-                    activeTaskId = target.id;
-                }
-                activeResultView = 'comparison';
-                document.querySelectorAll('.view-tab').forEach((tab) => {
-                    tab.classList.toggle('active', tab.dataset.view === 'comparison');
-                });
-                renderResultPane(target, { preserveScroll: false });
-            }
-        } finally {
-            comparisonInFlight = false;
-            if (activeComparisonGroupId === groupId) activeComparisonGroupId = null;
-            updateActionState(target || getActiveTask());
-        }
-    }
-    return comparisonTasks;
-}
-
-function comparisonTasksFor(task) {
-    if (!task?.comparisonGroupId) return [];
-    return tasks
-        .filter((item) => item.comparisonGroupId === task.comparisonGroupId)
-        .sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
-}
-
-function formatDuration(durationMs) {
-    if (!Number.isFinite(Number(durationMs)) || Number(durationMs) < 0) return '—';
-    const totalSeconds = Math.max(0, Math.round(Number(durationMs) / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-function markdownTableCell(value) {
-    return String(value ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
-}
-
-function reportTimestamp(value) {
-    const timestamp = Number(value);
-    return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toISOString() : null;
-}
-
-function comparisonReproductionMetadata(groupTasks, task) {
-    return {
-        schemaVersion: 1,
-        comparisonGroupId: task?.comparisonGroupId || null,
-        comparisonStartedAt: reportTimestamp(task?.comparisonStartedAt || groupTasks[0]?.comparisonStartedAt),
-        source: {
-            name: task?.comparisonSourceName || task?.originalName || task?.name || null,
-            kind: groupTasks[0]?.sourceKind || task?.sourceKind || null,
-            mimeType: groupTasks[0]?.mimeType || task?.mimeType || null,
-            sizeBytes: Number(groupTasks[0]?.size || task?.size || 0) || null,
-            pageCount: Number(groupTasks[0]?.pageCount || task?.pageCount || 0) || null
-        },
-        application: {
-            version: groupTasks.find((item) => item.benchmark?.projectVersion)?.benchmark.projectVersion
-                || appMetadata.version
-                || DEFAULT_APP_VERSION,
-            commit: groupTasks.find((item) => item.benchmark?.projectCommit)?.benchmark.projectCommit
-                || appMetadata.commit
-                || null
-        },
-        models: groupTasks.map((item) => ({
-            modelId: item.modelId || null,
-            modelName: item.modelName || null,
-            modelEndpoint: item.modelEndpoint || null,
-            modelBackend: item.benchmark?.modelBackend || null,
-            status: item.status || 'pending',
-            error: item.error || null,
-            startedAt: reportTimestamp(item.benchmark?.startedAt),
-            completedAt: reportTimestamp(item.benchmark?.completedAt),
-            durationMs: Number.isFinite(Number(item.benchmark?.durationMs))
-                ? Number(item.benchmark.durationMs)
-                : null,
-            pdfBatchSize: Number(item.benchmark?.pdfBatchSize || item.pdfBatchSize || 0) || null,
-            parsingSettings: item.benchmark?.parsingSettings || null,
-            gpu: {
-                name: item.benchmark?.gpuName || null,
-                totalMiB: item.benchmark?.gpuTotalMiB || null,
-                freeMiBBefore: item.benchmark?.gpuFreeMiBBefore || null
-            },
-            manualEditedAt: reportTimestamp(item.manualEditedAt)
-        }))
-    };
-}
-
-function comparisonReportMarkdown(task) {
-    const groupTasks = comparisonTasksFor(task);
-    const sourceName = task?.comparisonSourceName || task?.originalName || task?.name || '';
-    const metadata = comparisonReproductionMetadata(groupTasks, task);
-    const lines = [
-        `# ${t('多模型对比报告')}`,
-        '',
-        `- ${t('源文件')}: ${sourceName}`,
-        `- ${t('生成时间')}: ${new Date().toISOString()}`,
-        `- ${t('对比任务 ID')}: ${task?.comparisonGroupId || '—'}`,
-        `- ${t('项目版本')}: ${metadata.application.version}`,
-        `- ${t('代码提交')}: ${metadata.application.commit || '—'}`,
-        '',
-        `| ${t('模型')} | ${t('模型 ID')} | ${t('状态')} | ${t('页数')} | ${t('解析耗时')} | ${t('输出字符')} | ${t('人工编辑')} |`,
-        '| --- | --- | --- | ---: | ---: | ---: | --- |'
-    ];
-    groupTasks.forEach((item) => {
-        lines.push(`| ${markdownTableCell(item.modelName || item.modelId)} | ${markdownTableCell(item.modelId)} | ${markdownTableCell(statusText(item))} | ${item.pageCount || 1} | ${formatDuration(item.benchmark?.durationMs)} | ${visibleTaskMarkdown(item).length} | ${item.manualEditedAt ? t('是') : t('否')} |`);
-    });
-    groupTasks.forEach((item) => {
-        lines.push(
-            '',
-            `## ${item.modelName || item.modelId}`,
-            '',
-            `- ${t('模型 ID')}: ${item.modelId || '—'}`,
-            `- ${t('模型端点')}: ${item.modelEndpoint || '—'}`,
-            `- ${t('模型后端')}: ${item.benchmark?.modelBackend || '—'}`,
-            `- ${t('人工编辑')}: ${item.manualEditedAt ? new Date(item.manualEditedAt).toISOString() : t('否')}`,
-            '',
-            visibleTaskMarkdown(item) || `> ${item.error || t('没有可用结果')}`
-        );
-    });
-    lines.push('', `## ${t('可复现元数据')}`, '', '```json', JSON.stringify(metadata, null, 2), '```');
-    return lines.join('\n');
-}
-
-function renderComparisonResult(task) {
-    if (!els.comparisonView) return;
-    const groupTasks = comparisonTasksFor(task);
-    if (groupTasks.length < 2) {
-        els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('当前任务没有多模型对比结果。'))}</div>`;
-        return;
-    }
-    const unloadedTasks = groupTasks.filter((item) => !isTaskDetailLoaded(item));
-    if (unloadedTasks.length) {
-        els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('正在加载对比结果...'))}</div>`;
-        loadComparisonGroupDetails(task.comparisonGroupId, unloadedTasks);
-        return;
-    }
-    const rows = groupTasks.map((item) => `
-        <tr>
-            <td>${escapeHtml(item.modelName || item.modelId)}</td>
-            <td class="comparison-status-${escapeHtml(item.status || 'pending')}">${escapeHtml(statusText(item))}</td>
-            <td>${item.pageCount || 1}</td>
-            <td>${escapeHtml(formatDuration(item.benchmark?.durationMs))}</td>
-            <td>${visibleTaskMarkdown(item).length.toLocaleString(languageLocale())}</td>
-        </tr>
-    `).join('');
-    const cards = groupTasks.map((item) => `
-        <article class="comparison-card">
-            <div class="comparison-card-header">
-                <strong>${escapeHtml(item.modelName || item.modelId)}</strong>
-                <span>${escapeHtml(statusText(item))}</span>
-            </div>
-            <pre>${escapeHtml(visibleTaskMarkdown(item) || item.error || t('没有可用结果'))}</pre>
-        </article>
-    `).join('');
-    els.comparisonView.innerHTML = `
-        <table class="comparison-summary">
-            <thead><tr><th>${escapeHtml(t('模型'))}</th><th>${escapeHtml(t('状态'))}</th><th>${escapeHtml(t('页数'))}</th><th>${escapeHtml(t('解析耗时'))}</th><th>${escapeHtml(t('输出字符'))}</th></tr></thead>
-            <tbody>${rows}</tbody>
-        </table>
-        <div class="comparison-grid">${cards}</div>
-    `;
-}
-
-async function loadComparisonGroupDetails(groupId, groupTasks) {
-    if (!groupId || comparisonGroupsLoading.has(groupId)) return;
-    comparisonGroupsLoading.add(groupId);
-    try {
-        const results = await Promise.all(groupTasks.map((item) => loadTaskFromServer(item.id)));
-        results.forEach(replaceTask);
-        const activeTask = getActiveTask();
-        if (activeTask?.comparisonGroupId === groupId && activeResultView === 'comparison') {
-            renderComparisonResult(activeTask);
-            updateActionState(activeTask);
-        }
-    } catch (error) {
-        console.error(error);
-        if (els.comparisonView) {
-            els.comparisonView.innerHTML = `<div class="empty-result">${escapeHtml(t('加载对比结果失败：{detail}', { detail: error.message || t('未知错误') }))}</div>`;
-        }
-    } finally {
-        comparisonGroupsLoading.delete(groupId);
-    }
-}
-
 function startMarkdownEdit() {
     const task = getActiveTask();
-    if (!task || isProcessing || comparisonInFlight || !visibleTaskMarkdown(task) || activeResultView !== 'markdown') return;
+    if (!task || isProcessing || !visibleTaskMarkdown(task) || activeResultView !== 'markdown') return;
     const editor = document.createElement('textarea');
     editor.className = 'markdown-editor';
     editor.value = normalizeOCRMarkdown(visibleTaskMarkdown(task));
@@ -3236,7 +2785,7 @@ function createBenchmarkSnapshot(task, model, startedAt = Date.now()) {
         pdfBatchSize: Number(task?.pdfBatchSize || getConfiguredPdfBatchSize()),
         parsingSettings: currentParsingSettingsSnapshot(),
         source: {
-            name: task?.comparisonSourceName || task?.originalName || task?.name || null,
+            name: task?.originalName || task?.name || null,
             kind: task?.sourceKind || null,
             mimeType: task?.mimeType || null,
             sizeBytes: Number(task?.size || 0) || null,
@@ -3249,12 +2798,7 @@ function createBenchmarkSnapshot(task, model, startedAt = Date.now()) {
 }
 
 async function processTask(task, { confirmCompleted = true } = {}) {
-    const comparisonOwnedTask = Boolean(
-        comparisonInFlight
-        && activeComparisonGroupId
-        && task?.comparisonGroupId === activeComparisonGroupId
-    );
-    if (!task || isProcessing || processingTaskId || (comparisonInFlight && !comparisonOwnedTask)) return false;
+    if (!task || isProcessing || processingTaskId) return false;
     if (confirmCompleted && task.status === 'completed' && !confirm(t('这个任务已经解析完成，要重新解析吗？'))) return;
 
     const resumeExistingResults = shouldResumeTask(task);
@@ -3386,8 +2930,7 @@ function isTaskActivelyProcessing(task) {
 }
 
 function historyMutationsLocked() {
-    return comparisonInFlight
-        || isProcessing
+    return isProcessing
         || Boolean(processingTaskId)
         || modelSwitchInFlight
         || unlimitedOcrBackendSwitchInFlight
@@ -3812,22 +3355,19 @@ function taskForPersistence(task, { includeResults = true } = {}) {
 
 function updateActionState(task) {
     const hasResult = Boolean(visibleTaskMarkdown(task)) || Boolean(task?.ocrResults?.length);
-    const hasComparisonReport = activeResultView === 'comparison' && isComparisonReportReady(task);
     const taskModel = task ? getTaskActionModel(task) : getSelectedModel();
     const modelReady = !task || isModelRuntimeReady(taskModel.id);
     const canStartAfterSwitch = task && !modelReady && canSwitchModelRuntime(taskModel.id);
     const canDeployMissingModel = task && !modelReady && isModelRuntimeMissing(taskModel.id);
     const modelStarting = task && !modelReady && isModelRuntimeSwitching(taskModel.id);
-    const comparisonInputLocked = comparisonInFlight;
-    const parsingSettingsLocked = comparisonInFlight || isProcessing || Boolean(processingTaskId);
-    if (els.fileInput) els.fileInput.disabled = comparisonInputLocked;
+    const parsingSettingsLocked = isProcessing || Boolean(processingTaskId);
+    if (els.fileInput) els.fileInput.disabled = false;
     [els.browseBtn, els.newTaskBtn].forEach((button) => {
-        if (button) button.disabled = comparisonInputLocked;
+        if (button) button.disabled = false;
     });
     if (els.dropZone) {
-        els.dropZone.classList.toggle('input-locked', comparisonInputLocked);
-        els.dropZone.setAttribute('aria-disabled', comparisonInputLocked ? 'true' : 'false');
-        if (comparisonInputLocked) els.dropZone.classList.remove('drag-over');
+        els.dropZone.classList.remove('input-locked');
+        els.dropZone.setAttribute('aria-disabled', 'false');
     }
     [
         els.chartRecognitionSwitch,
@@ -3843,14 +3383,13 @@ function updateActionState(task) {
         if (control) control.disabled = parsingSettingsLocked;
     });
     if (els.modelSelect) {
-        els.modelSelect.disabled = isProcessing || Boolean(processingTaskId) || comparisonInFlight || modelSwitchInFlight || isModelRuntimeSwitching();
+        els.modelSelect.disabled = isProcessing || Boolean(processingTaskId) || modelSwitchInFlight || isModelRuntimeSwitching();
     }
     if (els.unlimitedBackendSelect) {
         els.unlimitedBackendSelect.disabled = (
             selectedModelId !== UNLIMITED_OCR_MODEL_ID
             || isProcessing
             || Boolean(processingTaskId)
-            || comparisonInFlight
             || modelSwitchInFlight
             || unlimitedOcrBackendSwitchInFlight
             || isModelRuntimeSwitching()
@@ -3860,22 +3399,11 @@ function updateActionState(task) {
         || !isTaskDetailLoaded(task)
         || isProcessing
         || Boolean(processingTaskId)
-        || comparisonInFlight
         || modelStarting
         || (!modelReady && !canStartAfterSwitch && !canDeployMissingModel);
-    if (els.compareBtn) {
-        els.compareBtn.disabled = !task
-            || !isTaskDetailLoaded(task)
-            || isProcessing
-            || Boolean(processingTaskId)
-            || comparisonInFlight
-            || modelSwitchInFlight
-            || availableModels.length < 2;
-    }
     if (els.editBtn) {
         els.editBtn.disabled = !task
             || isProcessing
-            || comparisonInFlight
             || activeResultView !== 'markdown'
             || !Boolean(visibleTaskMarkdown(task));
     }
@@ -3888,9 +3416,7 @@ function updateActionState(task) {
         });
     }
     updateCopyButtonState(task);
-    els.downloadBtn.disabled = activeResultView === 'comparison'
-        ? !hasComparisonReport
-        : !hasResult;
+    els.downloadBtn.disabled = !hasResult;
     const startLabel = startButtonLabel(task);
     const showProcessing = (isProcessing && task?.status === 'processing') || modelStarting;
     const startButtonHtml = showProcessing
@@ -3901,6 +3427,7 @@ function updateActionState(task) {
         els.startBtn.dataset.renderedHtml = startButtonHtml;
     }
 }
+
 
 function startButtonLabel(task) {
     if (!task) return t('开始解析');
@@ -3917,20 +3444,13 @@ function hasJsonResult(task) {
     return Boolean(task?.ocrResults?.length);
 }
 
-function isComparisonReportReady(task) {
-    const groupTasks = comparisonTasksFor(task);
-    return groupTasks.length > 1 && groupTasks.every(isTaskDetailLoaded);
-}
-
 function canCopyActiveResult(task) {
     if (activeResultView === 'json') return hasJsonResult(task);
-    if (activeResultView === 'comparison') return isComparisonReportReady(task);
     return Boolean(visibleTaskMarkdown(task));
 }
 
 function copyButtonLabel() {
     if (activeResultView === 'json') return t('复制 JSON');
-    if (activeResultView === 'comparison') return t('复制对比报告');
     return t('复制 Markdown');
 }
 
@@ -3946,9 +3466,6 @@ function activeResultCopyText(task) {
     if (activeResultView === 'json') {
         if (!hasJsonResult(task)) return '';
         return JSON.stringify(toOfficialJson(task), null, 2);
-    }
-    if (activeResultView === 'comparison') {
-        return isComparisonReportReady(task) ? comparisonReportMarkdown(task) : '';
     }
     const markdown = visibleTaskMarkdown(task);
     return markdown ? normalizeOCRMarkdown(markdown) : '';
@@ -3971,13 +3488,6 @@ async function copyActiveResult() {
 async function downloadActiveTask() {
     const task = getActiveTask();
     if (!task) return;
-
-    if (activeResultView === 'comparison') {
-        if (!isComparisonReportReady(task)) return;
-        const report = comparisonReportMarkdown(task);
-        downloadBlob(new Blob([report], { type: 'text/markdown' }), safeDownloadName(task.comparisonSourceName || task.name, 'comparison.md'));
-        return;
-    }
 
     if (!task.markdown && !task.ocrResults?.length) return;
 
@@ -4008,10 +3518,6 @@ async function downloadActiveTask() {
 }
 
 async function clearHistory() {
-    if (comparisonInFlight) {
-        alert(t('模型对比正在进行，完成后再清空历史。'));
-        return;
-    }
     if (historyMutationsLocked()) {
         alert(t('当前正在解析或切换模型，完成后再清空历史。'));
         return;

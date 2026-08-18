@@ -34,7 +34,7 @@ Browser
 | `/api/tasks` | GET | 返回本机持久化任务列表 |
 | `/api/tasks/{task_id}` | PUT | 保存一个本地任务 |
 | `/api/tasks/{task_id}` | DELETE | 删除一个本地任务 |
-| `/api/tasks/{task_id}/clone-source/{target_task_id}` | POST | 在服务端本地复制源文件，供多模型对比任务复用 |
+| `/api/tasks/{task_id}/clone-source/{target_task_id}` | POST | 在服务端本地复制源文件，供任务复用 |
 | `/api/tasks` | DELETE | 清空本地任务历史 |
 | `/api/convert/to-pdf` | POST | Office 文件转 PDF |
 | `/api/paddleocr-vl-1.6` | POST | PaddleOCR-VL 文档解析代理接口 |

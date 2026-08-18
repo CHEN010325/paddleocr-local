@@ -194,7 +194,17 @@ test('full DOM boot renders models, tasks, language, tabs, and controls', async 
     dom.window.close();
 });
 
-
+// End of DOM regression tests.
+test('restored single-model workbench does not expose model comparison UI', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    assert.equal(window.document.getElementById('compare-btn'), null);
+    assert.equal(window.document.getElementById('compare-dialog'), null);
+    assert.equal(window.document.querySelector('.comparison-tab'), null);
+    assert.equal(window.document.getElementById('comparison-view'), null);
+    assert.equal(window.document.querySelector('.brand-subtitle').textContent, '本地 PaddleOCR 多模型解析');
+    dom.window.close();
+});
 test('GPU preflight panel shows runnable models, low-VRAM settings, and startup logs', async () => {
     const { dom, window } = createBrowser();
     await boot(window);
@@ -248,8 +258,6 @@ test('GPU preflight panel shows runnable models, low-VRAM settings, and startup 
     assert.ok(panel.classList.contains('error'));
     dom.window.close();
 });
-
-
 test('processing orchestration, OCR streaming, PDF rendering, and edit actions execute', async () => {
     const { dom, window, runtime } = createBrowser();
     await boot(window);
@@ -363,8 +371,6 @@ test('processing orchestration, OCR streaming, PDF rendering, and edit actions e
     evaluate("downloadBlob(new Blob(['x']),'x.txt'); resetWorkbench()");
     dom.window.close();
 });
-
-
 test('DOM-backed rendering and utility branches execute with realistic elements', async () => {
     const { dom, window } = createBrowser();
     await boot(window);
@@ -2639,119 +2645,6 @@ test('completed result keeps its task model label after the runtime switches', a
 });
 
 
-test('model comparison locks task deletion and history clearing in logic and UI', async () => {
-    const { dom, window } = createBrowser();
-    await boot(window);
-    window.eval(`
-      window.__destructiveCalls=0;
-      window.__confirmCalls=0;
-      window.__alerts=[];
-      deleteTaskById=async()=>{window.__destructiveCalls+=1};
-      deleteAllTasks=async()=>{window.__destructiveCalls+=1};
-      confirm=()=>{window.__confirmCalls+=1;return true};
-      alert=(message)=>{window.__alerts.push(message)};
-      comparisonInFlight=true;
-      renderTaskList();
-      updateActionState(getActiveTask());
-    `);
-
-    assert.equal(window.document.getElementById('clear-history-btn').disabled, true);
-    assert.equal(window.document.querySelector('.task-delete').disabled, true);
-
-    await window.eval("deleteTask('task-1')");
-    await window.eval('clearHistory()');
-    assert.equal(window.__destructiveCalls, 0);
-    assert.equal(window.__confirmCalls, 0);
-    assert.deepEqual(Array.from(window.__alerts), [
-        '模型对比正在进行，完成后再删除任务。',
-        '模型对比正在进行，完成后再清空历史。'
-    ]);
-
-    window.eval('comparisonInFlight=false;updateActionState(getActiveTask())');
-    assert.equal(window.document.getElementById('clear-history-btn').disabled, false);
-    assert.equal(window.document.querySelector('.task-delete').disabled, false);
-    dom.window.close();
-});
-
-
-test('model comparison fails closed for uploads, drops, and ordinary OCR while allowing its owned task', async () => {
-    const { dom, window } = createBrowser();
-    await boot(window);
-    window.eval(`
-      activeTaskId=null;
-      resetWorkbench();
-      window.__createdFiles=0;
-      window.__ensureCalls=0;
-      window.__alerts=[];
-      createTaskFromFile=async()=>{window.__createdFiles+=1;return {id:'unexpected'}};
-      ensureModelRuntimeReadyForTask=async()=>{window.__ensureCalls+=1;return false};
-      alert=(message)=>{window.__alerts.push(message)};
-      activeComparisonGroupId='compare-active';
-      comparisonInFlight=true;
-      updateActionState(null);
-    `);
-
-    const input = window.document.getElementById('file-input');
-    const browse = window.document.getElementById('browse-btn');
-    const newTask = window.document.getElementById('new-task-btn');
-    const dropZone = window.document.getElementById('drop-zone');
-    assert.equal(input.disabled, true);
-    assert.equal(browse.disabled, true);
-    assert.equal(newTask.disabled, true);
-    assert.equal(dropZone.getAttribute('aria-disabled'), 'true');
-    assert.equal(dropZone.classList.contains('input-locked'), true);
-    for (const id of [
-        'chart-recognition-switch',
-        'doc-unwarping-switch',
-        'doc-orientation-switch',
-        'seal-recognition-switch',
-        'formula-number-switch',
-        'ignore-header-switch',
-        'ignore-footer-switch',
-        'ignore-number-switch',
-        'pdf-batch-size-input'
-    ]) {
-        assert.equal(window.document.getElementById(id).disabled, true);
-    }
-
-    const file = new window.File(['x'], 'blocked.png', { type: 'image/png' });
-    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
-    input.dispatchEvent(new window.Event('change', { bubbles: true }));
-    const drop = new window.Event('drop', { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, 'dataTransfer', { value: { files: [file] } });
-    window.document.dispatchEvent(drop);
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-
-    const ordinaryResult = await window.eval(`processTask({
-      id:'ordinary',status:'pending',modelId:'paddleocr-vl-1.6',batches:[]
-    },{confirmCompleted:false})`);
-    const ownedResult = await window.eval(`processTask({
-      id:'owned',status:'pending',modelId:'paddleocr-vl-1.6',batches:[],comparisonGroupId:'compare-active'
-    },{confirmCompleted:false})`);
-    assert.equal(ordinaryResult, false);
-    assert.equal(ownedResult, undefined);
-    assert.equal(window.__createdFiles, 0);
-    assert.equal(window.__ensureCalls, 1);
-    assert.deepEqual(Array.from(window.__alerts), [
-        '模型对比正在进行，完成后再添加文件。',
-        '模型对比正在进行，完成后再添加文件。'
-    ]);
-
-    window.eval(`
-      comparisonInFlight=false;
-      activeComparisonGroupId=null;
-      updateActionState(null);
-    `);
-    assert.equal(input.disabled, false);
-    assert.equal(browse.disabled, false);
-    assert.equal(newTask.disabled, false);
-    assert.equal(dropZone.getAttribute('aria-disabled'), 'false');
-    assert.equal(dropZone.classList.contains('input-locked'), false);
-    assert.equal(window.document.getElementById('chart-recognition-switch').disabled, false);
-    dom.window.close();
-});
-
-
 test('OCR batches use the task parsing snapshot instead of mutable live controls', async () => {
     const { dom, window } = createBrowser();
     await boot(window);
@@ -2849,50 +2742,6 @@ test('ordinary OCR and model switching lock all history mutations in logic and U
 });
 
 
-test('legacy inline comparison source is migrated when the stored clone is unavailable', async () => {
-    const requests = [];
-    const { dom, window } = createBrowser(async (url, options = {}) => {
-        const pathname = new URL(String(url), 'http://localhost:8000/').pathname;
-        if (pathname.endsWith('/clone-source/target-task')) {
-            requests.push({ pathname, method: options.method || 'GET', body: options.body });
-            return jsonResponse({ detail: 'legacy source has no stored file' }, 404);
-        }
-        if (pathname === '/api/tasks/target-task/source') {
-            requests.push({ pathname, method: options.method || 'GET', body: options.body });
-            return jsonResponse({ url: '/api/tasks/target-task/source' });
-        }
-        if (pathname === '/api/models') {
-            return jsonResponse({
-                default: 'paddleocr-vl-1.6',
-                data: [{ id: 'paddleocr-vl-1.6', label: 'PaddleOCR', endpoint: '/api/paddleocr-vl-1.6' }]
-            });
-        }
-        if (pathname === '/api/model-runtime') {
-            return jsonResponse({ controlAvailable: false, activeModelId: null, models: {} });
-        }
-        if (pathname === '/api/tasks') return jsonResponse({ tasks: [] });
-        return jsonResponse({}, 404);
-    });
-    await boot(window);
-
-    const sourceUrl = await window.eval(`copyComparisonSource({
-      id:'legacy-task',name:'legacy.png',originalName:'legacy.png',mimeType:'image/png',
-      sourceUrl:'/api/tasks/legacy-task/source',sourceDataUrl:'data:image/png;base64,AA=='
-    },'target-task')`);
-
-    assert.equal(sourceUrl, '/api/tasks/target-task/source');
-    assert.deepEqual(
-        requests.map(({ pathname, method }) => [pathname, method]),
-        [
-            ['/api/tasks/legacy-task/clone-source/target-task', 'POST'],
-            ['/api/tasks/target-task/source', 'POST']
-        ]
-    );
-    assert.equal(requests[1].body instanceof window.FormData, true);
-    dom.window.close();
-});
-
-
 test('manual Markdown edits bypass PP-OCR and official-layout renderers', async () => {
     const { dom, window } = createBrowser();
     await boot(window);
@@ -2928,87 +2777,4 @@ test('manual Markdown edits bypass PP-OCR and official-layout renderers', async 
     assert.doesNotMatch(window.document.getElementById('markdown-view').textContent, /machine layout text/);
     dom.window.close();
 });
-
-
-test('comparison lock rejects reentry, records failures, continues, and exports reproducible report', async () => {
-    const { dom, window } = createBrowser();
-    await boot(window);
-    const ev = (source) => window.eval(source);
-
-    ev(`
-      availableModels=[
-        {id:'model-a',name:'Model A revision',label:'Model A',endpoint:'/api/a'},
-        {id:'model-b',name:'Model B revision',label:'Model B',endpoint:'/api/b'},
-        {id:'model-c',name:'Model C revision',label:'Model C',endpoint:'/api/c'}
-      ];
-      appMetadata={version:'9.8.7',commit:'abc123def'};
-      tasks=[];activeTaskId=null;activeResultView='markdown';
-      window.__comparisonSource={
-        id:'source',name:'contract.pdf',originalName:'contract.pdf',sourceKind:'pdf',
-        sourceUrl:'/api/tasks/source/source',mimeType:'application/pdf',size:321,pageCount:2,
-        pdfBatchSize:1,batches:[]
-      };
-      window.__processOrder=[];
-      window.__gate=new Promise((resolve)=>{window.__releaseFirstComparison=resolve});
-      let processCall=0;
-      createComparisonTask=async(source,model,groupId,comparisonStartedAt)=>({
-        id:'task-'+model.id,name:source.name+' · '+model.label,originalName:source.originalName,
-        sourceKind:source.sourceKind,sourceUrl:source.sourceUrl,mimeType:source.mimeType,size:source.size,
-        createdAt:Date.now()+processCall,updatedAt:Date.now(),status:'pending',pageCount:source.pageCount,
-        pdfBatchSize:1,batches:[],markdown:'',images:{},ocrResults:[],modelId:model.id,
-        modelName:model.label,modelEndpoint:model.endpoint,comparisonGroupId:groupId,
-        comparisonStartedAt,comparisonSourceName:source.originalName
-      });
-      saveTask=async()=>{};
-      selectTask=async(id)=>{activeTaskId=id};
-      renderTaskList=()=>{};
-      renderResultPane=()=>{};
-      refreshTaskUi=()=>{};
-      updateActionState=()=>{};
-      processTask=async(task)=>{
-        const call=++processCall;
-        window.__processOrder.push(task.modelId);
-        if(call===1) await window.__gate;
-        task.benchmark=createBenchmarkSnapshot(task,availableModels.find((item)=>item.id===task.modelId),1000+call);
-        task.benchmark.completedAt=2000+call;
-        task.benchmark.durationMs=1000;
-        if(call===2){task.status='completed';task.markdown='successful output';return true;}
-        task.status='error';task.error='failure-'+task.modelId;return false;
-      };
-      window.__firstComparison=runModelComparison(window.__comparisonSource,['model-a','model-b','model-c']);
-    `);
-
-    assert.equal(ev('comparisonInFlight'), true);
-    const reentrant = await ev("runModelComparison(window.__comparisonSource,['model-a','model-b'])");
-    assert.deepEqual(Array.from(reentrant), []);
-    window.__releaseFirstComparison();
-    const results = await window.__firstComparison;
-
-    assert.deepEqual(Array.from(ev('window.__processOrder')), ['model-a', 'model-b', 'model-c']);
-    assert.deepEqual(Array.from(results, (task) => task.status), ['error', 'completed', 'error']);
-    assert.equal(ev('comparisonInFlight'), false);
-    assert.equal(results[0].error, 'failure-model-a');
-    assert.equal(results[2].error, 'failure-model-c');
-
-    const report = ev('comparisonReportMarkdown(tasks.find((item)=>item.modelId===\'model-c\'))');
-    assert.match(report, /failure-model-a/);
-    assert.match(report, /successful output/);
-    assert.match(report, /failure-model-c/);
-    assert.match(report, /9\.8\.7/);
-    assert.match(report, /abc123def/);
-    assert.match(report, /"schemaVersion": 1/);
-    assert.match(report, /"parsingSettings":/);
-    assert.match(report, /"modelId": "model-b"/);
-
-    ev(`
-      activeTaskId=tasks.find((item)=>item.modelId==='model-c').id;
-      activeResultView='comparison';
-      window.__downloaded=null;
-      downloadBlob=(blob,name)=>{window.__downloaded={blob,name}};
-    `);
-    await ev('downloadActiveTask()');
-    assert.equal(Boolean(window.__downloaded), true);
-    assert.match(window.__downloaded.name, /comparison\.md$/);
-    assert.equal(window.__downloaded.blob.size > 0, true);
-    dom.window.close();
-});
+// End of DOM regression tests.

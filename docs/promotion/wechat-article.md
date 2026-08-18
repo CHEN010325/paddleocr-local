@@ -36,24 +36,11 @@ PaddleOCR Local 目前最值得关注的有五点：
 
 很多开源项目展示的是“模型能跑”，但普通用户真正需要的是：文件怎么传、失败怎么恢复、结果怎么查看、怎么导出，以及显存不够时该怎么办。
 
-## 同一份文档，现在可以顺序跑多个模型
+## 单模型流程更直接
 
-项目增加了一个“多模型对比”入口。
+项目的 WebUI 保持原来的单模型工作流：选择当前模型、上传文件、查看解析结果并下载 Markdown 或 JSON。
 
-选择两款或更多模型后，系统会依次切换模型并解析同一份源文件。它会记录：
-
-- 模型名称
-- 成功或失败状态
-- 页数
-- 解析耗时
-- 输出字符数
-- 每款模型的完整 Markdown
-
-最后可以复制或下载对比报告。
-
-这里必须说明：解析耗时只适用于当次硬件和参数，输出字符数也不等于准确率。项目不会把少量体验包装成权威 Benchmark。
-
-真正的模型质量对比，还需要公开测试文件、固定模型版本和人工评分规则。仓库里已经给出一套 Benchmark 记录规范，欢迎社区一起补充。
+同一张 GPU 同时只运行一个逻辑模型；切换模型时会先停止旧模型、确认显存释放，再启动新模型。这样更适合日常处理隐私文档，也避免用户为了完成一次解析而管理复杂的对比任务。
 
 ## 低显存机器，也会得到明确建议
 
@@ -66,7 +53,7 @@ PaddleOCR Local 目前最值得关注的有五点：
 | 没有 NVIDIA 显卡 | Apple Silicon 可尝试 OvisOCR2 MLX；Windows/Linux CPU Lite 尚在路线图中 |
 | 4～8 GB 显存 | 优先 PP-OCRv6，其他模型使用每批 1 页和低显存参数 |
 | 12 GB 以上 | 可以尝试 PaddleOCR-VL 和更多文档解析模型 |
-| 复杂论文、表格、公式 | 建议用多模型对比选择结果 |
+| 复杂论文、表格、公式 | 根据文档类型选择 PaddleOCR-VL、OvisOCR2 或 HPD-Parsing |
 
 这些数字是启动兼容参考，不是性能保证。长页面、高分辨率和高 Token 上限都会继续增加显存。
 
@@ -112,13 +99,6 @@ python pandocr_cli.py doctor
 python pandocr_cli.py parse invoice.pdf --model pp-ocrv6
 ```
 
-让同一份论文依次运行三款模型：
-
-```bash
-python pandocr_cli.py compare paper.pdf \
-  --models paddleocr-vl-1.6,ovisocr2,hpd-parsing
-```
-
 还可以监听一个目录。扫描仪、NAS 或其他程序只要把新文件放进去，CLI 就会自动解析：
 
 ```bash
@@ -131,7 +111,7 @@ python pandocr_cli.py watch incoming --model pp-ocrv6 --output parsed
 
 - 希望文档留在本机的个人和团队
 - 经常把论文、财报或扫描件转成 Markdown 的用户
-- 想比较不同开源 OCR 模型的开发者
+- 需要按文档类型选择合适 OCR 模型的用户
 - 需要在内网部署文档解析能力的人
 
 它暂时不适合：

@@ -71,19 +71,18 @@ cp env.docker env.txt
 - Markdown、JSON 与图片资源下载
 - 中文 / 英文界面
 - FastAPI 接口与 OpenAPI 描述
-- CLI、目录批处理、Watch Folder 和多模型对比报告
+- CLI、目录批处理和 Watch Folder
 
 ## 你应该选择哪个模型
 
 - **没有 NVIDIA 显卡**：Apple Silicon 可选 OvisOCR2 MLX；Windows/Linux 纯 CPU 一键路径仍在路线图中。
 - **显存只有 8 GB**：优先 PP-OCRv6、OvisOCR2 或 HPD-Parsing 的低显存配置。
 - **复杂论文和公式**：优先尝试 PaddleOCR-VL、OvisOCR2、HPD-Parsing。
-- **需要确认最佳结果**：使用多模型对比工作流，并把可复现结果提交到 [Benchmark](docs/benchmark.md)。
 
 ## 项目质量
 
 - Python：237 项测试，覆盖率门禁 95%+
-- 前端：47 项测试，语句和分支覆盖率门禁 95%+
+- 前端：44 项测试，语句和分支覆盖率门禁 95%+
 - npm 与全部 Python 依赖清单进行漏洞扫描
 - Docker 镜像、Actions 和模型 revision 固定版本
 - Web、Docker 控制器和 LibreOffice 转换器隔离运行

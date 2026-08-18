@@ -66,11 +66,11 @@ Then open <http://localhost:8000>. Each logical model is guarded by its own Comp
 - Markdown, JSON, and extracted-asset downloads
 - Chinese and English UI
 - FastAPI endpoints and OpenAPI description
-- CLI, folder batching, watch-folder automation, and multi-model reports
+- CLI, folder batching, and watch-folder automation
 
 ## Quality and security
 
-- 237 Python tests and 47 frontend tests with 95%+ coverage gates
+- 237 Python tests and 44 frontend tests with 95%+ coverage gates
 - Dependency vulnerability audits in CI
 - Pinned container images, Actions, and model revisions
 - Isolated Web, Docker controller, and LibreOffice converter services

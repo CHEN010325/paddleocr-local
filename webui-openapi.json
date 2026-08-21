@@ -566,7 +566,8 @@
                       "pp-ocrv6",
                       "unlimited-ocr",
                       "ovisocr2",
-                      "hpd-parsing"
+                      "hpd-parsing",
+                      "navidc-ocr"
                     ],
                     "description": "An enabled OCR model ID. Omit to use the server default."
                   },
@@ -759,7 +760,8 @@
                       "pp-ocrv6",
                       "unlimited-ocr",
                       "ovisocr2",
-                      "hpd-parsing"
+                      "hpd-parsing",
+                      "navidc-ocr"
                     ],
                     "description": "An enabled OCR model ID. Omit to use the server default."
                   },
@@ -1039,6 +1041,23 @@
         "summary": "Proxy Hpd Parsing",
         "description": "Proxy a document to the optional official HPD-Parsing runtime.",
         "operationId": "proxy_hpd_parsing_api_hpd_parsing_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/navidc-ocr": {
+      "post": {
+        "summary": "Proxy Navidc Ocr",
+        "description": "Proxy a document to the optional NaviDC-OCR runtime.",
+        "operationId": "proxy_navidc_ocr_api_navidc_ocr_post",
         "responses": {
           "200": {
             "description": "Successful Response",

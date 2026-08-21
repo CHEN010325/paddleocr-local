@@ -66,17 +66,18 @@ def test_every_model_service_requires_its_logical_model_profile():
         "ovisocr2-api": "ovisocr2",
         "hpd-parsing-server": "hpd-parsing",
         "hpd-parsing-api": "hpd-parsing",
+        "navidc-ocr-api": "navidc-ocr",
     }
     for service, profile in expected_profiles.items():
         block = compose_service_block(compose, service)
         assert f'profiles: ["{profile}"]' in block
 
 
-def test_windows_one_click_profiles_and_wait_guard_cover_all_five_models():
+def test_windows_one_click_profiles_and_wait_guard_cover_all_models():
     script = read("scripts/windows-one-click.ps1")
-    for profile in ("paddleocr-vl", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing"):
+    for profile in ("paddleocr-vl", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"):
         assert f'@("--profile", "{profile}")' in script
-    for model_id in ("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing"):
+    for model_id in ("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"):
         assert f'$running.Add("{model_id}")' in script
     assert "$runningLogicalModels.Count -gt 1" in script
     assert "$runningLogicalModels.Count -ne 1" in script
@@ -93,6 +94,7 @@ def test_windows_one_click_uses_per_model_gpu_requirements():
         "unlimited-ocr": (7680, 6656),
         "ovisocr2": (7680, 6656),
         "hpd-parsing": (7680, 6656),
+        "navidc-ocr": (7680, 6656),
     }
     for model_id, (total_mib, free_mib) in expected.items():
         requirement = (

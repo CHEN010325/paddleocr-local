@@ -26,6 +26,7 @@ step "Checking Python syntax"
   hpd_parsing_adapter.py \
   unlimited_ocr_adapter.py \
   ovisocr2_adapter.py \
+  navidc_ocr_adapter.py \
   scripts/check-mlx-runtime.py
 
 step "Running Python unit tests"

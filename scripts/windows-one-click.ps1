@@ -28,10 +28,11 @@ $script:ActiveModel = "paddleocr-vl-1.6"
 $script:EnableUnlimitedOcr = $false
 $script:EnableOvisOcr2 = $false
 $script:EnableHpdParsing = $false
+$script:EnableNavidcOcr = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
 $script:DeployModelIds = @("paddleocr-vl-1.6")
-$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing")
+$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr")
 Set-Location $script:RepoRoot
 
 function Write-Section {
@@ -304,7 +305,8 @@ function Resolve-ModelId {
         { $_ -in @("3", "unlimited", "unlimited-ocr", "uow") } { return "unlimited-ocr" }
         { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } { return "ovisocr2" }
         { $_ -in @("5", "hpd", "hpd-parsing", "hpdparsing") } { return "hpd-parsing" }
-        default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, or hpd-parsing." }
+        { $_ -in @("navi", "navidc", "navidc-ocr") } { return "navidc-ocr" }
+        default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, hpd-parsing, or navidc-ocr." }
     }
 }
 
@@ -316,6 +318,7 @@ function Get-ModelDisplayName {
         "unlimited-ocr" { return "Unlimited-OCR" }
         "ovisocr2" { return "OvisOCR2" }
         "hpd-parsing" { return "HPD-Parsing" }
+        "navidc-ocr" { return "NaviDC-OCR" }
         default { return $ModelId }
     }
 }
@@ -329,6 +332,7 @@ function Get-ModelGpuRequirement {
         "unlimited-ocr" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
         "ovisocr2" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
         "hpd-parsing" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
+        "navidc-ocr" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
         default { throw "No GPU requirement is defined for model '$ModelId'." }
     }
 }
@@ -471,6 +475,10 @@ function Resolve-DeploymentSelection {
                 Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"
                 continue
             }
+            { $_ -in @("navidc", "navi", "navidc-ocr") } {
+                Add-DeploymentModel -Models $selected -ModelId "navidc-ocr"
+                continue
+            }
             { $_ -in @("11", "all-five", "full-five") } {
                 foreach ($modelId in $script:ModelCatalogIds) {
                     Add-DeploymentModel -Models $selected -ModelId $modelId
@@ -481,7 +489,7 @@ function Resolve-DeploymentSelection {
                 continue
             }
             default {
-                throw "Unknown model selection '$token'. Use 1-11 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, hpd-parsing."
+                throw "Unknown model selection '$token'. Use 1-11 or model ids such as paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, hpd-parsing, navidc-ocr."
             }
         }
     }
@@ -613,6 +621,9 @@ function Get-DeployedModelServices {
         $services.Add("hpd-parsing-server")
         $services.Add("hpd-parsing-api")
     }
+    if ($script:EnableNavidcOcr) {
+        $services.Add("navidc-ocr-api")
+    }
     return [string[]]$services.ToArray()
 }
 
@@ -644,6 +655,9 @@ function Get-GpuCheckService {
     }
     if ($script:EnableHpdParsing) {
         return "hpd-parsing-server"
+    }
+    if ($script:EnableNavidcOcr) {
+        return "navidc-ocr-api"
     }
     return "pandocr-web"
 }
@@ -702,6 +716,10 @@ function New-RuntimeEnvFile {
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_UNLIMITED_OCR" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_OVISOCR2" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_HPD_PARSING" -Value "1"
+    $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_NAVIDC_OCR" -Value "1"
+    $lines = Ensure-EnvLine -Lines $lines -Key "NAVIDC_OCR_MODEL_NAME" -Value "StarDoc-AI/NaviDC-OCR"
+    $lines = Ensure-EnvLine -Lines $lines -Key "NAVIDC_OCR_MODEL_REVISION" -Value "c7179051a52a0a54a549388de89c6aa715cfd0af"
+    $lines = Ensure-EnvLine -Lines $lines -Key "NAVIDC_OCR_SOURCE_REVISION" -Value "737e185c7b74288091cd4395ea80c14b1f71422b"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MODEL_SWITCH_TIMEOUT" -Value "1200"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_UPLOAD_MB" -Value "512"
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_MAX_CONCURRENT_OCR" -Value "1"
@@ -712,6 +730,7 @@ function New-RuntimeEnvFile {
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
     $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
     $script:EnableHpdParsing = $script:DeployModelIds -contains "hpd-parsing"
+    $script:EnableNavidcOcr = $script:DeployModelIds -contains "navidc-ocr"
     $script:UnlimitedOcrBackend = (Get-EnvLineValue -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -DefaultValue "transformers").Trim().ToLowerInvariant()
     Set-Content -Path $runtimeEnv -Value $lines -Encoding ASCII
 
@@ -768,6 +787,9 @@ function Get-ComposeArgs {
     }
     if ($script:EnableHpdParsing -or $IncludeOptionalProfiles) {
         $args += @("--profile", "hpd-parsing")
+    }
+    if ($script:EnableNavidcOcr -or $IncludeOptionalProfiles) {
+        $args += @("--profile", "navidc-ocr")
     }
     return $args + $Arguments
 }
@@ -840,7 +862,8 @@ function Get-RunningLogicalModels {
         [string]$UnlimitedApiStatus,
         [string]$OvisStatus,
         [string]$HpdServerStatus,
-        [string]$HpdApiStatus
+        [string]$HpdApiStatus,
+        [string]$NavidcStatus
     )
 
     $running = New-Object System.Collections.Generic.List[string]
@@ -858,6 +881,9 @@ function Get-RunningLogicalModels {
     }
     if ((Test-ContainerStatusRunning $HpdServerStatus) -or (Test-ContainerStatusRunning $HpdApiStatus)) {
         $running.Add("hpd-parsing")
+    }
+    if (Test-ContainerStatusRunning $NavidcStatus) {
+        $running.Add("navidc-ocr")
     }
     return [string[]]$running.ToArray()
 }
@@ -897,12 +923,14 @@ function Wait-ForServices {
         $ovis = Get-ContainerStatus "ovisocr2-api"
         $hpdServer = Get-ContainerStatus "hpd-parsing-server"
         $hpdApi = Get-ContainerStatus "hpd-parsing-api"
+        $navidc = Get-ContainerStatus "navidc-ocr-api"
         $web = Get-ContainerStatus "pandocr-web"
         $apiOk = Test-HttpOk "http://localhost:8081/health"
         $ocrOk = Test-HttpOk "http://localhost:8082/health"
         $uowOk = if ($script:EnableUnlimitedOcr) { Test-HttpOk "http://localhost:8083/health" } else { $false }
         $ovisOk = if ($script:EnableOvisOcr2) { Test-HttpOk "http://localhost:8084/health" } else { $false }
         $hpdOk = if ($script:EnableHpdParsing) { Test-HttpOk "http://localhost:8085/health" } else { $false }
+        $navidcOk = if ($script:EnableNavidcOcr) { Test-HttpOk "http://localhost:8086/health" } else { $false }
         $webOk = Test-HttpOk "http://localhost:8000/"
         $runtime = if ($webOk) { Get-ModelRuntimePayload } else { $null }
         $activeRuntimeStatus = Get-RuntimeModelStatus -Runtime $runtime -ModelId $script:ActiveModel
@@ -918,7 +946,8 @@ function Wait-ForServices {
             -UnlimitedApiStatus $uowApi `
             -OvisStatus $ovis `
             -HpdServerStatus $hpdServer `
-            -HpdApiStatus $hpdApi)
+            -HpdApiStatus $hpdApi `
+            -NavidcStatus $navidc)
 
         $activeStatuses = @()
         if ($script:ActiveModel -eq "pp-ocrv6") {
@@ -932,6 +961,9 @@ function Wait-ForServices {
         }
         elseif ($script:ActiveModel -eq "hpd-parsing") {
             $activeStatuses = @($hpdServer, $hpdApi, $web)
+        }
+        elseif ($script:ActiveModel -eq "navidc-ocr") {
+            $activeStatuses = @($navidc, $web)
         }
         else {
             $activeStatuses = @($vlm, $api, $web)
@@ -1100,6 +1132,9 @@ try {
         }
         if ($script:EnableHpdParsing) {
             $buildServices += "hpd-parsing-api"
+        }
+        if ($script:EnableNavidcOcr) {
+            $buildServices += "navidc-ocr-api"
         }
         Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs (@("build") + $buildServices)) -Description "Building local images"
     }

@@ -4243,7 +4243,11 @@ function collectOfficialRenderBlocks(task) {
 function isIgnoredLayoutLabel(label) {
     const normalized = String(label || '').toLowerCase();
     const ignored = new Set(['footnote', 'aside_text']);
-    if (els.ignoreNumberSwitch.checked) ignored.add('number');
+    if (els.ignoreNumberSwitch.checked) {
+        ignored.add('number');
+        ignored.add('page_number');
+        ignored.add('page_num');
+    }
     if (els.ignoreHeaderSwitch.checked) {
         ignored.add('header');
         ignored.add('header_image');
@@ -4807,9 +4811,22 @@ function layoutLabelText(label) {
         formula: '公式',
         display_formula: '行间公式',
         formula_number: '公式编号',
+        equation: '公式',
+        equation_block: '公式块',
+        code: '代码',
+        code_caption: '代码标题',
+        table_caption: '表格标题',
+        image_caption: '图片标题',
+        table_footnote: '表格脚注',
+        image_footnote: '图片脚注',
+        page_footnote: '页脚注',
+        list: '列表',
+        aside_text: '侧栏文本',
         footer: '页脚',
         header: '页眉',
         number: '页码',
+        page_number: '页码',
+        page_num: '页码',
         reference: '参考文献',
         reference_content: '参考文献',
         reference_text: '参考文献',

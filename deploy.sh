@@ -20,8 +20,8 @@ fi
 bash "${SCRIPT_DIR}/scripts/prepare-runtime-env.sh" "${BASE_ENV}" "${RUNTIME_ENV}" >/dev/null
 unset PANDOCR_MODEL_CONTROLLER_TOKEN
 
-COMPOSE=(docker compose --env-file "${BASE_ENV}" --env-file "${RUNTIME_ENV}" --profile paddleocr-vl --profile pp-ocrv6)
-CORE_SERVICES=(pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api)
+COMPOSE=(docker compose --env-file "${BASE_ENV}" --env-file "${RUNTIME_ENV}" --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr)
+CORE_SERVICES=(pandocr-controller pandocr-office-converter pandocr-web paddleocr-vlm-server paddleocr-vl-api paddleocr-ocr-api navidc-ocr-api)
 
 "${COMPOSE[@]}" up -d --no-start --force-recreate "${CORE_SERVICES[@]}"
 "${COMPOSE[@]}" start pandocr-controller pandocr-office-converter pandocr-web
@@ -62,7 +62,7 @@ echo "OCR API: http://localhost:8082"
 echo "Only the selected model runs. On a switch, pandocr-controller fully stops the old model and releases GPU memory before starting the new one."
 echo ""
 echo "Useful commands:"
-echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 logs -f"
-echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 logs -f pandocr-web"
-echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 restart pandocr-web"
-echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 down"
+echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr logs -f"
+echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr logs -f pandocr-web"
+echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr restart pandocr-web"
+echo "  docker compose --env-file \"${BASE_ENV}\" --env-file \"${RUNTIME_ENV}\" --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr down"

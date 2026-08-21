@@ -10,6 +10,7 @@
 | PP-OCRv6 | NVIDIA 4,096 MiB | 4 GB+ | CPU Lite 一键路径仍在路线图中 |
 | OvisOCR2 | NVIDIA 7,680 MiB | 8～16 GB+ | Apple Silicon 默认 MLX |
 | HPD-Parsing | NVIDIA 7,680 MiB | 12 GB+ | 当前不支持 Apple Silicon 一键部署 |
+| NaviDC-OCR | NVIDIA 7,680 MiB | 12 GB+ | CUDA / Transformers；模型权重约 1.2B BF16 |
 
 长页面、高 DPI 图片、大批页数和较高 `max_tokens` 会增加显存。8 GB 设备优先使用每批 1 页和低显存参数。
 

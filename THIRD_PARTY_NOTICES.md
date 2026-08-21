@@ -6,7 +6,7 @@ locked in `package-lock.json`. Run `npm run vendor:sync` after an upgrade and
 license.
 
 The project integrates with PaddleOCR, PaddleX, Unlimited-OCR, OvisOCR2,
-HPD-Parsing, SGLang, vLLM, PyTorch, Hugging Face, LibreOffice and their
+HPD-Parsing, NaviDC-OCR, SGLang, vLLM, PyTorch, Hugging Face, LibreOffice and their
 transitive dependencies. Their own licenses and model terms continue to apply;
 this project's Apache-2.0 license does not relicense them or downloaded model
 weights.

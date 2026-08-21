@@ -158,6 +158,21 @@ HPD_PARSING_PDF_DPI = os.getenv("HPD_PARSING_PDF_DPI", "200")
 HPD_PARSING_MAX_PAGES_PER_REQUEST = os.getenv("HPD_PARSING_MAX_PAGES_PER_REQUEST", "50")
 HPD_PARSING_MAX_CONCURRENCY = os.getenv("HPD_PARSING_MAX_CONCURRENCY", "1")
 HPD_PARSING_REQUEST_TIMEOUT = os.getenv("HPD_PARSING_REQUEST_TIMEOUT", "1200")
+NAVIDC_OCR_SERVICE_URL = os.getenv("NAVIDC_OCR_SERVICE_URL", "http://localhost:8086/ocr")
+NAVIDC_OCR_MODEL_NAME = os.getenv("NAVIDC_OCR_MODEL_NAME", "StarDoc-AI/NaviDC-OCR")
+NAVIDC_OCR_MODEL_REVISION = os.getenv(
+    "NAVIDC_OCR_MODEL_REVISION", "c7179051a52a0a54a549388de89c6aa715cfd0af"
+)
+NAVIDC_OCR_SOURCE_REVISION = os.getenv(
+    "NAVIDC_OCR_SOURCE_REVISION", "737e185c7b74288091cd4395ea80c14b1f71422b"
+)
+NAVIDC_OCR_API_PORT = os.getenv("NAVIDC_OCR_API_PORT", "8086")
+NAVIDC_OCR_MAX_TOKENS = os.getenv("NAVIDC_OCR_MAX_TOKENS", "4096")
+NAVIDC_OCR_PDF_DPI = os.getenv("NAVIDC_OCR_PDF_DPI", "200")
+NAVIDC_OCR_MAX_PAGES_PER_REQUEST = os.getenv("NAVIDC_OCR_MAX_PAGES_PER_REQUEST", "50")
+NAVIDC_OCR_MAX_RENDER_PIXELS = os.getenv("NAVIDC_OCR_MAX_RENDER_PIXELS", "60000000")
+NAVIDC_OCR_DTYPE = os.getenv("NAVIDC_OCR_DTYPE", "bfloat16")
+NAVIDC_OCR_BACKEND = os.getenv("NAVIDC_OCR_BACKEND", "vllm-async-engine")
 UNLIMITED_OCR_SGLANG_WHEEL_URL = os.getenv(
     "UNLIMITED_OCR_SGLANG_WHEEL_URL",
     "https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5",
@@ -206,6 +221,7 @@ ENFORCE_ORIGIN_CHECK = parse_bool_env("PANDOCR_ENFORCE_ORIGIN_CHECK", "1")
 ENABLE_UNLIMITED_OCR = parse_bool_env("PANDOCR_ENABLE_UNLIMITED_OCR", "0")
 ENABLE_OVISOCR2 = parse_bool_env("PANDOCR_ENABLE_OVISOCR2", "0")
 ENABLE_HPD_PARSING = parse_bool_env("PANDOCR_ENABLE_HPD_PARSING", "0")
+ENABLE_NAVIDC_OCR = parse_bool_env("PANDOCR_ENABLE_NAVIDC_OCR", "0")
 MODEL_CATALOG_ENV = os.getenv("PANDOCR_MODEL_CATALOG", "").strip()
 MAX_CONCURRENT_OCR = parse_positive_int_env("PANDOCR_MAX_CONCURRENT_OCR", "1")
 CONTROLLER_OCR_LEASE_TTL_SECONDS = parse_nonnegative_int_env(
@@ -251,7 +267,7 @@ def initial_unlimited_ocr_backend() -> str:
 
 
 def parse_model_catalog() -> list[str]:
-    supported = {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing"}
+    supported = {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"}
     if MODEL_CATALOG_ENV:
         ids = [model_id for model_id in parse_csv_env("PANDOCR_MODEL_CATALOG", "") if model_id in supported]
     else:
@@ -262,6 +278,8 @@ def parse_model_catalog() -> list[str]:
             ids.append("ovisocr2")
         if ENABLE_HPD_PARSING:
             ids.append("hpd-parsing")
+        if ENABLE_NAVIDC_OCR:
+            ids.append("navidc-ocr")
 
     unique_ids = []
     for model_id in ids:
@@ -274,8 +292,9 @@ MODEL_CATALOG_IDS = parse_model_catalog()
 ENABLE_UNLIMITED_OCR = ENABLE_UNLIMITED_OCR or "unlimited-ocr" in MODEL_CATALOG_IDS
 ENABLE_OVISOCR2 = ENABLE_OVISOCR2 or "ovisocr2" in MODEL_CATALOG_IDS
 ENABLE_HPD_PARSING = ENABLE_HPD_PARSING or "hpd-parsing" in MODEL_CATALOG_IDS
+ENABLE_NAVIDC_OCR = ENABLE_NAVIDC_OCR or "navidc-ocr" in MODEL_CATALOG_IDS
 
-# Keep the complete five-model container universe independent from the enabled
+# Keep the complete model container universe independent from the enabled
 # catalog.  A container left behind by an older or differently configured
 # deployment still consumes the same GPU and must participate in exclusivity
 # checks and switch cleanup.
@@ -305,6 +324,11 @@ MODEL_RUNTIME_CONTAINER_GROUPS = {
         "start_order": ["hpd-parsing-server", "hpd-parsing-api"],
         "stop_order": ["hpd-parsing-api", "hpd-parsing-server"],
     },
+    "navidc-ocr": {
+        "containers": ["navidc-ocr-api"],
+        "start_order": ["navidc-ocr-api"],
+        "stop_order": ["navidc-ocr-api"],
+    },
 }
 
 MODEL_MINIMUM_FREE_MIB = {
@@ -313,6 +337,7 @@ MODEL_MINIMUM_FREE_MIB = {
     "unlimited-ocr": 6656,
     "ovisocr2": 6656,
     "hpd-parsing": 6656,
+    "navidc-ocr": 6656,
 }
 
 MODEL_RUNTIME_CONFIG = {
@@ -402,6 +427,24 @@ if ENABLE_HPD_PARSING:
         },
     }
 
+if ENABLE_NAVIDC_OCR:
+    MODEL_RUNTIME_CONFIG["navidc-ocr"] = {
+        "containers": ["navidc-ocr-api"],
+        "start_order": ["navidc-ocr-api"],
+        "stop_order": ["navidc-ocr-api"],
+        "health_url": NAVIDC_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/health",
+        "gpu_memory": {
+            "minimum_mib": 7680,
+            "minimum_free_mib": MODEL_MINIMUM_FREE_MIB["navidc-ocr"],
+            "recommended_mib": 11264,
+            "low_memory_env": [
+                "NAVIDC_OCR_MAX_TOKENS=2048",
+                "NAVIDC_OCR_MAX_RENDER_PIXELS=40000000",
+                "PANDOCR_MAX_CONCURRENT_OCR=1",
+            ],
+        },
+    }
+
 DEFAULT_RUNTIME_FALLBACK_MODEL_ID = next(
     (model_id for model_id in MODEL_CATALOG_IDS if model_id in MODEL_RUNTIME_CONFIG),
     next(iter(MODEL_RUNTIME_CONFIG)),
@@ -485,6 +528,13 @@ def model_catalog() -> list[dict]:
             "label": "HPD-Parsing",
             "kind": "document_parsing",
             "endpoint": "/api/hpd-parsing",
+        },
+        "navidc-ocr": {
+            "id": "navidc-ocr",
+            "name": NAVIDC_OCR_MODEL_NAME,
+            "label": "NaviDC-OCR",
+            "kind": "document_parsing",
+            "endpoint": "/api/navidc-ocr",
         },
     }
     return [
@@ -893,6 +943,8 @@ def docker_image_name_for(service_name: str) -> str:
         return HPD_PARSING_IMAGE
     if service_name == "hpd-parsing-api":
         return "pandocr-hpd-parsing-adapter:latest"
+    if service_name == "navidc-ocr-api":
+        return "pandocr-navidc-ocr:latest"
     raise ValueError(f"Unknown service image: {service_name}")
 
 
@@ -935,6 +987,7 @@ def dockerfile_path_for(service_name: str) -> Path:
         "unlimited-ocr-sglang": "Dockerfile.unlimited-ocr-sglang",
         "ovisocr2-api": "Dockerfile.ovisocr2",
         "hpd-parsing-api": "Dockerfile.hpd-parsing-adapter",
+        "navidc-ocr-api": "Dockerfile.navidc-ocr",
     }
     dockerfile_name = dockerfile_names.get(service_name)
     if not dockerfile_name:
@@ -966,6 +1019,7 @@ def make_docker_build_context(service_name: str) -> bytes:
             "unlimited-ocr-sglang": "unlimited_ocr_adapter.py",
             "ovisocr2-api": "ovisocr2_adapter.py",
             "hpd-parsing-api": "hpd_parsing_adapter.py",
+            "navidc-ocr-api": "navidc_ocr_adapter.py",
         }
         if service_name in adapter_names:
             adapter_name = adapter_names[service_name]
@@ -1328,6 +1382,33 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 30,
             ),
         }
+    if service_name == "navidc-ocr-api":
+        return {
+            "Image": image,
+            "Cmd": ["uvicorn", "navidc_ocr_adapter:app", "--host", "0.0.0.0", "--port", "8080"],
+            "Env": [
+                "HF_HOME=/root/.cache/huggingface",
+                f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
+                f"NAVIDC_OCR_MODEL_NAME={NAVIDC_OCR_MODEL_NAME}",
+                f"NAVIDC_OCR_MODEL_REVISION={NAVIDC_OCR_MODEL_REVISION}",
+                f"NAVIDC_OCR_SOURCE_REVISION={NAVIDC_OCR_SOURCE_REVISION}",
+                f"NAVIDC_OCR_DTYPE={NAVIDC_OCR_DTYPE}",
+                f"NAVIDC_OCR_BACKEND={NAVIDC_OCR_BACKEND}",
+                f"NAVIDC_OCR_MAX_TOKENS={NAVIDC_OCR_MAX_TOKENS}",
+                f"NAVIDC_OCR_PDF_DPI={NAVIDC_OCR_PDF_DPI}",
+                f"NAVIDC_OCR_MAX_PAGES_PER_REQUEST={NAVIDC_OCR_MAX_PAGES_PER_REQUEST}",
+                f"NAVIDC_OCR_MAX_RENDER_PIXELS={NAVIDC_OCR_MAX_RENDER_PIXELS}",
+            ],
+            "User": "root",
+            "ExposedPorts": {"8080/tcp": {}},
+            "HostConfig": host_config(
+                network_name=network_name,
+                binds=[bind_path(host_root, "model_cache_navidc_ocr", "/root/.cache/huggingface")],
+                port_bindings={"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": NAVIDC_OCR_API_PORT}]},
+                shm_size=17_179_869_184,
+            ),
+            "Healthcheck": healthcheck("curl -f http://localhost:8080/health || exit 1", 900),
+        }
     raise ValueError(f"Unknown deploy service: {service_name}")
 
 
@@ -1358,6 +1439,8 @@ def services_for_model_deploy(model_id: str, backend: str | None = None) -> list
         return ["ovisocr2-api"]
     if model_id == "hpd-parsing":
         return ["hpd-parsing-server", "hpd-parsing-api"]
+    if model_id == "navidc-ocr":
+        return ["navidc-ocr-api"]
     raise ValueError(f"Unknown model id: {model_id}")
 
 
@@ -3124,6 +3207,7 @@ UNIFIED_PARSE_MODEL_IDS = [
     "unlimited-ocr",
     "ovisocr2",
     "hpd-parsing",
+    "navidc-ocr",
 ]
 
 
@@ -3406,6 +3490,14 @@ def build_hpd_parsing_payload(base64_data: str, file_type: int) -> dict:
     return {
         "file": base64_data,
         "fileType": file_type,
+    }
+
+
+def build_navidc_ocr_payload(request: OCRRequest, base64_data: str, file_type: int) -> dict:
+    return {
+        "file": base64_data,
+        "fileType": file_type,
+        "markdownIgnoreLabels": request.markdownIgnoreLabels,
     }
 
 
@@ -3857,6 +3949,32 @@ async def run_hpd_parsing_request(ocr_request: OCRRequest, raw_input: RawOCRInpu
         await release_ocr_slot(controller_lease_id)
 
 
+async def run_navidc_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
+    if not ENABLE_NAVIDC_OCR:
+        raise HTTPException(status_code=404, detail="NaviDC-OCR is not enabled")
+
+    controller_lease_id = await acquire_ocr_slot(
+        "navidc-ocr",
+        "NaviDC-OCR service is not ready. Switch to this model and wait for it to become ready.",
+    )
+    try:
+        base64_data, file_type = prepare_service_input(ocr_request, raw_input)
+        payload = build_navidc_ocr_payload(ocr_request, base64_data, file_type)
+        logger.info("Sending request to NaviDC-OCR adapter at %s", NAVIDC_OCR_SERVICE_URL)
+        timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(NAVIDC_OCR_SERVICE_URL, json=payload)
+        if response.status_code != 200:
+            logger.warning("NaviDC-OCR Service Error (HTTP %s): %s", response.status_code, response.text)
+            raise HTTPException(status_code=response.status_code, detail=f"Upstream NaviDC-OCR error: {response.text}")
+        data = response.json()
+        if not isinstance(data, dict) or "layoutParsingResults" not in data:
+            raise HTTPException(status_code=500, detail="Unexpected response format from NaviDC-OCR")
+        return data
+    finally:
+        await release_ocr_slot(controller_lease_id)
+
+
 async def stream_unlimited_ocr_events(
     ocr_request: OCRRequest,
     raw_input: RawOCRInput,
@@ -3912,6 +4030,7 @@ async def parse_with_selected_model(request: Request):
             "unlimited-ocr": run_unlimited_ocr_request,
             "ovisocr2": run_ovisocr2_request,
             "hpd-parsing": run_hpd_parsing_request,
+            "navidc-ocr": run_navidc_ocr_request,
         }
         runner = runners.get(model_id)
         if runner is None or model_id not in MODEL_CATALOG_IDS:
@@ -3997,6 +4116,21 @@ async def proxy_hpd_parsing(request: Request):
         raise
     except Exception as error:
         logger.exception("HPD-Parsing Proxy Error")
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@app.post("/api/navidc-ocr")
+async def proxy_navidc_ocr(request: Request):
+    """Proxy a document to the optional NaviDC-OCR runtime."""
+    try:
+        ocr_request, raw_image = await parse_ocr_input(request)
+        base64_size = validate_proxy_input_size(raw_image)
+        logger.info("Received NaviDC-OCR request. Base64 input size: %s bytes", base64_size)
+        return await run_navidc_ocr_request(ocr_request, raw_image)
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("NaviDC-OCR Proxy Error")
         raise HTTPException(status_code=500, detail=str(error))
 
 

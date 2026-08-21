@@ -51,6 +51,7 @@ model_cache_unlimited_ocr/
 model_cache_ovisocr2/
 model_cache_ovisocr2_vllm/
 model_cache_hpd_parsing/
+model_cache_navidc_ocr/
 ollama_storage/
 ocr_results_*.md
 ocr_results_*.zip

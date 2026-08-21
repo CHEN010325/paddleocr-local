@@ -60,14 +60,14 @@ echo Pulling PaddleOCR-VL images...
 %COMPOSE% --profile paddleocr-vl pull paddleocr-vlm-server paddleocr-vl-api
 
 echo Building local images...
-%COMPOSE% --profile pp-ocrv6 build paddleocr-ocr-api pandocr-web pandocr-office-converter
+%COMPOSE% --profile pp-ocrv6 --profile navidc-ocr build paddleocr-ocr-api navidc-ocr-api pandocr-web pandocr-office-converter
 
 echo Build complete.
 echo.
 echo Next:
 echo   deploy.bat
 echo   REM deploy.bat creates both core profiles stopped, then lets the controller start exactly one model.
-echo   docker compose --env-file env.txt --env-file tmp\pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 logs -f
-echo   docker compose --env-file env.txt --env-file tmp\pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 down
+echo   docker compose --env-file env.txt --env-file tmp\pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr logs -f
+echo   docker compose --env-file env.txt --env-file tmp\pandocr-runtime.env --profile paddleocr-vl --profile pp-ocrv6 --profile navidc-ocr down
 echo.
 pause

@@ -49,6 +49,7 @@ model_cache_unlimited_ocr/
 model_cache_ovisocr2/
 model_cache_ovisocr2_vllm/
 model_cache_hpd_parsing/
+model_cache_navidc_ocr/
 model_cache_ovisocr2_macos/
 model_cache_unlimited_ocr_macos/
 model_cache_hpd_parsing_macos/

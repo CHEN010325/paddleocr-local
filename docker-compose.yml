@@ -29,6 +29,13 @@ x-hpd-parsing-adapter-image: &hpd-parsing-adapter-image
     dockerfile: Dockerfile.hpd-parsing-adapter
   image: pandocr-hpd-parsing-adapter:latest
 
+x-navidc-ocr-image: &navidc-ocr-image
+  pull_policy: build
+  build:
+    context: .
+    dockerfile: Dockerfile.navidc-ocr
+  image: pandocr-navidc-ocr:latest
+
 services:
   pandocr-controller:
     pull_policy: build
@@ -62,6 +69,7 @@ services:
       - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
       - OVISOCR2_SERVICE_URL=http://ovisocr2-api:8080/ocr
       - HPD_PARSING_SERVICE_URL=http://hpd-parsing-api:8080/ocr
+      - NAVIDC_OCR_SERVICE_URL=http://navidc-ocr-api:8080/ocr
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
       - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -70,6 +78,7 @@ services:
       - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
       - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-0}
       - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-0}
+      - PANDOCR_ENABLE_NAVIDC_OCR=${PANDOCR_ENABLE_NAVIDC_OCR:-0}
       - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
       - UNLIMITED_OCR_BACKEND=${UNLIMITED_OCR_BACKEND:-transformers}
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
@@ -84,6 +93,16 @@ services:
       - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
       - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu@sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2}
       - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
+      - NAVIDC_OCR_MODEL_NAME=${NAVIDC_OCR_MODEL_NAME:-StarDoc-AI/NaviDC-OCR}
+      - NAVIDC_OCR_MODEL_REVISION=${NAVIDC_OCR_MODEL_REVISION:-c7179051a52a0a54a549388de89c6aa715cfd0af}
+      - NAVIDC_OCR_SOURCE_REVISION=${NAVIDC_OCR_SOURCE_REVISION:-737e185c7b74288091cd4395ea80c14b1f71422b}
+      - NAVIDC_OCR_API_PORT=${NAVIDC_OCR_API_PORT:-8086}
+      - NAVIDC_OCR_MAX_TOKENS=${NAVIDC_OCR_MAX_TOKENS:-4096}
+      - NAVIDC_OCR_PDF_DPI=${NAVIDC_OCR_PDF_DPI:-200}
+      - NAVIDC_OCR_MAX_PAGES_PER_REQUEST=${NAVIDC_OCR_MAX_PAGES_PER_REQUEST:-50}
+      - NAVIDC_OCR_MAX_RENDER_PIXELS=${NAVIDC_OCR_MAX_RENDER_PIXELS:-60000000}
+      - NAVIDC_OCR_DTYPE=${NAVIDC_OCR_DTYPE:-bfloat16}
+      - NAVIDC_OCR_BACKEND=${NAVIDC_OCR_BACKEND:-vllm-async-engine}
     volumes:
       - ./static:/app/static:ro
       - ./server.py:/app/server.py:ro
@@ -96,6 +115,8 @@ services:
       - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
       - ./hpd_parsing_adapter.py:/app/hpd_parsing_adapter.py:ro
       - ./Dockerfile.hpd-parsing-adapter:/app/Dockerfile.hpd-parsing-adapter:ro
+      - ./navidc_ocr_adapter.py:/app/navidc_ocr_adapter.py:ro
+      - ./Dockerfile.navidc-ocr:/app/Dockerfile.navidc-ocr:ro
       - ./start-hpd-parsing.sh:/app/start-hpd-parsing.sh:ro
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -442,6 +463,16 @@ services:
       - HPD_PARSING_MAX_PAGES_PER_REQUEST=${HPD_PARSING_MAX_PAGES_PER_REQUEST:-50}
       - HPD_PARSING_MAX_CONCURRENCY=${HPD_PARSING_MAX_CONCURRENCY:-1}
       - HPD_PARSING_REQUEST_TIMEOUT=${HPD_PARSING_REQUEST_TIMEOUT:-1200}
+      - NAVIDC_OCR_MODEL_NAME=${NAVIDC_OCR_MODEL_NAME:-StarDoc-AI/NaviDC-OCR}
+      - NAVIDC_OCR_MODEL_REVISION=${NAVIDC_OCR_MODEL_REVISION:-c7179051a52a0a54a549388de89c6aa715cfd0af}
+      - NAVIDC_OCR_SOURCE_REVISION=${NAVIDC_OCR_SOURCE_REVISION:-737e185c7b74288091cd4395ea80c14b1f71422b}
+      - NAVIDC_OCR_API_PORT=${NAVIDC_OCR_API_PORT:-8086}
+      - NAVIDC_OCR_MAX_TOKENS=${NAVIDC_OCR_MAX_TOKENS:-4096}
+      - NAVIDC_OCR_PDF_DPI=${NAVIDC_OCR_PDF_DPI:-200}
+      - NAVIDC_OCR_MAX_PAGES_PER_REQUEST=${NAVIDC_OCR_MAX_PAGES_PER_REQUEST:-50}
+      - NAVIDC_OCR_MAX_RENDER_PIXELS=${NAVIDC_OCR_MAX_RENDER_PIXELS:-60000000}
+      - NAVIDC_OCR_DTYPE=${NAVIDC_OCR_DTYPE:-bfloat16}
+      - NAVIDC_OCR_BACKEND=${NAVIDC_OCR_BACKEND:-vllm-async-engine}
     depends_on:
       hpd-parsing-server:
         condition: service_healthy
@@ -452,6 +483,45 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    networks:
+      - paddleocr-network
+
+  navidc-ocr-api:
+    <<: *navidc-ocr-image
+    profiles: ["navidc-ocr"]
+    container_name: navidc-ocr-api
+    ports:
+      - "127.0.0.1:${NAVIDC_OCR_API_PORT:-8086}:8080"
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
+      - NAVIDC_OCR_MODEL_NAME=${NAVIDC_OCR_MODEL_NAME:-StarDoc-AI/NaviDC-OCR}
+      - NAVIDC_OCR_MODEL_REVISION=${NAVIDC_OCR_MODEL_REVISION:-c7179051a52a0a54a549388de89c6aa715cfd0af}
+      - NAVIDC_OCR_SOURCE_REVISION=${NAVIDC_OCR_SOURCE_REVISION:-737e185c7b74288091cd4395ea80c14b1f71422b}
+      - NAVIDC_OCR_DTYPE=${NAVIDC_OCR_DTYPE:-bfloat16}
+      - NAVIDC_OCR_MAX_TOKENS=${NAVIDC_OCR_MAX_TOKENS:-4096}
+      - NAVIDC_OCR_PDF_DPI=${NAVIDC_OCR_PDF_DPI:-200}
+      - NAVIDC_OCR_MAX_PAGES_PER_REQUEST=${NAVIDC_OCR_MAX_PAGES_PER_REQUEST:-50}
+      - NAVIDC_OCR_MAX_RENDER_PIXELS=${NAVIDC_OCR_MAX_RENDER_PIXELS:-60000000}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PANDOCR_GPU_DEVICE_ID:-0}"]
+              capabilities: [gpu]
+    user: root
+    restart: unless-stopped
+    shm_size: "16gb"
+    volumes:
+      - ./model_cache_navidc_ocr:/root/.cache/huggingface
+    command: uvicorn navidc_ocr_adapter:app --host 0.0.0.0 --port 8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 900s
     networks:
       - paddleocr-network
 
@@ -480,6 +550,7 @@ services:
       - UNLIMITED_OCR_SERVICE_URL=http://unlimited-ocr-api:8080/ocr
       - OVISOCR2_SERVICE_URL=http://ovisocr2-api:8080/ocr
       - HPD_PARSING_SERVICE_URL=http://hpd-parsing-api:8080/ocr
+      - NAVIDC_OCR_SERVICE_URL=http://navidc-ocr-api:8080/ocr
       - VLM_BACKEND=${VLM_BACKEND:-vllm}
       - VLM_IMAGE_TAG_SUFFIX=${VLM_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
@@ -527,6 +598,7 @@ services:
       - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
       - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-0}
       - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-0}
+      - PANDOCR_ENABLE_NAVIDC_OCR=${PANDOCR_ENABLE_NAVIDC_OCR:-0}
       - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-}
       - PADDLE_REQUEST_TIMEOUT=${PADDLE_REQUEST_TIMEOUT:-3600}
       - PANDOCR_MODEL_CONTROL=remote

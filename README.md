@@ -1,6 +1,6 @@
 # PaddleOCR Local
 
-**一套界面，本地运行四种 OCR / 文档解析模型。** 上传图片、PDF、Word 或 PowerPoint，在浏览器中查看原文与结构化结果，并导出 Markdown、JSON 和图片资源。
+**一套界面，本地运行五种 OCR / 文档解析模型。** 上传图片、PDF、Word 或 PowerPoint，在浏览器中查看原文与结构化结果，并导出 Markdown、JSON 和图片资源。
 
 [English](README.en.md) · [快速开始](QUICKSTART.md) · [CLI](CLI.md) · [硬件兼容表](docs/compatibility.md) · [路线图](ROADMAP.md) · [参与贡献](CONTRIBUTING.md)
 
@@ -14,7 +14,7 @@
 ## 为什么用它
 
 - **完全本地**：文档、解析结果和历史任务保存在自己的机器上。
-- **四模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR2、HPD-Parsing。Unlimited-OCR 已从默认部署和 WebUI 模型目录中停用。
+- **五模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR2、HPD-Parsing、NaviDC-OCR。Unlimited-OCR 已从默认部署和 WebUI 模型目录中停用。
 - **照顾单卡机器**：只启动当前模型，切换时自动释放其他模型占用的显存。
 - **跨平台部署**：Windows / Linux NVIDIA Docker，macOS Apple Silicon 原生与 MLX 路径。
 - **不只是文本框**：逐页进度、原文对照、表格与公式渲染、任务恢复、结果下载。
@@ -28,6 +28,7 @@
 | PP-OCRv6 | 普通文字识别、低显存场景 | NVIDIA 4 GB+ | 启动快、资源占用低；CPU Lite 在路线图中 |
 | OvisOCR2 | 文档理解、Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | macOS 默认使用 MLX |
 | HPD-Parsing | 高质量文档解析 | NVIDIA 8 GB+ | 官方定制 vLLM 运行时 |
+| NaviDC-OCR | 复杂文档、版面、表格与公式 | NVIDIA 8 GB+ | StarDoc-AI Transformers 两阶段流程 |
 
 数值是项目的启动兼容性参考，不代表所有文档都能在该下限稳定运行。请查看[完整硬件兼容表](docs/compatibility.md)。
 

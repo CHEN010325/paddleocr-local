@@ -1,6 +1,6 @@
 # PaddleOCR Local
 
-**One local workbench for four OCR and document-parsing models.** Upload images, PDFs, Word documents, or PowerPoint files, inspect source and structured output side by side, and export Markdown, JSON, and extracted assets.
+**One local workbench for five OCR and document-parsing models.** Upload images, PDFs, Word documents, or PowerPoint files, inspect source and structured output side by side, and export Markdown, JSON, and extracted assets.
 
 [简体中文](README.md) · [Quick start](QUICKSTART.md) · [CLI](CLI.md) · [Compatibility](docs/compatibility.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
@@ -13,7 +13,7 @@
 ## Why it exists
 
 - **Local-first**: documents, results, and task history stay on your machine.
-- **Four models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR2, and HPD-Parsing. Unlimited-OCR is disabled in the default deployment and model catalog.
+- **Five models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR2, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR is disabled in the default deployment and model catalog.
 - **Single-GPU friendly**: only the active model runs; switching releases the others' VRAM.
 - **Cross-platform**: Windows/Linux NVIDIA Docker plus native and MLX paths for Apple Silicon.
 - **Built for documents**: page progress, recovery, source/result comparison, tables, formulas, and exports.
@@ -27,6 +27,7 @@
 | PP-OCRv6 | Text OCR and lower-memory systems | NVIDIA 4 GB+ | Fast startup; CPU Lite remains on the roadmap |
 | OvisOCR2 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
 | HPD-Parsing | High-quality document parsing | NVIDIA 8 GB+ | Official customized vLLM runtime |
+| NaviDC-OCR | Complex documents, layout, tables and formulas | NVIDIA 8 GB+ | StarDoc-AI Transformers two-step pipeline |
 
 These are startup compatibility guidelines, not guarantees for every document. See the [compatibility guide](docs/compatibility.md).
 

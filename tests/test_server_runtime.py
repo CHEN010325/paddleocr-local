@@ -238,6 +238,7 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "unlimited-ocr": 6656,
                 "ovisocr2": 6656,
                 "hpd-parsing": 6656,
+                "navidc-ocr": 6656,
             },
         )
         result = self.server.gpu_compatibility(
@@ -1575,7 +1576,7 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_static_container_groups_stop_and_detect_disabled_residual_models(self):
         self.assertEqual(
             set(self.server.MODEL_RUNTIME_CONTAINER_GROUPS),
-            {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing"},
+            {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"},
         )
         config = {
             "target": {"containers": ["target-api"], "stop_order": ["target-api"]},

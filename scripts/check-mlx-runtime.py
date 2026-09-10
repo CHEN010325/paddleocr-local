@@ -45,7 +45,7 @@ def check_runtime() -> str:
             fail(f"{package}=={expected} is required, but {installed} is installed.")
         installed_versions.append((package, installed))
 
-    for module_name in ("mlx_lm", "mlx_vlm"):
+    for module_name in ("mlx_lm", "mlx_vlm", "mlx_vlm.server"):
         try:
             importlib.import_module(module_name)
         except Exception as exc:

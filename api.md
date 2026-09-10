@@ -778,3 +778,9 @@ Serving:
 Made with [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
 
 [](https://github.com/PaddlePaddle/PaddleOCR "github.com")[](https://pypi.org/project/paddleocr/ "pypi.org")
+# External API engines
+
+Set `PANDOCR_ENGINE_CONFIG` to a JSON configuration file to serve a user-managed
+engine catalog through `GET /api/models` and `POST /api/parse`. Model entries
+include `managed: false` and capabilities; service URLs and keys stay server-side.
+See [configuration, protocols and examples](docs/external-engines.md).

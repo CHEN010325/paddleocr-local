@@ -13,6 +13,60 @@ const app = fs.readFileSync(path.join(rootDir, 'static', 'app.js'), 'utf8');
 const i18n = fs.readFileSync(path.join(rootDir, 'static', 'i18n.js'), 'utf8');
 const appFunctionNames = [...app.matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map((match) => match[1]);
 
+test('footnotes and sidebar text survive by default and can be explicitly excluded', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    for (const [label, id] of [['footnote', 'ignore-footnote-switch'], ['aside_text', 'ignore-aside-switch']]) {
+        assert.equal(window.eval(`currentParsingSettingsSnapshot().markdownIgnoreLabels.includes('${label}')`), false);
+        assert.equal(window.eval(`isIgnoredLayoutLabel('${label}')`), false);
+        const before = window.eval('officialLayoutRenderContext({id:"test"})');
+        window.document.getElementById(id).checked = true;
+        assert.equal(window.eval(`currentParsingSettingsSnapshot().markdownIgnoreLabels.includes('${label}')`), true);
+        assert.equal(window.eval(`isIgnoredLayoutLabel('${label}')`), true);
+        assert.notEqual(window.eval('officialLayoutRenderContext({id:"test"})'), before);
+        window.document.getElementById(id).checked = false;
+    }
+    window.eval(`isProcessing = true; updateActionState(null)`);
+    assert.equal(window.document.getElementById('ignore-footnote-switch').disabled, true);
+    assert.equal(window.document.getElementById('ignore-aside-switch').disabled, true);
+    dom.window.close();
+});
+
+test('external engines select independently and respect advertised capabilities', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`
+      availableModels=normalizeModelList({data:[
+        {id:'vision',label:'Vision',endpoint:'/api/parse',managed:false,capabilities:{layoutOptions:false}},
+        {id:'paddle-api',label:'Paddle API',endpoint:'/api/parse',managed:false,capabilities:{layoutOptions:true}}
+      ]});
+      selectedModelId='vision';
+      modelRuntime={controlMode:'api',controlAvailable:false,activeModelId:null,
+        readyModelIds:['vision','paddle-api'],runningModelIds:['vision','paddle-api'],
+        exclusivityViolation:false,operation:{state:'idle'},models:{
+          vision:{managed:false,ready:true,state:'configured'},
+          'paddle-api':{managed:false,ready:true,state:'configured'}
+        }};
+      renderModelSelect();updateActiveModelDisplay();updateActionState(null);
+      globalThis.switchCalls=0;
+      switchModelRuntime=async()=>{globalThis.switchCalls++;return false};
+    `);
+    assert.equal(window.eval("isModelRuntimeReady('vision')"), true);
+    assert.equal(window.eval("isModelRuntimeReady('paddle-api')"), true);
+    assert.equal(window.document.getElementById('chart-recognition-switch').disabled, true);
+    assert.equal(window.document.getElementById('pdf-batch-size-input').disabled, false);
+    assert.equal(window.document.getElementById('external-engine-hint').hidden, false);
+    window.document.getElementById('model-select').value = 'paddle-api';
+    await window.eval('handleModelSelectionChange()');
+    assert.equal(window.eval('selectedModelId'), 'paddle-api');
+    assert.equal(window.switchCalls, 0);
+    assert.equal(window.document.getElementById('chart-recognition-switch').disabled, false);
+    window.eval("modelRuntime.models.vision.ready=false");
+    assert.equal(window.eval("isModelRuntimeReady('paddle-api')"), true);
+    assert.equal(window.eval("isModelRuntimeReady('vision')"), false);
+    dom.window.close();
+});
+
 
 function jsonResponse(data, status = 200) {
     return new Response(JSON.stringify(data), {

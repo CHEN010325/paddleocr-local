@@ -14,7 +14,18 @@ Windows 可直接使用一键脚本的预检模式：
 .\windows-one-click.bat -DryRun
 ```
 
-## macOS Apple Silicon
+## 选择部署方式
+
+无 NVIDIA 显卡的 Windows/Linux 用户可先使用 [CPU 部署](docs/cpu.md)：
+
+```sh
+docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200
+```
+
+独立模型服务（本地或远程）可使用 [API 引擎接入](docs/external-engines.md)。
+Unlimited-OCR 不在默认目录时，参见 [按需启用说明](docs/unlimited-ocr.md)。
+
+## macOS Apple Silicon 部署步骤
 
 Apple M1/M2/M3/M4 一键部署：
 

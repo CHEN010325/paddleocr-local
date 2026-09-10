@@ -7,6 +7,10 @@ window.PANDOCR_I18N = {
     },
     dictionaries: {
         en: {
+            '{modelName} 暂时无法连接，请稍后重试': '{modelName} is temporarily unreachable. Please try again shortly.',
+            '{modelName} API 已配置': '{modelName} API configured',
+            '当前使用外部 OCR API，模型由服务提供方管理。': 'Using an external OCR API. The service provider manages the model.',
+            '当前使用外部 OCR API；版面解析选项由该服务决定。': 'Using an external OCR API. Layout options are determined by the service.',
             'PaddleOCR Local - 本地 OCR 解析工作台': 'PaddleOCR Local - Local OCR Parsing Workbench',
             '切换侧边栏': 'Toggle sidebar',
             '切换到中文': 'Switch to Chinese',
@@ -24,6 +28,8 @@ window.PANDOCR_I18N = {
             '忽略页眉': 'Ignore headers',
             '忽略页脚': 'Ignore footers',
             '忽略页码': 'Ignore page numbers',
+            '忽略脚注': 'Ignore footnotes',
+            '忽略侧栏文字': 'Ignore sidebar text',
             '每批页数': 'Pages per batch',
             '最近上传': 'Recent uploads',
             '已完成': 'Completed',

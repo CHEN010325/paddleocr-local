@@ -26,7 +26,7 @@
 - [x] 失败批次单独重试
 - [x] 基于显存与能力的模型推荐和一键切换
 - [ ] 按硬件自动写入低显存参数
-- [ ] Windows / Linux CPU Lite 一键路径（先支持 PP-OCRv6）
+- [x] PP-OCRv6 独立 CPU 部署配置（Docker / Python；硬件验收范围见 docs/issue-validation.md）
 
 ## 后续：自动化与生态
 
@@ -46,4 +46,4 @@
 ## 近期发布顺序
 
 1. `v0.2.0`：稳定安装路径、GHCR 镜像、首屏 Demo、失败批次重试和完整导出链路。
-2. `v0.3.0`：PP-OCRv6 CPU Lite、修订历史和自动低显存参数。
+2. `v0.3.0`：完善已有 PP-OCRv6 CPU 部署体验、修订历史和自动低显存参数。

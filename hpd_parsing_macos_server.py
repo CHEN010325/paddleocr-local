@@ -52,7 +52,6 @@ def load_runtime():
         model_path,
         trust_remote_code=True,
         torch_dtype=DTYPE,
-        low_cpu_mem_usage=True,
     ).eval().to(DEVICE)
     if not isinstance(getattr(_model, "all_tied_weights_keys", None), dict):
         _model.all_tied_weights_keys = {}

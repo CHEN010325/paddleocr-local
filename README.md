@@ -2,6 +2,8 @@
 
 **把 PDF、图片和 Office 文档变成可编辑 Markdown 的本地文档工作台。** 一套界面运行五种 OCR / 文档解析模型，结果留在自己的机器上，并支持批处理、CLI、Apple Silicon 以及可编辑、可搜索导出。
 
+Windows 一键部署与 Linux/Docker 默认显示五个模型，按需部署和切换，只运行当前选中的模型。已有独立模型服务的用户，可选用[外部 API 模式](docs/external-engines.md)：该模式只显示自行配置的服务；远程服务会接收待识别内容。
+
 [English](README.en.md) · [快速开始](QUICKSTART.md) · [CLI](CLI.md) · [硬件兼容表](docs/compatibility.md) · [路线图](ROADMAP.md) · [参与贡献](CONTRIBUTING.md)
 
 ![CI](https://github.com/CHEN010325/paddleocr-local/actions/workflows/ci.yml/badge.svg)
@@ -35,7 +37,7 @@
 | 模型 | 适合任务 | 推荐硬件 | 特点 |
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 | 复杂版面、表格、公式 | NVIDIA 12 GB+ | PaddleOCR 文档解析主线 |
-| PP-OCRv6 | 普通文字识别、低显存场景 | NVIDIA 4 GB+ | 启动快、资源占用低；CPU Lite 在路线图中 |
+| PP-OCRv6 | 普通文字识别、低显存场景 | CPU / NVIDIA 4 GB+ | 提供独立无 GPU 部署；见 [CPU 入口](docs/cpu.md) |
 | OvisOCR2 | 文档理解、Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | macOS 默认使用 MLX |
 | HPD-Parsing | 高质量文档解析 | NVIDIA 8 GB+ | 官方定制 vLLM 运行时 |
 | NaviDC-OCR | 复杂文档、版面、表格与公式 | NVIDIA 8 GB+ | 官方 NaviOCRClient vLLM 异步两阶段流程（可选 Transformers 后端） |
@@ -52,6 +54,15 @@
 .\windows-one-click.bat -DryRun
 .\windows-one-click.bat
 ```
+
+### 无 NVIDIA 显卡（CPU）
+
+```sh
+docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200
+```
+
+使用 PP-OCRv6 识别图片和 PDF。无需 CUDA 或 GPU 容器运行时。
+首次运行下载模型，完整说明与验证范围见 [CPU 部署](docs/cpu.md)。
 
 ### macOS Apple Silicon
 
@@ -90,7 +101,7 @@ cp env.docker env.txt
 
 ## 你应该选择哪个模型
 
-- **没有 NVIDIA 显卡**：Apple Silicon 可选 OvisOCR2 MLX；Windows/Linux 纯 CPU 一键路径仍在路线图中。
+- **没有 NVIDIA 显卡**：Apple Silicon 可选 OvisOCR2 MLX；Windows/Linux 可使用 [PP-OCRv6 CPU 入口](docs/cpu.md)。
 - **显存只有 8 GB**：优先采用 WebUI 显存预检给出的推荐模型；通常会推荐 PP-OCRv6，避免重模型在低显存模式下勉强启动。
 - **复杂论文和公式**：优先尝试 PaddleOCR-VL、OvisOCR2、HPD-Parsing。
 

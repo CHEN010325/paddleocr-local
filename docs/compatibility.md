@@ -7,7 +7,7 @@
 | 模型 | 参考下限 | 推荐配置 | CPU / Apple Silicon |
 | --- | ---: | ---: | --- |
 | PaddleOCR-VL 1.6 | NVIDIA 11,264 MiB | 12～16 GB+ | CPU 路径不作为默认推荐 |
-| PP-OCRv6 | NVIDIA 4,096 MiB | 4 GB+ | CPU Lite 一键路径仍在路线图中 |
+| PP-OCRv6 | GPU 路径 NVIDIA 4,096 MiB | GPU 4 GB+；CPU 按文档测量内存 | 独立 CPU Compose 与 Python 路径，见 [部署说明](cpu.md) |
 | OvisOCR2 | NVIDIA 7,680 MiB | 8～16 GB+ | Apple Silicon 默认 MLX |
 | HPD-Parsing | NVIDIA 7,680 MiB | 12 GB+ | 当前不支持 Apple Silicon 一键部署 |
 | NaviDC-OCR | NVIDIA 7,680 MiB | 12 GB+ | CUDA / vLLM 异步（默认；可选 Transformers）；模型权重约 1.2B BF16 |
@@ -22,6 +22,8 @@
 | Apple M1/M2/M3/M4 | OvisOCR2 | 提供 MLX 路径 | 仍需更多芯片/内存/速度报告 | 项目安装脚本 |
 | RTX 30/40 | 五个默认模型 | 提供 Docker 路径 | 按模型显存要求选择 | `env.docker` |
 | RTX 50 / Blackwell | 五个默认模型 | 提供 SM120 路径 | 使用 `env.txt` | `env.txt` |
+| Windows x86-64 / Linux Docker | PP-OCRv6 CPU | 本次实测通过 | 图片、双页 PDF；空模型卷首次部署 | [验收记录](issue-validation.md) |
+| RTX 5070 Ti 16 GB / Linux Docker | PaddleOCR-VL 1.6 | 本次实测通过 | 独立 API 经 WebUI 图片与双页 PDF | [验收记录](issue-validation.md) |
 
 没有社区报告的组合不会被标记为“已实测”。
 

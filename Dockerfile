@@ -13,6 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
+COPY ocr_engines.py .
 COPY exporters.py .
 COPY controller.py .
 COPY unlimited_ocr_adapter.py .

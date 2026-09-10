@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from ocr_engines import load_engine_settings, engine_status, recognize
 
 logger = logging.getLogger("pandocr")
 logging.basicConfig(level=os.getenv("PANDOCR_LOG_LEVEL", "INFO"))
@@ -202,6 +203,10 @@ PANDOCR_PORT = int(os.getenv("PANDOCR_PORT", "8000"))
 APP_VERSION = os.getenv("PANDOCR_APP_VERSION", "0.2.0").strip() or "0.2.0"
 APP_COMMIT = os.getenv("PANDOCR_GIT_COMMIT", "").strip()
 MODEL_CONTROL_MODE = os.getenv("PANDOCR_MODEL_CONTROL", "docker").strip().lower()
+ENGINE_SETTINGS = load_engine_settings(os.getenv("PANDOCR_ENGINE_CONFIG", "").strip())
+EXTERNAL_ENGINES = {engine.id: engine for engine in ENGINE_SETTINGS.engines} if ENGINE_SETTINGS else {}
+if ENGINE_SETTINGS:
+    MODEL_CONTROL_MODE = "api"
 MODEL_CONTROLLER_URL = os.getenv("PANDOCR_MODEL_CONTROLLER_URL", "").rstrip("/")
 MODEL_CONTROLLER_TOKEN = os.getenv("PANDOCR_MODEL_CONTROLLER_TOKEN", "").strip()
 OFFICE_CONVERTER_URL = os.getenv("PANDOCR_OFFICE_CONVERTER_URL", "").strip()
@@ -233,7 +238,7 @@ TASK_SUMMARY_FILE = "summary.json"
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 CORS_ORIGINS = parse_csv_env(
     "PANDOCR_CORS_ORIGINS",
-    "http://localhost:8000,http://127.0.0.1:8000",
+    f"http://localhost:{PANDOCR_PORT},http://127.0.0.1:{PANDOCR_PORT}",
 )
 
 
@@ -493,6 +498,8 @@ class OCRLeaseRequest(BaseModel):
 
 
 def model_catalog() -> list[dict]:
+    if ENGINE_SETTINGS:
+        return [engine.public() for engine in ENGINE_SETTINGS.engines]
     models_by_id = {
         "paddleocr-vl-1.6": {
             "id": "paddleocr-vl-1.6",
@@ -1547,6 +1554,10 @@ async def enrich_unlimited_ocr_runtime_status(model_id: str, status: dict) -> di
 
 
 async def model_runtime_status(model_id: str) -> dict:
+    if ENGINE_SETTINGS:
+        if model_id not in EXTERNAL_ENGINES:
+            raise HTTPException(400, "Unknown external engine")
+        return await engine_status(EXTERNAL_ENGINES[model_id])
     if MODEL_CONTROL_MODE == "remote":
         payload = await controller_api_request("GET", "/model-runtime")
         status = (payload.get("models") or {}).get(model_id)
@@ -1634,6 +1645,17 @@ async def runtime_exclusivity_snapshot(statuses: dict[str, dict] | None = None) 
 
 
 async def build_model_runtime_payload() -> dict:
+    if ENGINE_SETTINGS:
+        statuses = await asyncio.gather(*(engine_status(engine) for engine in ENGINE_SETTINGS.engines))
+        ready_ids = [status["id"] for status in statuses if status["ready"]]
+        return {
+            "controlMode": "api", "controlAvailable": False, "activeModelId": None,
+            "defaultModelId": ENGINE_SETTINGS.default, "operation": {"state": "idle"},
+            "ocrActiveCount": ocr_active_count, "maxConcurrentOcr": MAX_CONCURRENT_OCR,
+            "runningModelIds": ready_ids, "readyModelIds": ready_ids,
+            "exclusivityViolation": False, "gpuPreflight": None,
+            "models": {status["id"]: status for status in statuses},
+        }
     if MODEL_CONTROL_MODE == "remote":
         payload = await controller_api_request("GET", "/model-runtime")
         payload["controlMode"] = "remote"
@@ -2555,7 +2577,7 @@ async def read_root():
 async def get_models():
     """Return OCR models available through this proxy."""
     return {
-        "default": DEFAULT_RUNTIME_MODEL_ID,
+        "default": ENGINE_SETTINGS.default if ENGINE_SETTINGS else DEFAULT_RUNTIME_MODEL_ID,
         "data": model_catalog(),
         "version": APP_VERSION,
         "commit": APP_COMMIT or None,
@@ -2575,6 +2597,8 @@ async def get_model_runtime():
 
 @app.post("/api/model-runtime/switch")
 async def switch_model_runtime(request: ModelSwitchRequest):
+    if ENGINE_SETTINGS:
+        raise HTTPException(409, "External API engines are user-managed; select the modelId when parsing")
     if MODEL_CONTROL_MODE == "remote":
         async with model_runtime_lock:
             if ocr_active_count > 0:
@@ -2587,6 +2611,8 @@ async def switch_model_runtime(request: ModelSwitchRequest):
 
 @app.post("/api/model-runtime/deploy")
 async def deploy_model_runtime(request: ModelDeployRequest):
+    if ENGINE_SETTINGS:
+        raise HTTPException(409, "External API engines are deployed by the user")
     if MODEL_CONTROL_MODE == "remote":
         async with model_runtime_lock:
             if ocr_active_count > 0:
@@ -3338,7 +3364,7 @@ def unified_parse_openapi_extra() -> dict:
     }
     json_properties["modelId"] = {
         "type": "string",
-        "enum": UNIFIED_PARSE_MODEL_IDS,
+        "enum": list(EXTERNAL_ENGINES) if ENGINE_SETTINGS else UNIFIED_PARSE_MODEL_IDS,
         "description": "An enabled OCR model ID. Omit to use the server default.",
     }
     json_schema["required"] = ["image"]
@@ -3829,6 +3855,8 @@ def parse_unlimited_ocr_response(data: dict) -> dict:
 
 
 async def acquire_ocr_slot(model_id: str, not_ready_message: str) -> str | None:
+    if ENGINE_SETTINGS:
+        raise HTTPException(409, "External engines use /api/parse with modelId")
     global ocr_active_count
     await ocr_semaphore.acquire()
     controller_lease_id: str | None = None
@@ -3851,7 +3879,9 @@ async def acquire_ocr_slot(model_id: str, not_ready_message: str) -> str | None:
                     raise HTTPException(status_code=503, detail=not_ready_message)
             ocr_active_count += 1
         return controller_lease_id
-    except Exception:
+    except BaseException:
+        # Cancellation while probing readiness/acquiring a remote lease must
+        # release the local slot too, or all later OCR requests can hang.
         if controller_lease_id:
             with contextlib.suppress(Exception):
                 await controller_api_request(
@@ -4137,10 +4167,27 @@ def validate_proxy_input_size(raw_input: RawOCRInput) -> int:
 @app.post("/api/parse", openapi_extra=unified_parse_openapi_extra())
 async def parse_with_selected_model(request: Request):
     """Stable model-agnostic OCR endpoint selected by the modelId field."""
+    global ocr_active_count
     try:
         ocr_request, raw_input = await parse_ocr_input(request)
-        model_id = ocr_request.modelId or DEFAULT_RUNTIME_MODEL_ID
+        model_id = ocr_request.modelId or (ENGINE_SETTINGS.default if ENGINE_SETTINGS else DEFAULT_RUNTIME_MODEL_ID)
         validate_proxy_input_size(raw_input)
+        if ENGINE_SETTINGS:
+            engine = EXTERNAL_ENGINES.get(model_id)
+            if engine is None:
+                raise HTTPException(400, detail=f"Unknown or disabled modelId: {model_id}")
+            content = raw_input_to_bytes(raw_input)
+            file_type = ocr_request.fileType
+            if file_type is None:
+                file_type = 0 if content.startswith(b"%PDF-") else 1
+            # External services have no local lifecycle or controller lease.
+            # Keep the same bounded request concurrency as managed models.
+            async with ocr_semaphore:
+                ocr_active_count += 1
+                try:
+                    return await recognize(engine, content, file_type, ocr_request.model_dump(exclude_none=True))
+                finally:
+                    ocr_active_count -= 1
         runners = {
             "paddleocr-vl-1.6": run_ocr_request,
             "pp-ocrv6": run_ppocrv6_request,

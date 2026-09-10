@@ -352,8 +352,13 @@ has_running_non_target_model() {
 wait_for_http() {
   local url="$1"
   local name="$2"
+  local pid_file="${3:-}"
   local deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
-  until curl -fsS "$url" >/dev/null 2>&1; do
+  until curl --connect-timeout 2 --max-time 5 -fsS "$url" >/dev/null 2>&1; do
+    if [[ -n "$pid_file" ]] && ! is_running "$pid_file"; then
+      echo "$name exited before becoming ready. See the startup log below."
+      return 1
+    fi
     if (( SECONDS >= deadline )); then
       echo "$name did not become ready within ${STARTUP_TIMEOUT_SECONDS}s."
       return 1
@@ -420,6 +425,10 @@ if has_running_non_target_model; then
 fi
 
 if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" ]]; then
+  python scripts/check-mlx-runtime.py || {
+    echo "Repair the MLX environment with: INSTALL_MLX_VLM=1 bash scripts/setup-macos.sh"
+    exit 1
+  }
   if ! command -v mlx_vlm.server >/dev/null 2>&1; then
     echo "mlx_vlm.server was not found."
     echo "Install it with: INSTALL_MLX_VLM=1 bash scripts/setup-macos.sh"
@@ -440,7 +449,7 @@ if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx"
       > run/mlx-vlm.pid
   fi
 
-  wait_for_http "http://${MLX_HOST}:${MLX_PORT}/v1/models" "MLX-VLM service" || {
+  wait_for_http "http://${MLX_HOST}:${MLX_PORT}/v1/models" "MLX-VLM service" run/mlx-vlm.pid || {
     tail -n 80 logs/mlx-vlm.log || true
     exit 1
   }

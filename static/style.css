@@ -718,9 +718,9 @@ svg {
 }
 
 .result-header {
-    height: 78px;
+    height: auto;
     min-height: 78px;
-    flex: 0 0 78px;
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -736,6 +736,7 @@ svg {
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    flex-wrap: wrap;
 }
 
 .result-heading {
@@ -756,6 +757,15 @@ svg {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.result-actions > *,
+.result-actions button,
+.export-menu > summary {
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .export-menu {

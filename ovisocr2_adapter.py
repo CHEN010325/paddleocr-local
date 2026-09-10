@@ -181,7 +181,6 @@ class TransformersOvisOCR2Parser:
             revision=MODEL_REVISION,
             dtype=dtype,
             attn_implementation=ATTENTION_IMPLEMENTATION,
-            low_cpu_mem_usage=True,
         ).to(self.device)
         self.model.eval()
 

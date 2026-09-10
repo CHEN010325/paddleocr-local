@@ -138,6 +138,8 @@ const els = {
     ignoreHeaderSwitch: document.getElementById('ignore-header-switch'),
     ignoreFooterSwitch: document.getElementById('ignore-footer-switch'),
     ignoreNumberSwitch: document.getElementById('ignore-number-switch'),
+    ignoreFootnoteSwitch: document.getElementById('ignore-footnote-switch'),
+    ignoreAsideSwitch: document.getElementById('ignore-aside-switch'),
     pdfBatchSizeInput: document.getElementById('pdf-batch-size-input'),
     taskTemplate: document.getElementById('task-item-template')
 };
@@ -226,6 +228,15 @@ function setupEventListeners() {
     els.modelSelect?.addEventListener('change', handleModelSelectionChange);
     els.unlimitedBackendSelect?.addEventListener('change', handleUnlimitedOcrBackendChange);
     els.languageToggle?.addEventListener('click', toggleLanguage);
+    [els.ignoreHeaderSwitch, els.ignoreFooterSwitch, els.ignoreNumberSwitch,
+        els.ignoreFootnoteSwitch, els.ignoreAsideSwitch].forEach((control) => {
+        control?.addEventListener('change', () => {
+            const task = getActiveTask();
+            if (!task) return;
+            resetResultRenderCache(task.id);
+            renderResultPane(task, { preserveScroll: true });
+        });
+    });
     els.pdfBatchSizeInput?.addEventListener('input', handlePdfBatchSizeInput);
     ['change', 'blur'].forEach((eventName) => {
         els.pdfBatchSizeInput?.addEventListener(eventName, syncPdfBatchSizeSetting);
@@ -597,7 +608,9 @@ function normalizeModelList(data) {
             name: model.name || model.id || DEFAULT_MODEL_ID,
             label: model.label || model.name || model.id || DEFAULT_MODEL_ID,
             endpoint: model.endpoint || '/api/paddleocr-vl-1.6',
-            kind: model.kind || 'document_parsing'
+            kind: model.kind || 'document_parsing',
+            managed: model.managed !== false,
+            capabilities: model.capabilities || null
         };
     });
 }
@@ -643,7 +656,7 @@ function syncUnlimitedOcrBackendWithRuntime() {
 
 function renderUnlimitedOcrBackendSelect() {
     if (!els.unlimitedBackendWrap || !els.unlimitedBackendSelect) return;
-    const hasUnlimited = availableModels.some((model) => model.id === UNLIMITED_OCR_MODEL_ID);
+    const hasUnlimited = availableModels.some((model) => model.id === UNLIMITED_OCR_MODEL_ID && model.managed !== false);
     const shouldShow = hasUnlimited && selectedModelId === UNLIMITED_OCR_MODEL_ID;
     els.unlimitedBackendWrap.classList.toggle('hidden', !shouldShow);
 
@@ -726,6 +739,10 @@ async function handleModelSelectionChange() {
     updateActiveModelDisplay(getActiveTask());
     updateActionState(getActiveTask());
 
+    if (getSelectedModel().managed === false) {
+        applyModelBatchSizeRecommendation();
+        return;
+    }
     if (isModelRuntimeMissing(nextModelId)) {
         const missingModel = availableModels.find((model) => model.id === nextModelId) || getSelectedModel();
         const deployOptions = requestModelDeploymentOptions(missingModel);
@@ -802,6 +819,9 @@ function getModelRuntimeStatus(modelId) {
 
 function isModelRuntimeReady(modelId) {
     if (!modelRuntime) return true;
+    if (getModelRuntimeStatus(modelId)?.managed === false) {
+        return Boolean(getModelRuntimeStatus(modelId).ready);
+    }
     if (!getModelRuntimeStatus(modelId)?.ready || modelRuntime.exclusivityViolation) return false;
     const activeModelId = modelRuntime.activeModelId;
     if (activeModelId && activeModelId !== modelId) return false;
@@ -858,6 +878,7 @@ function isModelRuntimeSwitching(modelId = null) {
 }
 
 function canSwitchModelRuntime(modelId) {
+    if (availableModels.find((model) => model.id === modelId)?.managed === false) return false;
     if (!modelRuntime) return true;
     const status = getModelRuntimeStatus(modelId);
     return Boolean(modelRuntime.controlAvailable && status?.state !== 'missing');
@@ -889,6 +910,7 @@ function modelRuntimeStatusText(model) {
     const status = getModelRuntimeStatus(model.id);
     const operation = modelRuntime?.operation;
     if (!modelRuntime) return t('{modelName} 状态检查中', { modelName });
+    if (status?.state === 'configured') return t('{modelName} API 已配置', { modelName });
     if (modelRuntime.exclusivityViolation) return t('模型互斥异常：检测到多个模型同时运行');
     if (isModelRuntimeReady(model.id)) return t('{modelName} 就绪', { modelName });
     if (
@@ -904,7 +926,9 @@ function modelRuntimeStatusText(model) {
     }
     if (status?.state === 'missing') return t('{modelName} 未部署', { modelName });
     if (status?.state === 'stopped') return t('{modelName} 待启动', { modelName });
-    if (modelRuntime.controlAvailable === false) return t('{modelName} 未就绪', { modelName });
+    if (model?.managed === false && status?.state === 'unavailable') {
+        return t('{modelName} 暂时无法连接，请稍后重试', { modelName });
+    }
     return t('{modelName} 未就绪', { modelName });
 }
 
@@ -1157,6 +1181,14 @@ async function ensureModelRuntimeReadyForTask(task, model) {
 
 function updateActiveModelDisplay(task = null) {
     const selectedModel = getSelectedModel();
+    const layoutOptions = selectedModel.capabilities?.layoutOptions !== false;
+    const engineHint = document.getElementById('external-engine-hint');
+    if (engineHint) {
+        engineHint.hidden = selectedModel.managed !== false;
+        engineHint.textContent = layoutOptions
+            ? t('当前使用外部 OCR API，模型由服务提供方管理。')
+            : t('当前使用外部 OCR API；版面解析选项由该服务决定。');
+    }
     // The pane describes the result currently on screen, so keep its model
     // attribution tied to the task even when the runtime has since switched
     // to another model. Re-processing actions may still use the selected
@@ -2833,10 +2865,10 @@ function startMarkdownEdit() {
 function currentParsingSettingsSnapshot() {
     const markdownIgnoreLabels = [];
     if (els.ignoreNumberSwitch?.checked) markdownIgnoreLabels.push('number');
-    markdownIgnoreLabels.push('footnote');
+    if (els.ignoreFootnoteSwitch?.checked) markdownIgnoreLabels.push('footnote');
     if (els.ignoreHeaderSwitch?.checked) markdownIgnoreLabels.push('header', 'header_image');
     if (els.ignoreFooterSwitch?.checked) markdownIgnoreLabels.push('footer', 'footer_image');
-    markdownIgnoreLabels.push('aside_text');
+    if (els.ignoreAsideSwitch?.checked) markdownIgnoreLabels.push('aside_text');
     return {
         useLayoutDetection: true,
         useChartRecognition: Boolean(els.chartRecognitionSwitch?.checked),
@@ -3207,7 +3239,7 @@ async function callOCR(batch, task, signal = activeOcrAbortController?.signal) {
     formData.append('markdownIgnoreLabels', JSON.stringify(ignoreLabels));
     formData.append('modelId', model.id);
 
-    if (model.id === 'unlimited-ocr') {
+    if (model.id === 'unlimited-ocr' && model.managed !== false) {
         formData.append('backend', selectedUnlimitedOcrBackend);
         return callStreamingUnlimitedOCR(batch, task, formData, model, signal);
     }
@@ -3480,9 +3512,12 @@ function updateActionState(task) {
         els.ignoreHeaderSwitch,
         els.ignoreFooterSwitch,
         els.ignoreNumberSwitch,
+        els.ignoreFootnoteSwitch,
+        els.ignoreAsideSwitch,
         els.pdfBatchSizeInput
     ].forEach((control) => {
-        if (control) control.disabled = parsingSettingsLocked;
+        if (control) control.disabled = parsingSettingsLocked
+            || (control !== els.pdfBatchSizeInput && getSelectedModel().capabilities?.layoutOptions === false);
     });
     if (els.modelSelect) {
         els.modelSelect.disabled = isProcessing || Boolean(processingTaskId) || modelSwitchInFlight || isModelRuntimeSwitching();
@@ -4424,7 +4459,9 @@ function officialLayoutRenderContext(task) {
         currentLanguage,
         els.ignoreNumberSwitch.checked,
         els.ignoreHeaderSwitch.checked,
-        els.ignoreFooterSwitch.checked
+        els.ignoreFooterSwitch.checked,
+        Boolean(els.ignoreFootnoteSwitch?.checked),
+        Boolean(els.ignoreAsideSwitch?.checked)
     ].join(':');
 }
 
@@ -4545,7 +4582,9 @@ function collectOfficialRenderBlocks(task) {
 
 function isIgnoredLayoutLabel(label) {
     const normalized = String(label || '').toLowerCase();
-    const ignored = new Set(['footnote', 'aside_text']);
+    const ignored = new Set();
+    if (els.ignoreFootnoteSwitch?.checked) ignored.add('footnote');
+    if (els.ignoreAsideSwitch?.checked) ignored.add('aside_text');
     if (els.ignoreNumberSwitch.checked) {
         ignored.add('number');
         ignored.add('page_number');

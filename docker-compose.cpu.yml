@@ -1,0 +1,37 @@
+# Standalone CPU deployment. Do not merge with the GPU compose file.
+name: pandocr-cpu
+services:
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    restart: unless-stopped
+    volumes:
+      - cpu-models:/root/.paddlex
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PANDOCR_CPU_PORT:-8000}:8000"
+    environment:
+      PANDOCR_HOST: 0.0.0.0
+      PANDOCR_MODEL_CONTROL: none
+      PANDOCR_MODEL_CATALOG: pp-ocrv6
+      PADDLE_OCR_SERVICE_URL: http://ocr:8080/ocr
+      PANDOCR_TASK_DATA_DIR: /app/data/tasks
+      PANDOCR_API_TOKEN: ${PANDOCR_API_TOKEN:-}
+      PANDOCR_CORS_ORIGINS: http://localhost:${PANDOCR_CPU_PORT:-8000},http://127.0.0.1:${PANDOCR_CPU_PORT:-8000}
+    depends_on:
+      ocr:
+        condition: service_healthy
+    volumes:
+      - cpu-data:/app/data
+volumes:
+  cpu-models:
+  cpu-data:

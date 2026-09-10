@@ -13,4 +13,4 @@ uvicorn==0.46.0
 httpx==0.28.1
 pydantic==2.11.10
 python-multipart==0.0.32
-pypdf==6.15.0
+pypdf==6.16.1

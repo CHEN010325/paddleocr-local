@@ -7,6 +7,7 @@ __pycache__/
 env/
 venv/
 .venv-macos/
+.venv-cpu-check/
 .venv-unlimited-ocr-macos/
 .uv-cache-unlimited-ocr/
 ENV/
@@ -89,6 +90,7 @@ Thumbs.db
 
 # Docker
 .env
+engines.local.json
 
 
 ollama_storage/

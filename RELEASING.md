@@ -4,6 +4,15 @@
 
 ## 发布前
 
+本轮问题验收见 [Issue 验证记录](docs/issue-validation.md)。CPU 新环境验收命令：
+
+```sh
+docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200
+python scripts/smoke-cpu.py
+```
+
+必须确认 CPU smoke 和三平台 CI 实际通过后再发布。仅添加工作流不等于已经验证对应平台。
+
 1. 更新 `CHANGELOG.md`。
 2. 确认 README 中模型数量、硬件要求和命令一致。
 3. 确认 `README.md`、`README.en.md`、`QUICKSTART.md` 和 `docs/compatibility.md` 的支持矩阵一致。

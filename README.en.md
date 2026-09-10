@@ -2,6 +2,8 @@
 
 **A local document workbench that turns PDFs, images, and Office files into editable Markdown.** Run five OCR/document-parsing models behind one UI, keep data on your machine, automate with the CLI or watch folder, and create editable or searchable exports.
 
+The default Windows one-click and Linux/Docker deployments show five models for on-demand deployment and switching, with only the selected model running. The optional [external API mode](docs/external-engines.md) shows only the services you configure. Remote services receive the document content you send for recognition.
+
 [简体中文](README.md) · [Quick start](QUICKSTART.md) · [CLI](CLI.md) · [Compatibility](docs/compatibility.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
 ![CI](https://github.com/CHEN010325/paddleocr-local/actions/workflows/ci.yml/badge.svg)
@@ -11,6 +13,10 @@
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
 ## Why it exists
+
+For a machine without NVIDIA, run `docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200`
+and open http://127.0.0.1:8000. See [CPU deployment and validation scope](docs/cpu.md).
+Footnotes and sidebar text are retained by default; explicit ignore switches are available.
 
 - **Local-first**: documents, results, and task history stay on your machine.
 - **Five models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR2, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR is not started by default; it is hidden from the default Windows/Linux Docker catalog and remains an opt-in macOS experiment.
@@ -34,7 +40,7 @@
 | Model | Best for | Suggested hardware | Notes |
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 | Complex layouts, tables, formulas | NVIDIA 12 GB+ | Main PaddleOCR document pipeline |
-| PP-OCRv6 | Text OCR and lower-memory systems | NVIDIA 4 GB+ | Fast startup; CPU Lite remains on the roadmap |
+| PP-OCRv6 | Text OCR and lower-memory systems | CPU / NVIDIA 4 GB+ | Independent CPU deployment; see [CPU setup](docs/cpu.md) |
 | OvisOCR2 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
 | HPD-Parsing | High-quality document parsing | NVIDIA 8 GB+ | Official customized vLLM runtime |
 | NaviDC-OCR | Complex documents, layout, tables and formulas | NVIDIA 8 GB+ | Official NaviOCRClient vLLM async two-step pipeline (Transformers backend optional) |

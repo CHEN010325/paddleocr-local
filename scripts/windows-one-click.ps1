@@ -737,7 +737,6 @@ function New-RuntimeEnvFile {
     $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
     $script:EnableHpdParsing = $script:DeployModelIds -contains "hpd-parsing"
     $script:EnableNavidcOcr = $script:DeployModelIds -contains "navidc-ocr"
-    $script:EnableNavidcOcr = $script:DeployModelIds -contains "navidc-ocr"
     $script:UnlimitedOcrBackend = (Get-EnvLineValue -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -DefaultValue "transformers").Trim().ToLowerInvariant()
     Set-Content -Path $runtimeEnv -Value $lines -Encoding ASCII
 

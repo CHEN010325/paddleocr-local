@@ -1,0 +1,22 @@
+{
+  "default": "my-vision-model",
+  "engines": [
+    {
+      "id": "my-vision-model",
+      "label": "My vision OCR",
+      "protocol": "openai",
+      "url": "http://127.0.0.1:8080/v1/chat/completions",
+      "model": "your-served-vision-model-name",
+      "timeout": 300,
+      "maxTokens": 8192,
+      "pdfDpi": 150,
+      "maxPages": 50
+    },
+    {
+      "id": "my-paddle-service",
+      "label": "Paddle API",
+      "protocol": "paddle",
+      "url": "http://127.0.0.1:8081/layout-parsing"
+    }
+  ]
+}

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Issue 根因修复与部署验收
+
+- 默认保留脚注和侧栏文字；请求、版面显示和两份 VL 配置保持一致，并提供独立忽略选项（#11）。历史任务若原识别结果已省略该内容，需要重新解析。
+- 增加独立 PP-OCRv6 CPU Compose、CPU 兼容配置和可移植真实识别 smoke 脚本，避免 NVIDIA 设备要求及 oneDNN/PIR 算子错误（#1）。
+- MLX 预检覆盖实际服务入口，直接启动也检查依赖；服务提前退出即报告原因，不再只等待超时（#3）。保留 Python 3.12/3.13 选择与环境修复（#2）。
+- 加入独立外部 OCR 引擎协议层，支持 OpenAI vision、Paddle layout-parsing、统一 API，UI 根据服务目录选择，模型生命周期由部署者管理（#12）。
+- 记录 Unlimited-OCR 实验目录的按需启用方式（#6）和低显存预检限制（#7）。
+- 修复自定义 WebUI 端口导致本机上传被来源检查拒绝的问题。
+- pypdf 升级至 6.16.1，修复依赖审计报告的已知漏洞。
+- OvisOCR2 和实验性 HPD macOS 单设备加载移除不需要的 Accelerate 显式依赖，避免引入未修复的 checkpoint 路径漏洞；Transformers 5 已不使用旧 `low_cpu_mem_usage` 参数。
+- CI 增加 Windows/macOS/Linux 检查矩阵及无 GPU 的真实 CPU 图片/PDF smoke 作业。
+
 ### 使用体验与导出
 
 - 新增失败批次单独重试，只重新处理错误批次，并保留已完成批次的 Markdown、图片和 JSON。

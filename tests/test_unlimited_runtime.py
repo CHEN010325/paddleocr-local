@@ -871,7 +871,8 @@ class UnlimitedRuntimeTests(unittest.TestCase):
                     )
                 ]
             self.assertEqual(throttled_events[-1]["type"], "final")
-            self.assertEqual(detector.call_count, len(tiny_lines))
+            self.assertGreaterEqual(detector.call_count, 2)  # first chunk and final buffered tail
+            self.assertLessEqual(detector.call_count, 4)
             self.assertGreater(render.call_count, 0)
             self.assertLess(render.call_count, len(tiny_lines) // 4)
             self.assertTrue(all(thread is not main_thread for thread in render_threads))

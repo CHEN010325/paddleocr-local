@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,69 @@ UNSAFE_TOKENS = {
     "change-this-to-a-random-long-value",
     "请替换为随机长值",
 }
+
+
+def test_windows_gpu_reuse_recognizes_dynamic_mounts_without_trusting_names(tmp_path):
+    powershell = shutil.which('powershell') or shutil.which('pwsh')
+    if not powershell:
+        pytest.skip('PowerShell unavailable')
+    source = str(ROOT / 'scripts/windows-one-click.ps1').replace("'", "''")
+    probe = tmp_path / 'ownership.ps1'
+    probe.write_text(r"""
+$ErrorActionPreference='Stop'
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('SOURCE',[ref]$null,[ref]$null)
+foreach($name in @('Normalize-WorkspaceHostPath','Test-ManagedGpuWorkspace')) {
+    $definition=$ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+    if(-not $definition) {throw "Missing ownership helper"}
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+$running=[pscustomobject]@{Running=$true}
+$stopped=[pscustomobject]@{Running=$false}
+Test-ManagedGpuWorkspace $running $null @([pscustomobject]@{Source='/run/desktop/mnt/host/d/repo/model_cache'}) 'D:/repo'
+Test-ManagedGpuWorkspace $running ([pscustomobject]@{'com.docker.compose.project.working_dir'='D:\repo'}) @() 'D:/repo'
+Test-ManagedGpuWorkspace $running $null @([pscustomobject]@{Source='D:/repository/model_cache'}) 'D:/repo'
+Test-ManagedGpuWorkspace $stopped $null @([pscustomobject]@{Source='D:/repo/model_cache'}) 'D:/repo'
+Test-ManagedGpuWorkspace $running ([pscustomobject]@{'com.docker.compose.project'='repo';'com.docker.compose.project.working_dir'='D:/other'}) @() 'D:/repo'
+""".replace('SOURCE', source), encoding='utf8')
+    result = subprocess.run([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(probe)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ['True','True','False','False','False']
+
+
+@pytest.mark.parametrize('compute,memory,driver,backend,expected', [
+    (12.0,16303,'617.14','auto',('sglang',32768,5)),
+    (8.6,12288,'590.01','auto',('transformers',16384,2)),
+    (8.9,24564,'590.01','auto',('sglang',65536,10)),
+    (8.6,16384,'590.01','transformers',('transformers',32768,5)),
+    (8.6,12288,'590.01','sglang',None),
+    (8.6,8192,'590.01','auto',None),
+    (7.5,16384,'590.01','auto',None),
+    (None,16384,'590.01','auto',None),
+    (8.6,16384,'579.99','auto',None),
+    (8.6,16384,'580.88','auto',('sglang',32768,5)),
+])
+def test_ocr2_hardware_profiles_are_selected_before_deployment(tmp_path,compute,memory,driver,backend,expected):
+    powershell=shutil.which('powershell') or shutil.which('pwsh')
+    if not powershell: pytest.skip('PowerShell unavailable')
+    source=str(ROOT/'scripts/windows-one-click.ps1').replace("'","''")
+    code="""
+$ErrorActionPreference='Stop'
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('SOURCE',[ref]$null,[ref]$null)
+$definition=$ast.Find({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-UnlimitedOcrHardwareProfile'},$true)
+. ([scriptblock]::Create($definition.Extent.Text))
+$gpu=[pscustomobject]@{ComputeCapability=COMPUTE;TotalMiB=MEMORY}
+try { Get-UnlimitedOcrHardwareProfile $gpu 'BACKEND' 'DRIVER' | ConvertTo-Json -Compress }
+catch { @{Error=$_.Exception.Message} | ConvertTo-Json -Compress }
+""".replace('SOURCE',source).replace('COMPUTE','$null' if compute is None else str(compute)).replace('MEMORY',str(memory)).replace('BACKEND',backend).replace('DRIVER',driver)
+    probe=tmp_path/'profile.ps1';probe.write_text(code,encoding='utf8')
+    result=subprocess.run([powershell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(probe)],capture_output=True,text=True,check=True)
+    profile=json.loads(result.stdout)
+    if expected is None:
+        assert profile.get('Error')
+    else:
+        assert (profile['Backend'],profile['ContextLength'],profile['PdfBatchSize']) == expected
+        assert profile['MaxTokens'] < profile['ContextLength']
+        if memory < 15360: assert profile['SupportedBackends']=='transformers'
 
 
 def clean_environment(**updates: str) -> dict[str, str]:
@@ -204,6 +268,14 @@ def test_deploy_entrypoints_use_the_untracked_persistent_runtime_env():
     test_connection_bat = (ROOT / "test-connection.bat").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     windows_one_click = (ROOT / "scripts/windows-one-click.ps1").read_text(encoding="utf-8")
+    ocr2_launcher = (ROOT / "unlimited-ocr2-one-click.bat").read_text(encoding="utf-8")
+    ocr2_script = (ROOT / "scripts/unlimited-ocr2-one-click.ps1").read_text(encoding="utf-8")
+    assert 'unlimited-ocr2-one-click.ps1' in ocr2_launcher
+    assert '"windows-one-click.ps1"' in ocr2_script
+    assert 'Model = "unlimited-ocr"' in ocr2_script
+    assert '[string]$Backend = "auto"' in ocr2_script
+    assert 'AutoUnlimitedOcrHardware = $true' in ocr2_script
+    assert 'SkipClean = $true' in ocr2_script
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 

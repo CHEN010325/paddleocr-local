@@ -12,6 +12,22 @@ The default Windows one-click and Linux/Docker deployments show six models for o
 
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
 
+## Unlimited-OCR-2 one-command deployment
+
+With NVIDIA drivers and GPU-enabled Docker Desktop installed, run from the repository root:
+
+```powershell
+.\unlimited-ocr2-one-click.bat
+```
+
+Detects GPU architecture, VRAM, driver, and Docker GPU support. The 12GB profile selects Transformers;
+16GB and larger profiles select SGLang, with context and page batches adjusted to the GPU.
+Unsupported configurations receive a clear explanation and alternative entry points.
+The first run builds the environment, downloads pinned weights, and opens the WebUI.
+Use `-Backend transformers` for native inference. The 16GB defaults use one public OCR job,
+CUDA Graphs, and five-page batches. Existing launch commands for other models remain available.
+See [configuration and resource limits](docs/unlimited-ocr.md).
+
 ## Why it exists
 
 For a machine without NVIDIA, run `docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200`

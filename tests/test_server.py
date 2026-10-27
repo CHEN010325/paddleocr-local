@@ -600,7 +600,7 @@ class ServerTaskApiTests(unittest.TestCase):
             payload = adapter.build_sglang_payload([b"not-real-image"], 1)
 
         self.assertEqual(payload["images_config"]["backend"], "sglang")
-        self.assertLess(payload["max_tokens"], adapter.MAX_TOKENS)
+        self.assertLess(payload["max_tokens"], adapter.CONTEXT_LENGTH)
         self.assertIn("custom_logit_processor", payload)
         self.assertEqual(payload["custom_params"]["ngram_size"], adapter.NO_REPEAT_NGRAM_SIZE)
 

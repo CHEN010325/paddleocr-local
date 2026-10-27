@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import anyio
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -75,6 +76,7 @@ PDF_DPI = int(os.getenv("UNLIMITED_OCR_PDF_DPI", "300"))
 SGLANG_PDF_DPI = int(os.getenv("UNLIMITED_OCR_SGLANG_PDF_DPI", "96"))
 MAX_PAGES_PER_REQUEST = int(os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50"))
 MAX_RENDER_PIXELS = int(os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000"))
+PDF_MAX_DIMENSION = int(os.getenv("UNLIMITED_OCR_PDF_MAX_DIMENSION", "2048"))
 SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
 SGLANG_PDF_MAX_DIMENSION = int(os.getenv("UNLIMITED_OCR_SGLANG_PDF_MAX_DIMENSION", "1120"))
@@ -83,10 +85,11 @@ MULTI_PROMPT = os.getenv("UNLIMITED_OCR_MULTI_PROMPT", "Multi page parsing.")
 NO_REPEAT_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35"))
 SINGLE_NGRAM_WINDOW = int(os.getenv("UNLIMITED_OCR_SINGLE_NGRAM_WINDOW", "128"))
 MULTI_NGRAM_WINDOW = int(os.getenv("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024"))
-MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_MAX_TOKENS", "32768"))
+MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_MAX_TOKENS", "28672"))
 STREAM_HEARTBEAT_SECONDS = float(os.getenv("UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS", "20"))
 STREAM_RENDER_MIN_CHAR_DELTA = 24
 STREAM_RENDER_MAX_INTERVAL_SECONDS = 0.25
+STREAM_GUARD_MIN_CHAR_DELTA = 128
 STREAM_RENDER_BOUNDARY_SUFFIXES = (".", "\n", "。", "！", "？", "；", "，", "<|/det|>")
 TRANSFORMERS_SINGLE_BASE_SIZE = int(os.getenv("UNLIMITED_OCR_TRANSFORMERS_SINGLE_BASE_SIZE", "1024"))
 TRANSFORMERS_SINGLE_IMAGE_SIZE = int(os.getenv("UNLIMITED_OCR_TRANSFORMERS_SINGLE_IMAGE_SIZE", "640"))
@@ -95,8 +98,8 @@ TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE = int(os.getenv("UNLIMITED_OCR_TRANSFORMER
 TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS = int(
     os.getenv("UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS", str(min(MAX_TOKENS, 4096)))
 )
-SGLANG_MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", str(max(1, MAX_TOKENS - 4096))))
-CONTEXT_LENGTH = int(os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "131072"))
+SGLANG_MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "28672"))
+CONTEXT_LENGTH = int(os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "32768"))
 MAX_PAGE_TOKENS = int(os.getenv("UNLIMITED_OCR_MAX_PAGE_TOKENS", "20000"))
 SGLANG_CONTEXT_TOKEN_RESERVE = int(os.getenv("UNLIMITED_OCR_SGLANG_CONTEXT_TOKEN_RESERVE", "128"))
 ENABLE_DEGENERATION_GUARD = os.getenv("UNLIMITED_OCR_ENABLE_DEGENERATION_GUARD", "1").strip().lower() not in {
@@ -132,6 +135,7 @@ NO_REPEAT_PROCESSOR_STR: str | None = None
 TRANSFORMERS_TOKENIZER = None
 TRANSFORMERS_MODEL = None
 TRANSFORMERS_MODEL_LOCK = asyncio.Lock()
+TRANSFORMERS_LOAD_TASK: asyncio.Task | None = None
 TRANSFORMERS_INFERENCE_LOCK = asyncio.Lock()
 TRANSFORMERS_MODEL_LOADING = False
 TRANSFORMERS_MODEL_ERROR: str | None = None
@@ -311,10 +315,14 @@ def pdf_to_png_pages(file_bytes: bytes, dpi: int) -> list[bytes]:
                 status_code=413,
                 detail=f"Unlimited-OCR-2 request has {document.page_count} pages; max is {MAX_PAGES_PER_REQUEST}.",
             )
-        matrix = fitz.Matrix(dpi / 72, dpi / 72)
-        estimated_pixels = sum(
-            int(page.rect.width * dpi / 72) * int(page.rect.height * dpi / 72)
+        scales = [
+            min(dpi / 72, PDF_MAX_DIMENSION / max(page.rect.width, page.rect.height))
+            if PDF_MAX_DIMENSION > 0 else dpi / 72
             for page in document
+        ]
+        estimated_pixels = sum(
+            (int(page.rect.width * scale) + 1) * (int(page.rect.height * scale) + 1)
+            for page, scale in zip(document, scales)
         )
         if MAX_RENDER_PIXELS > 0 and estimated_pixels > MAX_RENDER_PIXELS:
             raise HTTPException(
@@ -325,8 +333,8 @@ def pdf_to_png_pages(file_bytes: bytes, dpi: int) -> list[bytes]:
                 ),
             )
         pages: list[bytes] = []
-        for page in document:
-            pixmap = page.get_pixmap(matrix=matrix)
+        for page, scale in zip(document, scales):
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
             pages.append(pixmap.tobytes("png"))
         return pages
     finally:
@@ -434,6 +442,7 @@ def select_transformers_dtype(torch_module, device: str):
 async def get_transformers_components():
     global TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL, TRANSFORMERS_MODEL_LOADING, TRANSFORMERS_MODEL_ERROR
     global TRANSFORMERS_MODEL_LOADED_AT, TRANSFORMERS_RUNTIME
+    global TRANSFORMERS_LOAD_TASK
     if TRANSFORMERS_TOKENIZER is not None and TRANSFORMERS_MODEL is not None:
         return TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL
 
@@ -476,17 +485,30 @@ async def get_transformers_components():
             logger.info("Unlimited-OCR-2 weights are ready on %s", device)
             return tokenizer, model
 
-        TRANSFORMERS_MODEL_LOADING = True
-        TRANSFORMERS_MODEL_ERROR = None
-        try:
-            TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL = await asyncio.to_thread(load_model)
-            TRANSFORMERS_MODEL_LOADED_AT = time.time()
-        except Exception as err:
-            TRANSFORMERS_MODEL_ERROR = str(err)
-            raise
-        finally:
-            TRANSFORMERS_MODEL_LOADING = False
-        return TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL
+        if TRANSFORMERS_LOAD_TASK is None or TRANSFORMERS_LOAD_TASK.done():
+            TRANSFORMERS_MODEL_LOADING = True
+            TRANSFORMERS_MODEL_ERROR = None
+
+            async def load_and_publish():
+                global TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL, TRANSFORMERS_MODEL_LOADED_AT
+                global TRANSFORMERS_MODEL_LOADING, TRANSFORMERS_MODEL_ERROR
+                try:
+                    TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL = await asyncio.to_thread(load_model)
+                    TRANSFORMERS_MODEL_LOADED_AT = time.time()
+                    return TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL
+                except Exception as err:
+                    TRANSFORMERS_MODEL_ERROR = str(err)
+                    raise
+                finally:
+                    TRANSFORMERS_MODEL_LOADING = False
+
+            TRANSFORMERS_LOAD_TASK = asyncio.create_task(load_and_publish())
+            TRANSFORMERS_LOAD_TASK.add_done_callback(
+                lambda task: task.exception() if not task.cancelled() else None
+            )
+        load_task = TRANSFORMERS_LOAD_TASK
+    # Caller cancellation must not abandon a live CPU/GPU weight-copy thread.
+    return await asyncio.shield(load_task)
 
 
 async def preload_transformers_components(force: bool = False) -> None:
@@ -503,8 +525,15 @@ async def preload_transformers_components(force: bool = False) -> None:
 async def unload_transformers_components() -> dict:
     global TRANSFORMERS_TOKENIZER, TRANSFORMERS_MODEL, TRANSFORMERS_MODEL_LOADING, TRANSFORMERS_MODEL_ERROR
     global TRANSFORMERS_MODEL_LOADED_AT
+    global TRANSFORMERS_LOAD_TASK
     async with TRANSFORMERS_INFERENCE_LOCK:
         async with TRANSFORMERS_MODEL_LOCK:
+            if TRANSFORMERS_LOAD_TASK is not None and not TRANSFORMERS_LOAD_TASK.done():
+                try:
+                    await asyncio.shield(TRANSFORMERS_LOAD_TASK)
+                except Exception:
+                    pass
+            TRANSFORMERS_LOAD_TASK = None
             was_loaded = TRANSFORMERS_MODEL is not None or TRANSFORMERS_TOKENIZER is not None
             TRANSFORMERS_TOKENIZER = None
             TRANSFORMERS_MODEL = None
@@ -527,12 +556,15 @@ def write_temp_image_files(image_pages: list[bytes], directory: str) -> list[str
 
 
 class QueueTextWriter:
-    def __init__(self, output_queue: queue.Queue[str] | None = None):
+    def __init__(self, output_queue: queue.Queue[str] | None = None, cancelled: threading.Event | None = None):
         self.output_queue = output_queue
+        self.cancelled = cancelled
         self.parts: list[str] = []
 
     def write(self, text: str) -> int:
         if text:
+            if self.cancelled is not None and self.cancelled.is_set():
+                raise RuntimeError("Unlimited-OCR-2 generation cancelled by the client")
             self.parts.append(text)
             if self.output_queue is not None:
                 self.output_queue.put(text)
@@ -739,6 +771,7 @@ def run_transformers_inference_sync(
                                 max_page_tokens=MAX_PAGE_TOKENS,
                                 no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
                                 ngram_window=SINGLE_NGRAM_WINDOW,
+                                return_dict=True,
                                 save_results=True,
                             )
                             images_config = {
@@ -756,16 +789,54 @@ def run_transformers_inference_sync(
                             cleanup_torch_accelerator_cache()
                     else:
                         raise last_error or RuntimeError("Unlimited-OCR-2 Transformers inference failed")
+            if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], int):
+                images_config["output_tokens"] = result[1]
+                images_config["finish_reason"] = "length" if result[1] >= MAX_TOKENS else "stop"
+            elif isinstance(result, dict):
+                if isinstance(result.get("token_ids"), list):
+                    images_config["output_tokens"] = len(result["token_ids"])
+                for key in ("time", "prefill_time", "finish_reason"):
+                    if key in result:
+                        images_config[key] = result[key]
             raw_layout_text = extract_layout_text_from_transformers_stdout(capture.text())
             return extract_text_from_transformers_result(result, output_dir) or raw_layout_text, images_config
     finally:
         cleanup_torch_accelerator_cache()
 
 
+async def finish_gpu_worker(task: asyncio.Task, *, suppress_errors: bool = False) -> bool:
+    """Wait through both AnyIO level cancellation and repeated Task.cancel()."""
+    cancelled = False
+    with anyio.CancelScope(shield=True):
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break
+        if suppress_errors:
+            if not task.cancelled():
+                task.exception()
+        else:
+            task.result()
+    return cancelled
+
+
 async def generate_transformers_markdown(image_pages: list[bytes], file_type: int) -> tuple[str, dict]:
-    tokenizer, model = await get_transformers_components()
     async with TRANSFORMERS_INFERENCE_LOCK:
-        return await asyncio.to_thread(run_transformers_inference_sync, tokenizer, model, image_pages, file_type)
+        tokenizer, model = await get_transformers_components()
+        cancelled = threading.Event()
+        writer = QueueTextWriter(cancelled=cancelled)
+        worker = asyncio.create_task(asyncio.to_thread(
+            run_transformers_inference_sync, tokenizer, model, image_pages, file_type, writer
+        ))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            await finish_gpu_worker(worker, suppress_errors=True)
+            raise
 
 
 async def stream_transformers_adapter_events(
@@ -779,19 +850,19 @@ async def stream_transformers_adapter_events(
             "type": "status",
             "message": "Loading Unlimited-OCR-2 Transformers backend...",
         }
-    tokenizer, model = await get_transformers_components()
-    yield {
-        "type": "status",
-        "message": (
-            "Unlimited-OCR-2 Transformers backend is ready on "
-            f"{transformers_runtime_label()}. Parsing {page_count} page(s) at {PDF_DPI} DPI "
-            f"with max {MAX_TOKENS} tokens."
-        ),
-    }
-
     async with TRANSFORMERS_INFERENCE_LOCK:
+        tokenizer, model = await get_transformers_components()
+        yield {
+            "type": "status",
+            "message": (
+                "Unlimited-OCR-2 Transformers backend is ready on "
+                f"{transformers_runtime_label()}. Parsing {page_count} page(s) at {PDF_DPI} DPI "
+                f"with max {MAX_TOKENS} tokens."
+            ),
+        }
         output_queue: queue.Queue[str] = queue.Queue()
-        stdout_writer = QueueTextWriter(output_queue)
+        cancelled = threading.Event()
+        stdout_writer = QueueTextWriter(output_queue, cancelled)
         result_holder: dict[str, Any] = {}
 
         def run_inference():
@@ -811,88 +882,97 @@ async def stream_transformers_adapter_events(
         thread = threading.Thread(target=run_inference, daemon=True)
         thread.start()
 
-        last_markdown = ""
-        last_emit_size = 0
-        sent_images: dict[str, str] = {}
-        stdout_parts: list[str] = []
-        inference_started_at = time.monotonic()
-        last_status_emit_at = inference_started_at
-        while thread.is_alive() or not output_queue.empty():
-            try:
-                chunk = output_queue.get_nowait()
-            except queue.Empty:
-                now = time.monotonic()
-                if (
-                    STREAM_HEARTBEAT_SECONDS > 0
-                    and not last_markdown
-                    and now - last_status_emit_at >= STREAM_HEARTBEAT_SECONDS
-                ):
-                    elapsed = int(now - inference_started_at)
-                    yield {
-                        "type": "status",
-                        "message": (
-                            f"Still parsing with Unlimited-OCR-2 on {transformers_runtime_label()} "
-                            f"after {elapsed}s. Dense PDF pages can take several minutes on Apple Silicon."
+        try:
+            last_markdown = ""
+            last_emit_size = 0
+            sent_images: dict[str, str] = {}
+            stdout_parts: list[str] = []
+            inference_started_at = time.monotonic()
+            last_status_emit_at = inference_started_at
+            while thread.is_alive() or not output_queue.empty():
+                try:
+                    chunk = output_queue.get_nowait()
+                except queue.Empty:
+                    now = time.monotonic()
+                    if (
+                        STREAM_HEARTBEAT_SECONDS > 0
+                        and not last_markdown
+                        and now - last_status_emit_at >= STREAM_HEARTBEAT_SECONDS
+                    ):
+                        elapsed = int(now - inference_started_at)
+                        yield {
+                            "type": "status",
+                            "message": (
+                                f"Still parsing with Unlimited-OCR-2 on {transformers_runtime_label()} "
+                                f"after {elapsed}s. Dense PDF pages can take several minutes on Apple Silicon."
+                            ),
+                        }
+                        last_status_emit_at = now
+                    await asyncio.sleep(0.08)
+                    continue
+                if chunk:
+                    stdout_parts.append(chunk)
+                raw_text = extract_layout_text_from_transformers_stdout("".join(stdout_parts))
+                if not raw_text:
+                    continue
+                markdown, images = await asyncio.to_thread(
+                    render_streaming_markdown,
+                    raw_text,
+                    image_pages,
+                    page_texts,
+                )
+                if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
+                    fresh_images = unsent_images(images, sent_images)
+                    last_markdown = markdown
+                    last_emit_size = len(markdown)
+                    event = {
+                        "type": "progress",
+                        "markdown": markdown,
+                        "source": await asyncio.to_thread(
+                            streaming_source_position,
+                            raw_text,
+                            len(image_pages),
+                            page_texts,
                         ),
                     }
-                    last_status_emit_at = now
-                await asyncio.sleep(0.08)
-                continue
-            if chunk:
-                stdout_parts.append(chunk)
-            raw_text = extract_layout_text_from_transformers_stdout("".join(stdout_parts))
-            if not raw_text:
-                continue
-            markdown, images = await asyncio.to_thread(
-                render_streaming_markdown,
+                    if fresh_images:
+                        event["images"] = fresh_images
+                    yield event
+
+            thread.join(timeout=1)
+            if result_holder.get("error"):
+                err = result_holder["error"]
+                logger.error(
+                    "Unlimited-OCR-2 Transformers inference failed",
+                    exc_info=(type(err), err, err.__traceback__),
+                )
+                yield {"type": "error", "detail": transformers_error_detail(err)}
+                return
+
+            result_text, images_config = result_holder.get("result", ("", {"backend": "transformers"}))
+            raw_stdout = extract_layout_text_from_transformers_stdout(stdout_writer.text())
+            raw_text = result_text or raw_stdout
+            result = await asyncio.to_thread(
+                build_adapter_response,
                 raw_text,
+                len(image_pages),
+                file_type,
+                images_config,
                 image_pages,
                 page_texts,
             )
-            if should_emit_stream_progress(markdown, last_markdown, last_emit_size):
-                fresh_images = unsent_images(images, sent_images)
-                last_markdown = markdown
-                last_emit_size = len(markdown)
-                event = {
-                    "type": "progress",
-                    "markdown": markdown,
-                    "source": await asyncio.to_thread(
-                        streaming_source_position,
-                        raw_text,
-                        len(image_pages),
-                        page_texts,
-                    ),
-                }
-                if fresh_images:
-                    event["images"] = fresh_images
-                yield event
-
-        thread.join(timeout=1)
-        if result_holder.get("error"):
-            err = result_holder["error"]
-            logger.error(
-                "Unlimited-OCR-2 Transformers inference failed",
-                exc_info=(type(err), err, err.__traceback__),
-            )
-            yield {"type": "error", "detail": transformers_error_detail(err)}
-            return
-
-        result_text, images_config = result_holder.get("result", ("", {"backend": "transformers"}))
-        raw_stdout = extract_layout_text_from_transformers_stdout(stdout_writer.text())
-        raw_text = result_text or raw_stdout
-        result = await asyncio.to_thread(
-            build_adapter_response,
-            raw_text,
-            len(image_pages),
-            file_type,
-            images_config,
-            image_pages,
-            page_texts,
-        )
-        yield {
-            "type": "final",
-            "result": result,
-        }
+            yield {
+                "type": "final",
+                "result": result,
+            }
+        finally:
+            if thread.is_alive():
+                cancelled.set()
+                # Keep the inference lock until the custom model exits and
+                # restores its attention state; backend unload may then proceed.
+                join_task = asyncio.create_task(asyncio.to_thread(thread.join))
+                if await finish_gpu_worker(join_task):
+                    raise asyncio.CancelledError
 
 
 def get_no_repeat_processor_str() -> str | None:
@@ -943,6 +1023,7 @@ def build_sglang_payload(image_pages: list[bytes], file_type: int) -> dict:
         "skip_special_tokens": False,
         "images_config": {"image_mode": image_mode, "crop_mode": image_mode == "gundam", "backend": "sglang"},
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     if SGLANG_MAX_TOKENS > 0:
         payload["max_tokens"] = SGLANG_MAX_TOKENS
@@ -1029,9 +1110,45 @@ def adjust_sglang_payload_for_degeneration(payload: dict, reason: str) -> dict |
     return adjusted_payload
 
 
-async def collect_streaming_response(response: httpx.Response) -> str:
+def record_sglang_stream_metadata(line: str, metadata: dict) -> None:
+    if not line.startswith("data:"):
+        return
+    try:
+        event = json.loads(line[len("data:"):].strip())
+    except (json.JSONDecodeError, ValueError):
+        return
+    if not isinstance(event, dict):
+        return
+    usage = event.get("usage")
+    if isinstance(usage, dict) and isinstance(usage.get("completion_tokens"), int):
+        metadata["output_tokens"] = usage["completion_tokens"]
+    for choice in event.get("choices") or []:
+        if isinstance(choice, dict) and choice.get("finish_reason"):
+            metadata["finish_reason"] = choice["finish_reason"]
+
+
+def check_generation_complete(metadata: dict) -> None:
+    if metadata.get("finish_reason") == "length":
+        raise HTTPException(status_code=502, detail=(
+            "Unlimited-OCR-2 reached its output token budget before completing the document. "
+            "Reduce the PDF batch size or increase the output budget."
+        ))
+
+
+def should_inspect_stream_guard(size: int, previous_size: int, previous_at: float, now: float) -> bool:
+    return size > previous_size and (
+        previous_size == 0 or size - previous_size >= STREAM_GUARD_MIN_CHAR_DELTA
+        or now - previous_at >= STREAM_RENDER_MAX_INTERVAL_SECONDS
+    )
+
+
+async def collect_streaming_response(response: httpx.Response, metadata: dict | None = None) -> str:
+    metadata = {} if metadata is None else metadata
     chunks: list[str] = []
+    size = guard_size = 0
+    guard_at = time.monotonic()
     async for line in response.aiter_lines():
+        record_sglang_stream_metadata(line, metadata)
         if not line or not line.startswith("data:"):
             continue
         data = line[len("data:") :].strip()
@@ -1044,9 +1161,17 @@ async def collect_streaming_response(response: httpx.Response) -> str:
             continue
         if delta:
             chunks.append(delta)
-            _raw_text, reason = await asyncio.to_thread(inspect_sglang_chunks, chunks)
-            if reason:
-                raise DegenerateGenerationError(reason)
+            size += len(delta)
+            if should_inspect_stream_guard(size, guard_size, guard_at, time.monotonic()):
+                _raw_text, reason = await asyncio.to_thread(inspect_sglang_chunks, chunks)
+                guard_size, guard_at = size, time.monotonic()
+                if reason:
+                    raise DegenerateGenerationError(reason)
+    if size > guard_size:
+        _raw_text, reason = await asyncio.to_thread(inspect_sglang_chunks, chunks)
+        if reason:
+            raise DegenerateGenerationError(reason)
+    check_generation_complete(metadata)
     return "".join(chunks)
 
 
@@ -1095,7 +1220,7 @@ async def generate_markdown(image_pages: list[bytes], file_type: int, backend: s
                         continue
                     raise HTTPException(status_code=response.status_code, detail=f"Unlimited-OCR-2 upstream error: {body}")
                 try:
-                    text = await collect_streaming_response(response)
+                    text = await collect_streaming_response(response, payload.setdefault("images_config", {}))
                 except DegenerateGenerationError as err:
                     adjusted_payload = adjust_sglang_payload_for_degeneration(payload, str(err))
                     if adjusted_payload and attempt < 2:
@@ -1638,7 +1763,14 @@ def build_adapter_response(
     image_pages: list[bytes] | None = None,
     page_texts: list[str] | None = None,
 ) -> dict:
+    check_generation_complete(images_config)
     raw_text = normalize_newlines(str(markdown))
+    page_markers = raw_text.count("<PAGE>")
+    if image_count > 1 and page_markers and page_markers != image_count:
+        raise HTTPException(status_code=502, detail=(
+            f"Unlimited-OCR-2 returned {page_markers} page boundaries for {image_count} input pages. "
+            "The incomplete document was not accepted; retry with a smaller PDF batch size."
+        ))
     if "<|det|>" in raw_text or "<BLOCK>" in raw_text:
         text, images = render_unlimited_ocr_document(raw_text, image_pages, page_texts)
     else:
@@ -1668,6 +1800,8 @@ async def stream_sglang_payload_events(
     # exited before the next attempt can acquire GPU work.
     for attempt in range(3):
         raw_chunks: list[str] = []
+        raw_size = guard_size = 0
+        guard_at = time.monotonic()
         last_markdown = ""
         last_emit_size = 0
         last_render_size = 0
@@ -1701,14 +1835,18 @@ async def stream_sglang_payload_events(
                         }
                 else:
                     async for line in response.aiter_lines():
+                        record_sglang_stream_metadata(line, payload.setdefault("images_config", {}))
                         delta = parse_stream_delta(line)
                         if not delta:
                             continue
                         raw_chunks.append(delta)
-                        raw_text, repetition = await asyncio.to_thread(
-                            inspect_sglang_chunks,
-                            raw_chunks,
-                        )
+                        raw_size += len(delta)
+                        repetition = None
+                        if should_inspect_stream_guard(raw_size, guard_size, guard_at, time.monotonic()):
+                            raw_text, repetition = await asyncio.to_thread(inspect_sglang_chunks, raw_chunks)
+                            guard_size, guard_at = raw_size, time.monotonic()
+                        else:
+                            raw_text = "".join(raw_chunks)
                         if repetition:
                             adjusted_payload = adjust_sglang_payload_for_degeneration(payload, repetition)
                             if adjusted_payload and attempt < 2:
@@ -1767,6 +1905,14 @@ async def stream_sglang_payload_events(
             yield terminal_error
             return
         if response_completed:
+            if raw_size > guard_size:
+                _raw_text, repetition = await asyncio.to_thread(inspect_sglang_chunks, raw_chunks)
+                if repetition:
+                    adjusted_payload = adjust_sglang_payload_for_degeneration(payload, repetition)
+                    if adjusted_payload and attempt < 2:
+                        payload = adjusted_payload
+                        continue
+                    raise DegenerateGenerationError(repetition)
             raw_text = await asyncio.to_thread("".join, raw_chunks)
             result = await asyncio.to_thread(
                 build_adapter_response,
@@ -1836,7 +1982,9 @@ async def sglang_health_status() -> dict:
         }
     try:
         async with httpx.AsyncClient(timeout=1.5, trust_env=False) as client:
-            response = await client.get(f"{SGLANG_URL}/health")
+            # The official wheel's /health performs a GPU generation. Frequent
+            # WebUI polling must use the non-generating readiness endpoint.
+            response = await client.get(f"{SGLANG_URL}/ready")
         return {
             "ready": 200 <= response.status_code < 300,
             "statusCode": response.status_code,

@@ -93,3 +93,7 @@ Apple Silicon 专属 dry run 在 Windows 跳过，不作为原生 Mac 验收。
 
 12 个临时 API 验收任务已按精确 ID 清理；原有任务及一份网页验收样本保留。
 浏览器下载文件已从 Downloads 移入本机验收证据目录。
+## 后续性能与硬件适配验证
+
+本页保留初次接入的历史验收记录。2026-10-28 的 CUDA Graph、12 页跨窗口、
+双后端速度对比和独立自动部署入口见[性能与部署验证](unlimited-ocr2-performance.md)。

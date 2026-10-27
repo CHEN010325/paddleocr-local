@@ -100,7 +100,9 @@ def test_windows_one_click_uses_per_model_gpu_requirements():
     }
     for model_id, (total_mib, free_mib) in expected.items():
         requirement = (
-            rf'"{re.escape(model_id)}"\s*\{{\s*return \[pscustomobject\]@\{{\s*'
+            rf'"{re.escape(model_id)}"\s*\{{\s*'
+            + (r'if \(\$script:UnlimitedOcrHardwareProfile\) \{ return \$script:UnlimitedOcrHardwareProfile \}\s*' if model_id == "unlimited-ocr" else '')
+            + rf'return \[pscustomobject\]@\{{\s*'
             rf'TotalMiB = {total_mib}; FreeMiB = {free_mib}\s*\}}\s*\}}'
         )
         assert re.search(requirement, script)

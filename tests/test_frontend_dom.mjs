@@ -211,6 +211,66 @@ async function boot(window) {
     await new Promise((resolve) => window.setTimeout(resolve, 10));
 }
 
+test('Unlimited OCR defaults to continuous batches and respects an explicit page count', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval("selectedModelId='unlimited-ocr'; els.pdfBatchSizeInput.value='1'; applyModelBatchSizeRecommendation()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 5);
+    window.eval("availableModels.find(m=>m.id==='unlimited-ocr').recommendedPdfBatchSize=2;applyModelBatchSizeRecommendation()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 2);
+    window.eval("availableModels.find(m=>m.id==='unlimited-ocr').recommendedPdfBatchSize=5;applyModelBatchSizeRecommendation()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 5);
+    window.eval("els.pdfBatchSizeInput.value='3';handlePdfBatchSizeInput();applyModelBatchSizeRecommendation()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 3);
+    window.eval("els.pdfBatchSizeInput.value='1';handlePdfBatchSizeInput();applyModelBatchSizeRecommendation()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 1);
+    window.eval("els.pdfBatchSizeInput.value='99';handlePdfBatchSizeInput()");
+    assert.equal(window.eval('getPdfBatchSizeForModel()'), 50);
+    assert.equal(window.document.getElementById('pdf-batch-size-input').value, '50');
+    dom.window.close();
+
+    const explicit = createBrowser();
+    await boot(explicit.window);
+    explicit.window.eval("selectedModelId='pp-ocrv6';els.pdfBatchSizeInput.value='1';handlePdfBatchSizeInput();selectedModelId='unlimited-ocr';applyModelBatchSizeRecommendation()");
+    assert.equal(explicit.window.eval('getPdfBatchSizeForModel()'), 1);
+    explicit.dom.window.close();
+});
+
+test('wide scanned PDFs fit the source pane and zoom-out never enlarges them', async () => {
+    for (const paneWidth of [375, 817]) {
+        const { dom, window } = createBrowser();
+        await boot(window);
+        const viewer = window.document.getElementById('source-viewer');
+        viewer.style.padding = '18px 24px';
+        Object.defineProperty(viewer, 'clientWidth', { configurable: true, value: paneWidth });
+        const pageWidth = 1293.33;
+        window.__widePdf = {
+            numPages: 2,
+            getPage: async () => ({
+                getViewport: ({ scale }) => ({ width: pageWidth * scale, height: 1856 * scale }),
+                render: () => ({ promise: Promise.resolve() })
+            })
+        };
+        window.eval(`pdfDefaultPageWidth=${pageWidth};currentPdf=window.__widePdf;currentZoom=getDefaultPdfZoom();activeResultView='json'`);
+        const fit = window.eval('currentZoom');
+        assert.ok(fit < 1, 'oversized page must be allowed below 100%');
+        await window.eval('renderPdfDocument()');
+        const availableWidth = paneWidth - 48 - 12;
+        assert.equal(viewer.querySelectorAll('.pdf-page-wrap').length, 2);
+        for (const canvas of viewer.querySelectorAll('canvas')) assert.ok(canvas.width <= availableWidth);
+        await window.eval('changeZoom(-0.15)');
+        assert.ok(window.eval('currentZoom') <= fit, 'zoom-out must not jump to an old minimum scale');
+        await window.eval('changeZoom(0.45)');
+        await window.eval('resetZoom()');
+        assert.equal(window.eval('currentZoom'), fit);
+        for (const canvas of viewer.querySelectorAll('canvas')) assert.ok(canvas.width <= availableWidth);
+        assert.equal(window.document.getElementById('reset-zoom-btn').title, '适应宽度');
+        window.eval("setLanguage('en')");
+        assert.equal(window.document.getElementById('reset-zoom-btn').title, 'Fit width');
+        dom.window.close();
+    }
+});
+
 
 test('full DOM boot renders models, tasks, language, tabs, and controls', async () => {
     const { dom, window } = createBrowser();
@@ -1084,7 +1144,7 @@ test('download, JSON normalization, result labels, image readiness, and PDF navi
       selectedModelId='unlimited-ocr'; els.pdfBatchSizeInput.value='10'; applyModelBatchSizeRecommendation();
       window.__unlimitedPdfBatchSize=getPdfBatchSizeForModel('unlimited-ocr');
     `);
-    assert.equal(window.__unlimitedPdfBatchSize, 1);
+    assert.equal(window.__unlimitedPdfBatchSize, 10);
 
     evaluate(`
       currentPdf={numPages:2,getPage:async()=>({

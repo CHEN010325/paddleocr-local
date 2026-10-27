@@ -883,7 +883,7 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
                     yield '{"type":"progress","markdown":"ok"}'
                     await asyncio.Event().wait()
 
-            controller_api = AsyncMock(return_value={})
+            controller_api = AsyncMock(return_value={"backend": "sglang"})
             semaphore = asyncio.Semaphore(0)
             upstream_stream = (
                 BlockingStream(200)
@@ -923,9 +923,9 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     await response(case_scope, receive, send)
 
-                controller_api.assert_awaited_once_with(
-                    "DELETE", f"/ocr-leases/{lease_id}"
-                )
+                releases = [call for call in controller_api.await_args_list if call.args[0] == "DELETE"]
+                self.assertEqual(len(releases), 1)
+                self.assertEqual(releases[0].args, ("DELETE", f"/ocr-leases/{lease_id}"))
                 self.assertEqual(self.server.ocr_active_count, 0)
                 self.assertEqual(semaphore._value, 1)
 
@@ -1208,6 +1208,9 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(self.server, "ENABLE_UNLIMITED_OCR", True),
             patch.object(self.server, "acquire_ocr_slot", new=AsyncMock()),
+            patch.object(self.server.httpx, "AsyncClient", return_value=FakeClient(
+                stream_response=FakeStream(status=502, body=b"mock unavailable")
+            )),
         ):
             result = self.client.post(
                 "/api/unlimited-ocr/stream",

@@ -16,6 +16,16 @@ Windows 可直接使用一键脚本的预检模式：
 
 ## 选择部署方式
 
+Unlimited-OCR-2 提供独立的 Windows/NVIDIA 命令，自动检查硬件并选择后端、上下文与每批页数：
+
+```powershell
+.\unlimited-ocr2-one-click.bat
+```
+
+如需 Transformers，加 `-Backend transformers`。首次使用需要 NVIDIA 驱动与 Docker Desktop，
+脚本会构建运行环境、下载权重并打开 WebUI。其他模型的一键部署入口保持原样。
+配置、资源边界与后端切换见 [Unlimited-OCR-2 使用说明](docs/unlimited-ocr.md)。
+
 无 NVIDIA 显卡的 Windows/Linux 用户可先使用 [CPU 部署](docs/cpu.md)：
 
 ```sh

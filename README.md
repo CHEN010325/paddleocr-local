@@ -1,6 +1,6 @@
 # PaddleOCR Local
 
-**把 PDF、图片和 Office 文档变成可编辑 Markdown 的本地文档工作台。** 一套界面运行五种 OCR / 文档解析模型，结果留在自己的机器上，并支持批处理、CLI、Apple Silicon 以及可编辑、可搜索导出。
+**把 PDF、图片和 Office 文档变成可编辑 Markdown 的本地文档工作台。** 一套界面运行六种 OCR / 文档解析模型，结果留在自己的机器上，并支持批处理、CLI、Apple Silicon 以及可编辑、可搜索导出。
 
 Windows 一键部署与 Linux/Docker 默认显示六个模型，按需部署和切换，只运行当前选中的模型。已有独立模型服务的用户，可选用[外部 API 模式](docs/external-engines.md)：该模式只显示自行配置的服务；远程服务会接收待识别内容。
 
@@ -12,6 +12,20 @@ Windows 一键部署与 Linux/Docker 默认显示六个模型，按需部署和�
 ![Stars](https://img.shields.io/github/stars/CHEN010325/paddleocr-local?style=flat)
 
 <img width="1920" height="945" alt="PaddleOCR Local WebUI" src="https://github.com/user-attachments/assets/85a247a0-c796-4a20-b596-1cc4148df964" />
+
+## Unlimited-OCR-2 独立一键部署
+
+已安装 NVIDIA 驱动和支持 GPU 的 Docker Desktop 后，在仓库根目录运行：
+
+```powershell
+.\unlimited-ocr2-one-click.bat
+```
+
+自动检测显卡、显存、驱动及 Docker GPU 能力：12GB 档选择 Transformers，16GB 及以上选择 SGLang，并调整上下文和每批页数。不满足自动配置要求时会给出原因和替代入口。
+首次会构建环境、下载权重并打开 WebUI。可加 `-Backend transformers` 选择原生后端。
+RTX 5070 Ti 16GB 使用单并发 CUDA Graph 配置与每批 5 页的多页解析默认值。
+其他模型继续使用原来的 `windows-one-click.bat`，保留统一界面和按需切换。
+详见 [部署、使用及资源限制](docs/unlimited-ocr.md)。
 
 ## 为什么用它
 
@@ -37,6 +51,7 @@ Windows 一键部署与 Linux/Docker 默认显示六个模型，按需部署和�
 | 模型 | 适合任务 | 推荐硬件 | 特点 |
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 | 复杂版面、表格、公式 | NVIDIA 12 GB+ | PaddleOCR 文档解析主线 |
+| Unlimited-OCR-2 | 多页连续文档、版面与表格 | 推荐 NVIDIA 16 GB | 官方 Transformers / SGLang 双后端，独立一键部署 |
 | PP-OCRv6 | 普通文字识别、低显存场景 | CPU / NVIDIA 4 GB+ | 提供独立无 GPU 部署；见 [CPU 入口](docs/cpu.md) |
 | OvisOCR2 | 文档理解、Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | macOS 默认使用 MLX |
 | HPD-Parsing | 高质量文档解析 | NVIDIA 8 GB+ | 官方定制 vLLM 运行时 |

@@ -115,16 +115,17 @@ UNLIMITED_OCR_BACKEND = normalize_unlimited_ocr_backend(os.getenv("UNLIMITED_OCR
 UNLIMITED_OCR_PRELOAD = os.getenv("UNLIMITED_OCR_PRELOAD", "1")
 UNLIMITED_OCR_API_PORT = os.getenv("UNLIMITED_OCR_API_PORT", "8083")
 UNLIMITED_OCR_SGLANG_PORT = os.getenv("UNLIMITED_OCR_SGLANG_PORT", "10000")
-UNLIMITED_OCR_MEM_FRACTION_STATIC = os.getenv("UNLIMITED_OCR_MEM_FRACTION_STATIC", "0.7")
-UNLIMITED_OCR_CONTEXT_LENGTH = os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "131072")
+UNLIMITED_OCR_MEM_FRACTION_STATIC = os.getenv("UNLIMITED_OCR_MEM_FRACTION_STATIC", "0.65")
+UNLIMITED_OCR_CONTEXT_LENGTH = os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "32768")
 UNLIMITED_OCR_REQUEST_TIMEOUT = os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_PDF_DPI = os.getenv("UNLIMITED_OCR_PDF_DPI", "300")
 UNLIMITED_OCR_MAX_PAGES_PER_REQUEST = os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50")
 UNLIMITED_OCR_MAX_RENDER_PIXELS = os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000")
+UNLIMITED_OCR_PDF_MAX_DIMENSION = os.getenv("UNLIMITED_OCR_PDF_MAX_DIMENSION", "2048")
 UNLIMITED_OCR_SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 UNLIMITED_OCR_MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
-UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "8192")
-UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "8192")
+UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "28672")
+UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "28672")
 OVISOCR2_SERVICE_URL = os.getenv("OVISOCR2_SERVICE_URL", "http://localhost:8084/ocr")
 OVISOCR2_MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
 OVISOCR2_MODEL_REVISION = os.getenv(
@@ -337,7 +338,7 @@ MODEL_RUNTIME_CONTAINER_GROUPS = {
 MODEL_MINIMUM_FREE_MIB = {
     "paddleocr-vl-1.6": 6656,
     "pp-ocrv6": 4096,
-    "unlimited-ocr": 6656,
+    "unlimited-ocr": parse_positive_int_env("UNLIMITED_OCR_MINIMUM_FREE_MIB", "6656"),
     "ovisocr2": 6656,
     "hpd-parsing": 6656,
     "navidc-ocr": 6656,
@@ -519,6 +520,7 @@ def model_catalog() -> list[dict]:
             "label": "Unlimited-OCR-2",
             "kind": "document_parsing",
             "endpoint": "/api/unlimited-ocr",
+            "recommendedPdfBatchSize": min(50, parse_positive_int_env("UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE", "5")),
         },
         "ovisocr2": {
             "id": "ovisocr2",
@@ -1291,6 +1293,8 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"UNLIMITED_OCR_PDF_DPI={UNLIMITED_OCR_PDF_DPI}",
                 f"UNLIMITED_OCR_MAX_PAGES_PER_REQUEST={UNLIMITED_OCR_MAX_PAGES_PER_REQUEST}",
                 f"UNLIMITED_OCR_MAX_RENDER_PIXELS={UNLIMITED_OCR_MAX_RENDER_PIXELS}",
+                f"UNLIMITED_OCR_PDF_MAX_DIMENSION={UNLIMITED_OCR_PDF_MAX_DIMENSION}",
+                f"UNLIMITED_OCR_SUPPORTED_BACKENDS={','.join(sorted(UNLIMITED_OCR_SUPPORTED_BACKENDS))}",
                 f"UNLIMITED_OCR_SINGLE_IMAGE_MODE={UNLIMITED_OCR_SINGLE_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MULTI_IMAGE_MODE={UNLIMITED_OCR_MULTI_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MAX_TOKENS={UNLIMITED_OCR_MAX_TOKENS}",
@@ -1335,9 +1339,16 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 "--allow-auto-truncate",
                 "--disable-radix-cache",
                 "--mm-preprocess-cache-size-mb", "0",
-                "--max-running-requests", "1",
+                # A finished document window retains one request slot for its
+                # KV tail. A second slot is required to start the next window.
+                "--max-running-requests", "2",
                 "--max-prefill-tokens", "2048",
-                "--disable-cuda-graph",
+                "--cuda-graph-backend-decode", "full",
+                "--cuda-graph-max-bs-decode", "2",
+                "--cuda-graph-backend-prefill", "full",
+                "--cuda-graph-max-bs-prefill", "2048",
+                "--cuda-graph-bs-prefill", "1024", "2048",
+                "--cuda-graph-config", '{"prefill":{"backend":"full","full_prefill_max_req":1}}',
                 "--skip-server-warmup",
                 "--host",
                 "0.0.0.0",
@@ -1346,7 +1357,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             ],
             "Env": [
                 "HF_HOME=/root/.cache/huggingface",
-                f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
+                "CUDA_VISIBLE_DEVICES=0",
                 "SGLANG_UOCR_EANABLE_DOC_LIMIT=1",
                 "SGLANG_UOCR_DOC_GUNDAM_PAGE_WINDOW=10",
                 "SGLANG_UOCR_DOC_BASE_PAGE_WINDOW=10",
@@ -1355,10 +1366,9 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 "SGLANG_UOCR_SHM_WRAP_MODEL_DATA=1",
                 "SGLANG_UOCR_SHM_WRAP_MIN_MB=1",
                 "SGLANG_VLM_CACHE_SIZE_MB=0",
-                # The pinned wheel otherwise skips eager decode RoPE while
-                # waiting for graph-owned coordinate buffers that do not exist.
-                "SGLANG_UOCR_GRAPH_METADATA_REFRESH=0",
-                "SGLANG_UOCR_GRAPH_METADATA_INPUTS=0",
+                "SGLANG_UOCR_GRAPH_METADATA_REFRESH=1",
+                "SGLANG_UOCR_GRAPH_METADATA_INPUTS=1",
+                "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION=0",
                 "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
             ],
             "User": "root",
@@ -1369,7 +1379,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 port_bindings={"10000/tcp": [{"HostIp": "127.0.0.1", "HostPort": UNLIMITED_OCR_SGLANG_PORT}]},
                 shm_size=34_359_738_368,
             ),
-            "Healthcheck": healthcheck("curl -f http://localhost:10000/health || exit 1", 900),
+            "Healthcheck": healthcheck("curl -f http://localhost:10000/ready || exit 1", 900),
         }
     if service_name == "ovisocr2-api":
         return {
@@ -3675,6 +3685,16 @@ def build_unlimited_ocr_payload(request: OCRRequest, base64_data: str, file_type
     return payload
 
 
+async def build_managed_unlimited_ocr_payload(request: OCRRequest, base64_data: str, file_type: int) -> dict:
+    payload = build_unlimited_ocr_payload(request, base64_data, file_type)
+    if MODEL_CONTROL_MODE == "remote":
+        # The lease is already held: backend switches cannot race this lookup.
+        # A separate Web process must not route with its startup-time snapshot.
+        runtime = await controller_api_request("GET", "/unlimited-ocr/backend")
+        payload["backend"] = normalize_unlimited_ocr_backend(runtime.get("backend"))
+    return payload
+
+
 def build_ovisocr2_payload(request: OCRRequest, base64_data: str, file_type: int) -> dict:
     return {
         "file": base64_data,
@@ -4072,7 +4092,7 @@ async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRIn
     )
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
-        payload = build_unlimited_ocr_payload(ocr_request, base64_data, file_type)
+        payload = await build_managed_unlimited_ocr_payload(ocr_request, base64_data, file_type)
 
         logger.info("Sending request to Unlimited-OCR-2 adapter at %s", UNLIMITED_OCR_SERVICE_URL)
         timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
@@ -4184,7 +4204,7 @@ async def stream_unlimited_ocr_events(
     slot_release = release_guard or OCRSlotReleaseGuard(controller_lease_id)
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
-        payload = build_unlimited_ocr_payload(ocr_request, base64_data, file_type)
+        payload = await build_managed_unlimited_ocr_payload(ocr_request, base64_data, file_type)
         stream_url = UNLIMITED_OCR_SERVICE_URL.rsplit("/", 1)[0] + "/ocr/stream"
         timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
 

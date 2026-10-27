@@ -4,13 +4,16 @@ const MAX_PDF_BATCH_SIZE = 400;
 const UNLIMITED_OCR_MODEL_ID = 'unlimited-ocr';
 const OVIS_OCR_MODEL_ID = 'ovisocr2';
 const HPD_PARSING_MODEL_ID = 'hpd-parsing';
-const UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE = 1;
+const UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE = 5;
+const UNLIMITED_OCR_MAX_PDF_BATCH_SIZE = 50;
+const UNLIMITED_OCR_BATCH_PROFILE_STORAGE_KEY = 'pandocr.unlimitedOcrContinuousBatches';
 const UNLIMITED_OCR_COORDINATE_SIZE = 1000;
 const HPD_PARSING_COORDINATE_SIZE = 1000;
 const UNLIMITED_OCR_BACKENDS = ['transformers', 'sglang'];
 const STREAM_RENDER_MIN_INTERVAL_MS = 140;
 const STREAM_STATUS_MARKDOWN_RE = /^\s*\*\*Unlimited-OCR-2 status\*\*/i;
 const PDF_BATCH_SIZE_STORAGE_KEY = 'pandocr.pdfBatchSize';
+const PDF_BATCH_EXPLICIT_STORAGE_KEY = 'pandocr.pdfBatchSizeExplicit';
 const MODEL_STORAGE_KEY = 'pandocr.selectedModelId';
 const API_TOKEN_STORAGE_KEY = 'pandocr.apiToken';
 const LANGUAGE_STORAGE_KEY = 'pandocr.language';
@@ -3940,7 +3943,8 @@ function changePdfPage(delta) {
 async function changeZoom(delta) {
     if (!currentPdf) return;
     const scrollAnchor = captureSourceScrollAnchor();
-    currentZoom = Math.min(2.2, Math.max(0.55, currentZoom + delta));
+    const minimumZoom = Math.min(0.1, currentZoom, getDefaultPdfZoom());
+    currentZoom = Math.min(2.2, Math.max(minimumZoom, roundPdfZoom(currentZoom + delta)));
     await renderPdfDocument(++sourceRenderToken, scrollAnchor);
     const task = getActiveTask();
     if (task && activeResultView === 'markdown') {
@@ -4024,7 +4028,7 @@ function getDefaultPdfZoom() {
     const availableWidth = Math.max(0, viewer.clientWidth - horizontalPadding - PDF_FIT_WIDTH_GUTTER);
     if (!availableWidth || !pdfDefaultPageWidth) return DEFAULT_PDF_ZOOM;
     const fitZoom = availableWidth / pdfDefaultPageWidth;
-    return roundPdfZoom(Math.max(DEFAULT_PDF_ZOOM, Math.min(MAX_DEFAULT_PDF_ZOOM, fitZoom)));
+    return Math.min(MAX_DEFAULT_PDF_ZOOM, fitZoom);
 }
 
 function roundPdfZoom(value) {
@@ -5426,11 +5430,26 @@ function initPdfBatchSizeSetting() {
 }
 
 function applyModelBatchSizeRecommendation() {
-    if (!els.pdfBatchSizeInput || selectedModelId !== UNLIMITED_OCR_MODEL_ID) return;
+    if (!els.pdfBatchSizeInput) return;
+    els.pdfBatchSizeInput.max = String(selectedModelId === UNLIMITED_OCR_MODEL_ID
+        ? UNLIMITED_OCR_MAX_PDF_BATCH_SIZE : MAX_PDF_BATCH_SIZE);
+    if (selectedModelId !== UNLIMITED_OCR_MODEL_ID) return;
     const currentBatchSize = clampPdfBatchSize(els.pdfBatchSizeInput.value || localStorage.getItem(PDF_BATCH_SIZE_STORAGE_KEY));
-    if (currentBatchSize <= UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE) return;
-    els.pdfBatchSizeInput.value = String(UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE);
-    localStorage.setItem(PDF_BATCH_SIZE_STORAGE_KEY, String(UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE));
+    // Upgrade the old forced single-page profile once. Subsequent explicit
+    // single-page choices remain valid, including after a backend switch.
+    const recommendation = Math.min(UNLIMITED_OCR_MAX_PDF_BATCH_SIZE, Math.max(1,
+        Number(availableModels.find((model) => model.id === UNLIMITED_OCR_MODEL_ID)?.recommendedPdfBatchSize)
+            || UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE));
+    const previousProfile = localStorage.getItem(UNLIMITED_OCR_BATCH_PROFILE_STORAGE_KEY);
+    const explicitChoice = Boolean(localStorage.getItem(PDF_BATCH_EXPLICIT_STORAGE_KEY));
+    const updateDefault = !explicitChoice && ((!previousProfile && currentBatchSize === 1)
+        || (previousProfile && previousProfile !== String(recommendation)));
+    const batchSize = updateDefault
+        ? recommendation
+        : Math.min(UNLIMITED_OCR_MAX_PDF_BATCH_SIZE, currentBatchSize);
+    els.pdfBatchSizeInput.value = String(batchSize);
+    localStorage.setItem(PDF_BATCH_SIZE_STORAGE_KEY, String(batchSize));
+    localStorage.setItem(UNLIMITED_OCR_BATCH_PROFILE_STORAGE_KEY, String(recommendation));
 }
 
 function syncPdfBatchSizeSetting() {
@@ -5447,7 +5466,10 @@ function handlePdfBatchSizeInput() {
     if (rawValue === '') return;
     const parsed = Number.parseInt(rawValue, 10);
     if (!Number.isFinite(parsed)) return;
-    const batchSize = clampPdfBatchSize(parsed);
+    const batchSize = selectedModelId === UNLIMITED_OCR_MODEL_ID
+        ? Math.min(UNLIMITED_OCR_MAX_PDF_BATCH_SIZE, clampPdfBatchSize(parsed))
+        : clampPdfBatchSize(parsed);
+    localStorage.setItem(PDF_BATCH_EXPLICIT_STORAGE_KEY, '1');
     if (String(parsed) !== String(batchSize)) {
         els.pdfBatchSizeInput.value = String(batchSize);
     }
@@ -5460,10 +5482,9 @@ function getConfiguredPdfBatchSize() {
 }
 
 function getPdfBatchSizeForModel(modelId = selectedModelId) {
-    // Unlimited-OCR-2's long-horizon R-SWA state can enter a repetition loop on
-    // dense multi-page PDFs. Keep WebUI requests page-local so each page gets
-    // a fresh vision/decode context; the API/CLI may still use multi-page mode.
-    if (modelId === UNLIMITED_OCR_MODEL_ID) return UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE;
+    if (modelId === UNLIMITED_OCR_MODEL_ID) {
+        return Math.min(UNLIMITED_OCR_MAX_PDF_BATCH_SIZE, getConfiguredPdfBatchSize());
+    }
     return getConfiguredPdfBatchSize();
 }
 

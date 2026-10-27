@@ -11,6 +11,8 @@ param(
     [switch]$SkipPull,
     [switch]$SkipBuild,
     [switch]$SkipClean,
+    [switch]$ReuseManagedGpu,
+    [switch]$AutoUnlimitedOcrHardware,
     [switch]$NoOpen
 )
 
@@ -31,6 +33,7 @@ $script:EnableHpdParsing = $false
 $script:EnableNavidcOcr = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
+$script:UnlimitedOcrHardwareProfile = $null
 $script:DeployModelIds = @("paddleocr-vl-1.6")
 $script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr")
 $script:RuntimeModelCatalogIds = @($script:ModelCatalogIds)
@@ -71,6 +74,63 @@ function Get-RequiredCommand {
 
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "$Name was not found. $InstallHint"
+    }
+}
+
+function Normalize-WorkspaceHostPath {
+    param([string]$Path)
+    $normalized = $Path.Replace('\', '/').TrimEnd('/').ToLowerInvariant()
+    if ($normalized -match '^/(?:run/desktop/mnt/host|host_mnt)/([a-z])/(.*)$') {
+        $normalized = "$($Matches[1]):/$($Matches[2])"
+    }
+    return $normalized
+}
+
+function Test-ManagedGpuWorkspace {
+    param([object]$State, [object]$Labels, [object[]]$Mounts, [string]$RepoRoot)
+    if (-not $State.Running) { return $false }
+    $root = Normalize-WorkspaceHostPath $RepoRoot
+    if ($Labels) {
+        $directory = $Labels.PSObject.Properties['com.docker.compose.project.working_dir']
+        if ($directory -and (Normalize-WorkspaceHostPath $directory.Value) -eq $root) { return $true }
+    }
+    foreach ($mount in $Mounts) {
+        $source = Normalize-WorkspaceHostPath $mount.Source
+        if ($source -eq $root -or $source.StartsWith($root + '/')) { return $true }
+    }
+    return $false
+}
+
+function Get-UnlimitedOcrHardwareProfile {
+    param([object]$Gpu, [string]$RequestedBackend = "auto", [string]$DriverVersion)
+    if ($null -eq $Gpu.ComputeCapability -or [double]$Gpu.ComputeCapability -lt 8.0) {
+        throw "Automatic Unlimited-OCR-2 deployment requires an NVIDIA Ampere-or-newer GPU (sm80+) for the BF16 CUDA 13 runtime. Older/unknown GPUs, AMD, Intel and CPU-only PCs should use the existing PP-OCRv6 CPU entry or an external OCR server."
+    }
+    try { $driver = [version]$DriverVersion.Trim() }
+    catch { throw "Cannot validate the NVIDIA driver version. Update the driver before deploying Unlimited-OCR-2." }
+    if ($driver -lt [version]'580.88') {
+        throw "The CUDA 13 automatic profile requires Windows NVIDIA driver 580.88 or newer. Detected $DriverVersion. Update the driver first."
+    }
+    if ($Gpu.TotalMiB -lt 11264) {
+        throw "The automatic Unlimited-OCR-2 profiles require a 12GB-or-larger GPU. This GPU has $($Gpu.TotalMiB) MiB. Use the existing PP-OCRv6 CPU/low-VRAM entry or an external OCR server."
+    }
+    $backend = $RequestedBackend.Trim().ToLowerInvariant()
+    if ($backend -eq 'auto') { $backend = if ($Gpu.TotalMiB -ge 15360) { 'sglang' } else { 'transformers' } }
+    if ($backend -notin @('sglang','transformers')) { throw "Unsupported Unlimited-OCR-2 backend: $RequestedBackend" }
+    if ($backend -eq 'sglang' -and $Gpu.TotalMiB -lt 15360) {
+        throw "The automatic SGLang profile requires a 16GB-or-larger GPU. Use -Backend transformers on this GPU."
+    }
+    $large = $Gpu.TotalMiB -ge 23040
+    $small = $Gpu.TotalMiB -lt 15360
+    return [pscustomobject]@{
+        Backend = $backend
+        ContextLength = $(if ($large) { 65536 } elseif ($small) { 16384 } else { 32768 })
+        MaxTokens = $(if ($large) { 57344 } elseif ($small) { 8192 } else { 28672 })
+        MemFraction = $(if ($large) { '0.70' } else { '0.65' })
+        PdfBatchSize = $(if ($large) { 10 } elseif ($small) { 2 } else { 5 })
+        SupportedBackends = $(if ($small) { 'transformers' } else { 'transformers,sglang' })
+        TotalMiB = $(if ($backend -eq 'sglang') { 15360 } else { 11264 })
+        FreeMiB = $(if ($backend -eq 'sglang') { 12288 } else { 8192 })
     }
 }
 
@@ -330,7 +390,10 @@ function Get-ModelGpuRequirement {
     switch ($ModelId) {
         "paddleocr-vl-1.6" { return [pscustomobject]@{ TotalMiB = 11264; FreeMiB = 6656 } }
         "pp-ocrv6" { return [pscustomobject]@{ TotalMiB = 4096; FreeMiB = 4096 } }
-        "unlimited-ocr" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
+        "unlimited-ocr" {
+            if ($script:UnlimitedOcrHardwareProfile) { return $script:UnlimitedOcrHardwareProfile }
+            return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 }
+        }
         "ovisocr2" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
         "hpd-parsing" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
         "navidc-ocr" { return [pscustomobject]@{ TotalMiB = 7680; FreeMiB = 6656 } }
@@ -720,6 +783,21 @@ function New-RuntimeEnvFile {
     $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_MODEL_REVISION" -Value "9cf077c4b206e0e2a31879df937b0b0bcba3661c"
     $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -Value $script:UnlimitedOcrBackend
     $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_PRELOAD" -Value "1"
+    if ($script:UnlimitedOcrHardwareProfile) {
+        $profile = $script:UnlimitedOcrHardwareProfile
+        foreach ($entry in @{
+            UNLIMITED_OCR_CONTEXT_LENGTH = $profile.ContextLength
+            UNLIMITED_OCR_MAX_TOKENS = $profile.MaxTokens
+            UNLIMITED_OCR_SGLANG_MAX_TOKENS = $profile.MaxTokens
+            UNLIMITED_OCR_MEM_FRACTION_STATIC = $profile.MemFraction
+            UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE = $profile.PdfBatchSize
+            UNLIMITED_OCR_SUPPORTED_BACKENDS = $profile.SupportedBackends
+            UNLIMITED_OCR_MINIMUM_FREE_MIB = $profile.FreeMiB
+            PANDOCR_MAX_CONCURRENT_OCR = 1
+        }.GetEnumerator()) {
+            $lines = Set-EnvLine -Lines $lines -Key $entry.Key -Value ([string]$entry.Value)
+        }
+    }
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_UNLIMITED_OCR" -Value $(if ($script:DeployModelIds -contains "unlimited-ocr") { "1" } else { "0" })
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_OVISOCR2" -Value $(if ($script:RuntimeModelCatalogIds -contains "ovisocr2") { "1" } else { "0" })
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_HPD_PARSING" -Value $(if ($script:RuntimeModelCatalogIds -contains "hpd-parsing") { "1" } else { "0" })
@@ -1027,7 +1105,7 @@ try {
     Write-Host "Repository: $script:RepoRoot"
 
     Get-RequiredCommand -Name "docker" -InstallHint "Please install Docker Desktop and start it."
-    Get-RequiredCommand -Name "nvidia-smi" -InstallHint "Please install/update the NVIDIA driver."
+    Get-RequiredCommand -Name "nvidia-smi" -InstallHint "Please install/update the NVIDIA driver. AMD/Intel/CPU-only PCs should use the existing PP-OCRv6 CPU entry; this CUDA model cannot be automatically deployed there."
 
     Invoke-Checked -File "docker" -Arguments @("info", "--format", "{{.ServerVersion}}") -Description "Checking Docker Desktop"
     Invoke-Checked -File "docker" -Arguments @("compose", "version") -Description "Checking Docker Compose"
@@ -1057,11 +1135,28 @@ try {
     Write-Ok "Selected models to deploy now: $($script:DeployModelIds -join ', ')"
 
     $gpus = Get-GpuList
+    if ($AutoUnlimitedOcrHardware -and $GpuId -lt 0) {
+        $compatible = @($gpus | Where-Object { $null -ne $_.ComputeCapability -and $_.ComputeCapability -ge 8.0 -and $_.TotalMiB -ge 11264 })
+        if ($compatible.Count -gt 0) { $gpus = $compatible }
+    }
     $gpu = Select-Gpu -Gpus $gpus -RequestedGpuId $GpuId
     $script:SelectedGpu = $gpu
     Write-Ok ("Selected GPU {0}: {1}" -f $gpu.Index, $gpu.Name)
     if ($interactiveSelection -and $script:EnableUnlimitedOcr -and -not $script:UnlimitedOcrBackendExplicit) {
         Read-UnlimitedOcrBackendSelection -Gpu $gpu
+    }
+    if ($AutoUnlimitedOcrHardware -and $script:EnableUnlimitedOcr) {
+        $driverVersion = & nvidia-smi -i $gpu.Index --query-gpu=driver_version --format=csv,noheader,nounits
+        if ($LASTEXITCODE -ne 0) { throw "Could not read the NVIDIA driver version." }
+        $requestedBackend = if ($script:UnlimitedOcrBackendExplicit) { $script:UnlimitedOcrBackend } else { 'auto' }
+        $script:UnlimitedOcrHardwareProfile = Get-UnlimitedOcrHardwareProfile $gpu $requestedBackend ([string]$driverVersion)
+        $script:UnlimitedOcrBackend = $script:UnlimitedOcrHardwareProfile.Backend
+        $script:UnlimitedOcrBackendExplicit = $true
+        $dockerResources = & docker info --format '{{.OSType}}|{{.MemTotal}}'
+        $resourceParts = "$dockerResources" -split '\|', 2
+        if ($LASTEXITCODE -ne 0 -or $resourceParts[0] -ne 'linux') { throw "Unlimited-OCR-2 requires Docker Linux containers. Switch Docker Desktop to Linux containers." }
+        if ([long]$resourceParts[1] -lt 8GB) { throw "Docker/WSL has less than 8GB RAM. Increase its memory allocation before deploying Unlimited-OCR-2; 12GB or more is recommended." }
+        Write-Ok "Automatic hardware profile: $script:UnlimitedOcrBackend, context=$($script:UnlimitedOcrHardwareProfile.ContextLength), output=$($script:UnlimitedOcrHardwareProfile.MaxTokens), PDF batch=$($script:UnlimitedOcrHardwareProfile.PdfBatchSize)."
     }
     Apply-GpuSpecificBackendDefaults -Gpu $gpu
     if ($script:EnableUnlimitedOcr) {
@@ -1077,7 +1172,28 @@ try {
     if ($script:EnableUnlimitedOcr -and $script:UnlimitedOcrBackend -eq "sglang") {
         Test-GpuSupportsSglang -Gpu $gpu
     }
-    if ($gpu.FreeMiB -lt $gpuRequirement.FreeMiB) {
+    $canReuseManagedGpu = $false
+    if ($ReuseManagedGpu -and $gpu.FreeMiB -lt $gpuRequirement.FreeMiB) {
+        foreach ($containerName in @("unlimited-ocr-api", "unlimited-ocr-sglang", "paddleocr-vlm-server", "paddleocr-ocr-api", "ovisocr2-api", "hpd-parsing-server", "navidc-ocr-api")) {
+            try {
+                $inspection = & docker inspect --format '{{json .State}}|{{json .Config.Labels}}|{{json .Mounts}}' $containerName 2>$null
+                if ($LASTEXITCODE -ne 0) { continue }
+                $parts = "$inspection" -split '\|', 3
+                $state = $parts[0] | ConvertFrom-Json
+                $labels = $parts[1] | ConvertFrom-Json
+                $mounts = $parts[2] | ConvertFrom-Json
+                if (Test-ManagedGpuWorkspace $state $labels $mounts $script:RepoRoot) {
+                    $canReuseManagedGpu = $true
+                    break
+                }
+            }
+            catch { continue }
+        }
+    }
+    if ($canReuseManagedGpu) {
+        Write-Warn "An existing model from this project occupies VRAM. The controller will stop it and verify GPU release before starting the selected model."
+    }
+    elseif ($gpu.FreeMiB -lt $gpuRequirement.FreeMiB) {
         throw "GPU $($gpu.Index) has only $($gpu.FreeMiB) MiB free VRAM. Selected models ($selectedModelNames) require at least $($gpuRequirement.FreeMiB) MiB currently free. Close GPU-heavy apps or choose another GPU with -GpuId."
     }
 
@@ -1157,7 +1273,11 @@ try {
     }
 
     $gpuCheckService = Get-GpuCheckService
-    $gpuCheckCommand = if ($gpuCheckService -eq "hpd-parsing-server") {
+    $gpuCheckCommand = if ($AutoUnlimitedOcrHardware -and $script:EnableUnlimitedOcr) {
+        $cudaProbe = "import torch; assert torch.cuda.is_available(), 'CUDA GPU is unavailable in Docker'; assert torch.cuda.is_bf16_supported(), 'The selected GPU lacks native BF16'; x=torch.ones((16,16),device='cuda',dtype=torch.bfloat16); y=x@x; torch.cuda.synchronize(); print('CUDA BF16 probe passed:',torch.cuda.get_device_name(0),float(y[0,0]))"
+        @("run", "--pull", "never", "--rm", "--no-deps", "--entrypoint", "python", $gpuCheckService, "-c", $cudaProbe)
+    }
+    elseif ($gpuCheckService -eq "hpd-parsing-server") {
         @("run", "--pull", "never", "--rm", "--no-deps", "--entrypoint", "nvidia-smi", $gpuCheckService)
     }
     else {

@@ -45,6 +45,7 @@ window.PANDOCR_I18N = {
             '下一页': 'Next page',
             '缩小': 'Zoom out',
             '放大': 'Zoom in',
+            '适应宽度': 'Fit width',
             '解析模型': 'Parsing model',
             '解析结果': 'Parsing result',
             '开始解析': 'Start parsing',

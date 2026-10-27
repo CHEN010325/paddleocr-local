@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### CI 与依赖审计
+
+- 更新 DOMPurify 和 brace-expansion 的安全版本，同步浏览器使用的 DOMPurify 文件。
+- 更新 Pillow 至 13.0.0、pypdf 至 6.21.3；需要 Pillow 的独立 Python 适配镜像改用 Python 3.12。
+- macOS Unlimited-OCR 环境恢复安全的 Transformers 5.14.1 pin；官方 CUDA 环境保持隔离，原生 MPS 仍未验收。
+- 字体回退测试显式模拟损坏字体，避免 macOS 缺少预设系统字体时错误拦截 Pillow 的内置回退。
+
 ### Unlimited-OCR-2
 
 - 用第二代替换第一代，并加入 Windows/Linux 默认六模型目录；保留内部模型 ID 兼容已保存任务。

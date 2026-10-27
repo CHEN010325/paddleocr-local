@@ -231,10 +231,17 @@ def test_formula_fallback_skips_unreadable_font(monkeypatch):
     from PIL import ImageFont
     original = ImageFont.truetype
     calls = []
+    # Exercise a broken candidate on every OS, including macOS runners where
+    # none of the Linux/Windows font paths exist. Do not accidentally break
+    # Pillow's bundled fallback as the first truetype call instead.
+    candidate = ex.Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
+    monkeypatch.setattr(ex.Path, 'exists', lambda path: path == candidate)
     def broken_first(*args, **kwargs):
-        calls.append(True)
+        calls.append(args[0])
         if len(calls) == 1:
             raise OSError('font unavailable')
         return original(*args, **kwargs)
     monkeypatch.setattr(ImageFont, 'truetype', broken_first)
     assert ex._render_formula_text_image('x+y').width > 8
+    assert calls[0] == str(candidate)
+    assert len(calls) == 2

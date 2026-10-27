@@ -5,9 +5,9 @@ einops>=0.8.0
 timm>=1.0.0
 huggingface-hub>=0.36.0
 httpx==0.28.1
-Pillow==12.3.0
+Pillow==13.0.0
 pymupdf==1.27.2.2
-pypdf==6.16.1
+pypdf==6.21.3
 fastapi==0.140.0
 uvicorn==0.51.0
 python-multipart==0.0.32

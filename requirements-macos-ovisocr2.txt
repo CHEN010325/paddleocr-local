@@ -2,10 +2,10 @@ torch==2.13.0
 torchvision==0.28.0
 transformers==5.14.1
 # Single-device Transformers loading and MLX do not require Accelerate.
-Pillow==12.3.0
+Pillow==13.0.0
 pymupdf==1.27.2.2
 fastapi==0.140.0
 uvicorn==0.51.0
 python-multipart==0.0.32
-pypdf==6.16.1
+pypdf==6.21.3
 mlx-vlm==0.6.7

@@ -43,7 +43,7 @@ RUN python -m venv /opt/venv && \
       httpx==0.28.1 \
       pydantic==2.11.10 \
       python-multipart==0.0.32 \
-      Pillow==12.3.0
+      Pillow==13.0.0
 
 WORKDIR /app
 COPY unlimited_ocr_adapter.py /app/unlimited_ocr_adapter.py

@@ -3,7 +3,7 @@ x-unlimited-ocr-transformers-image: &unlimited-ocr-transformers-image
   build:
     context: .
     dockerfile: Dockerfile.unlimited-ocr
-  image: pandocr-unlimited-ocr-transformers:latest
+  image: pandocr-unlimited-ocr2-transformers:latest
 
 x-unlimited-ocr-sglang-image: &unlimited-ocr-sglang-image
   pull_policy: build
@@ -11,9 +11,9 @@ x-unlimited-ocr-sglang-image: &unlimited-ocr-sglang-image
     context: .
     dockerfile: Dockerfile.unlimited-ocr-sglang
     args:
-      CUDA_BASE_IMAGE: ${UNLIMITED_OCR_SGLANG_CUDA_BASE_IMAGE:-nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04@sha256:a2e1e2360c85298ac47ec2543b406ab1e8cec42e31ee47e4d32140ebc82e1067}
-      UNLIMITED_OCR_SGLANG_WHEEL_URL: ${UNLIMITED_OCR_SGLANG_WHEEL_URL:-https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5}
-  image: pandocr-unlimited-ocr-sglang:latest
+      CUDA_BASE_IMAGE: ${UNLIMITED_OCR_SGLANG_CUDA_BASE_IMAGE:-nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04@sha256:e071e85c52ad91fc9ea24158ff5330876b2d1a5c4ac83ccc6066976835873c01}
+      UNLIMITED_OCR_SGLANG_WHEEL_URL: ${UNLIMITED_OCR_SGLANG_WHEEL_URL:-https://huggingface.co/baidu/Unlimited-OCR-2/resolve/9cf077c4b206e0e2a31879df937b0b0bcba3661c/wheel/sglang-0.5.20.dev10%2Bg8d62f5fb9c-py3-none-any.whl?download=true#sha256=a3f3e2c94e09de90b61b43d01475fd5d1aa818d16eec05204b8079c09c2ba70d}
+  image: pandocr-unlimited-ocr2-sglang:latest
 
 x-ovisocr2-image: &ovisocr2-image
   pull_policy: build
@@ -75,19 +75,23 @@ services:
       - API_IMAGE_TAG_SUFFIX=${API_IMAGE_TAG_SUFFIX:-latest-nvidia-gpu-offline}
       - VLM_IMAGE_DIGEST=${VLM_IMAGE_DIGEST:-}
       - API_IMAGE_DIGEST=${API_IMAGE_DIGEST:-}
-      - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
+      - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-1}
       - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-1}
       - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-1}
       - PANDOCR_ENABLE_NAVIDC_OCR=${PANDOCR_ENABLE_NAVIDC_OCR:-1}
       # Keep the WebUI catalog in sync with the controller catalog. Without
       # these values the dropdown silently falls back to two default models.
-      - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-paddleocr-vl-1.6,pp-ocrv6,ovisocr2,hpd-parsing,navidc-ocr}
+      - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-paddleocr-vl-1.6,pp-ocrv6,unlimited-ocr,ovisocr2,hpd-parsing,navidc-ocr}
       - UNLIMITED_OCR_BACKEND=${UNLIMITED_OCR_BACKEND:-transformers}
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
       - UNLIMITED_OCR_API_PORT=${UNLIMITED_OCR_API_PORT:-8083}
       - UNLIMITED_OCR_SGLANG_PORT=${UNLIMITED_OCR_SGLANG_PORT:-10000}
-      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
-      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
+      - UNLIMITED_OCR_CONTEXT_LENGTH=${UNLIMITED_OCR_CONTEXT_LENGTH:-131072}
+      - UNLIMITED_OCR_MEM_FRACTION_STATIC=${UNLIMITED_OCR_MEM_FRACTION_STATIC:-0.7}
+      - UNLIMITED_OCR_MAX_TOKENS=${UNLIMITED_OCR_MAX_TOKENS:-8192}
+      - UNLIMITED_OCR_SGLANG_MAX_TOKENS=${UNLIMITED_OCR_SGLANG_MAX_TOKENS:-8192}
+      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
       - UNLIMITED_OCR_MAX_RENDER_PIXELS=${UNLIMITED_OCR_MAX_RENDER_PIXELS:-60000000}
       - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
       - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
@@ -283,6 +287,18 @@ services:
     environment:
       - HF_HOME=/root/.cache/huggingface
       - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
+      - SGLANG_UOCR_EANABLE_DOC_LIMIT=1
+      - SGLANG_UOCR_DOC_GUNDAM_PAGE_WINDOW=10
+      - SGLANG_UOCR_DOC_BASE_PAGE_WINDOW=10
+      - SGLANG_UOCR_MAX_PAGE_TOKENS=20000
+      - SGLANG_OPT_UOCR_SAM_REL_POS_BIAS_MB=64
+      - SGLANG_UOCR_SHM_WRAP_MODEL_DATA=1
+      - SGLANG_UOCR_SHM_WRAP_MIN_MB=1
+      - SGLANG_VLM_CACHE_SIZE_MB=0
+      # Required with disabled CUDA Graph: keep eager decode position updates.
+      - SGLANG_UOCR_GRAPH_METADATA_REFRESH=0
+      - SGLANG_UOCR_GRAPH_METADATA_INPUTS=0
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     deploy:
       resources:
         reservations:
@@ -297,15 +313,21 @@ services:
       - ./model_cache_unlimited_ocr:/root/.cache/huggingface
     command: >
       python3 -m sglang.launch_server
-      --model ${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
-      --revision ${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
-      --served-model-name ${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR}
-      --attention-backend ${UNLIMITED_OCR_ATTENTION_BACKEND:-flashinfer}
-      --page-size ${UNLIMITED_OCR_PAGE_SIZE:-1}
-      --mem-fraction-static ${UNLIMITED_OCR_MEM_FRACTION_STATIC:-0.8}
-      --context-length ${UNLIMITED_OCR_CONTEXT_LENGTH:-32768}
+      --model-path ${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
+      --revision ${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
+      --served-model-name ${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR-2}
+      --chat-template unlimited-ocr
+      --tokenizer-backend fastokens
+      --mem-fraction-static ${UNLIMITED_OCR_MEM_FRACTION_STATIC:-0.7}
+      --context-length ${UNLIMITED_OCR_CONTEXT_LENGTH:-131072}
       --enable-custom-logit-processor
-      --disable-overlap-schedule
+      --enable-streaming-session
+      --allow-auto-truncate
+      --disable-radix-cache
+      --mm-preprocess-cache-size-mb 0
+      --max-running-requests 1
+      --max-prefill-tokens 2048
+      --disable-cuda-graph
       --skip-server-warmup
       --host 0.0.0.0
       --port 10000
@@ -329,9 +351,9 @@ services:
       - UNLIMITED_OCR_BACKEND=${UNLIMITED_OCR_BACKEND:-transformers}
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
       - UNLIMITED_OCR_SGLANG_URL=http://unlimited-ocr-sglang:10000
-      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
-      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
-      - UNLIMITED_OCR_SERVED_MODEL_NAME=${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR}
+      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
+      - UNLIMITED_OCR_SERVED_MODEL_NAME=${UNLIMITED_OCR_SERVED_MODEL_NAME:-Unlimited-OCR-2}
       - UNLIMITED_OCR_REQUEST_TIMEOUT=${UNLIMITED_OCR_REQUEST_TIMEOUT:-1200}
       - UNLIMITED_OCR_PDF_DPI=${UNLIMITED_OCR_PDF_DPI:-300}
       - UNLIMITED_OCR_MAX_PAGES_PER_REQUEST=${UNLIMITED_OCR_MAX_PAGES_PER_REQUEST:-50}
@@ -339,9 +361,8 @@ services:
       - UNLIMITED_OCR_SINGLE_IMAGE_MODE=${UNLIMITED_OCR_SINGLE_IMAGE_MODE:-gundam}
       - UNLIMITED_OCR_MULTI_IMAGE_MODE=${UNLIMITED_OCR_MULTI_IMAGE_MODE:-base}
       - UNLIMITED_OCR_SGLANG_PDF_DPI=${UNLIMITED_OCR_SGLANG_PDF_DPI:-96}
-      # The bundled custom no-repeat processor can over-constrain dense
-      # tables/equations; the bounded detector/retry handles those safely.
-      - UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR=${UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR:-0}
+      - UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR=${UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR:-1}
+      - UNLIMITED_OCR_CONTEXT_LENGTH=${UNLIMITED_OCR_CONTEXT_LENGTH:-131072}
       # Keep completion bounded: long PDF pages otherwise have enough room to
       # enter a repeated decoder trace after the real document is complete.
       - UNLIMITED_OCR_MAX_TOKENS=${UNLIMITED_OCR_MAX_TOKENS:-8192}
@@ -357,6 +378,7 @@ services:
     user: root
     restart: unless-stopped
     volumes:
+      - ./unlimited_ocr_adapter.py:/app/unlimited_ocr_adapter.py:ro
       - ./model_cache_unlimited_ocr:/root/.cache/huggingface
       - ./data:/app/data
     command: uvicorn unlimited_ocr_adapter:app --host 0.0.0.0 --port 8080
@@ -555,18 +577,19 @@ services:
       - UNLIMITED_OCR_PRELOAD=${UNLIMITED_OCR_PRELOAD:-1}
       - UNLIMITED_OCR_API_PORT=${UNLIMITED_OCR_API_PORT:-8083}
       - UNLIMITED_OCR_SGLANG_PORT=${UNLIMITED_OCR_SGLANG_PORT:-10000}
-      - UNLIMITED_OCR_ATTENTION_BACKEND=${UNLIMITED_OCR_ATTENTION_BACKEND:-flashinfer}
+      - UNLIMITED_OCR_CONTEXT_LENGTH=${UNLIMITED_OCR_CONTEXT_LENGTH:-131072}
+      - UNLIMITED_OCR_MEM_FRACTION_STATIC=${UNLIMITED_OCR_MEM_FRACTION_STATIC:-0.7}
       - UNLIMITED_OCR_MAX_TOKENS=${UNLIMITED_OCR_MAX_TOKENS:-8192}
       - UNLIMITED_OCR_SGLANG_MAX_TOKENS=${UNLIMITED_OCR_SGLANG_MAX_TOKENS:-8192}
-      - UNLIMITED_OCR_SGLANG_WHEEL_URL=${UNLIMITED_OCR_SGLANG_WHEEL_URL:-https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5}
+      - UNLIMITED_OCR_SGLANG_WHEEL_URL=${UNLIMITED_OCR_SGLANG_WHEEL_URL:-https://huggingface.co/baidu/Unlimited-OCR-2/resolve/9cf077c4b206e0e2a31879df937b0b0bcba3661c/wheel/sglang-0.5.20.dev10%2Bg8d62f5fb9c-py3-none-any.whl?download=true#sha256=a3f3e2c94e09de90b61b43d01475fd5d1aa818d16eec05204b8079c09c2ba70d}
       - PADDLEOCR_VL_MODEL_NAME=${PADDLEOCR_VL_MODEL_NAME:-PaddleOCR-VL-1.6-0.9B}
       - PANDOCR_VLLM_MIN_TOTAL_MIB=${PANDOCR_VLLM_MIN_TOTAL_MIB:-11264}
       - PANDOCR_VLLM_MIN_REQUIRED_MIB=${PANDOCR_VLLM_MIN_REQUIRED_MIB:-6656}
       - PANDOCR_VLLM_RESERVE_MIB=${PANDOCR_VLLM_RESERVE_MIB:-512}
       - PANDOCR_VLLM_MAX_RATIO=${PANDOCR_VLLM_MAX_RATIO:-0.88}
       - PPOCR_V6_MODEL_NAME=${PPOCR_V6_MODEL_NAME:-PP-OCRv6_medium}
-      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}
-      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}
+      - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
+      - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
       - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
       - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
       - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
@@ -589,11 +612,11 @@ services:
       - HPD_PARSING_GPU_MEMORY_UTILIZATION=${HPD_PARSING_GPU_MEMORY_UTILIZATION:-auto}
       - HPD_PARSING_GPU_MEMORY_TARGET_MIB=${HPD_PARSING_GPU_MEMORY_TARGET_MIB:-6656}
       - HPD_PARSING_REQUEST_TIMEOUT=${HPD_PARSING_REQUEST_TIMEOUT:-1200}
-      - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-0}
+      - PANDOCR_ENABLE_UNLIMITED_OCR=${PANDOCR_ENABLE_UNLIMITED_OCR:-1}
       - PANDOCR_ENABLE_OVISOCR2=${PANDOCR_ENABLE_OVISOCR2:-1}
       - PANDOCR_ENABLE_HPD_PARSING=${PANDOCR_ENABLE_HPD_PARSING:-1}
       - PANDOCR_ENABLE_NAVIDC_OCR=${PANDOCR_ENABLE_NAVIDC_OCR:-1}
-      - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-paddleocr-vl-1.6,pp-ocrv6,ovisocr2,hpd-parsing,navidc-ocr}
+      - PANDOCR_MODEL_CATALOG=${PANDOCR_MODEL_CATALOG:-paddleocr-vl-1.6,pp-ocrv6,unlimited-ocr,ovisocr2,hpd-parsing,navidc-ocr}
       - PADDLE_REQUEST_TIMEOUT=${PADDLE_REQUEST_TIMEOUT:-3600}
       - PANDOCR_MODEL_CONTROL=remote
       - PANDOCR_MODEL_CONTROLLER_URL=http://pandocr-controller:8001

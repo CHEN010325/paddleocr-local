@@ -136,8 +136,8 @@ PADDLE_OCR_HOST="${PADDLE_OCR_HOST:-127.0.0.1}"
 PADDLE_OCR_PORT="${PADDLE_OCR_PORT:-8082}"
 UNLIMITED_OCR_HOST="${UNLIMITED_OCR_HOST:-127.0.0.1}"
 UNLIMITED_OCR_API_PORT="${UNLIMITED_OCR_API_PORT:-8083}"
-UNLIMITED_OCR_MODEL_NAME="${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}"
-UNLIMITED_OCR_MODEL_REVISION="${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}"
+UNLIMITED_OCR_MODEL_NAME="${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}"
+UNLIMITED_OCR_MODEL_REVISION="${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}"
 UNLIMITED_OCR_BACKEND="${UNLIMITED_OCR_BACKEND:-transformers}"
 UNLIMITED_OCR_SUPPORTED_BACKENDS="${UNLIMITED_OCR_SUPPORTED_BACKENDS:-transformers}"
 UNLIMITED_OCR_PRELOAD="${UNLIMITED_OCR_PRELOAD:-0}"
@@ -503,17 +503,17 @@ fi
 
 if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
   if [[ ! -x "$UNLIMITED_OCR_MACOS_VENV/bin/python" ]]; then
-    echo "Unlimited-OCR virtual environment not found: $UNLIMITED_OCR_MACOS_VENV"
+    echo "Unlimited-OCR-2 virtual environment not found: $UNLIMITED_OCR_MACOS_VENV"
     echo "Run: bash scripts/setup-macos-unlimited-ocr.sh"
     exit 1
   fi
 
   mkdir -p "$UNLIMITED_OCR_HF_HOME"
   if is_expected_process run/unlimited-ocr.pid "unlimited_ocr_adapter:app"; then
-    echo "Unlimited-OCR adapter already running: $(cat run/unlimited-ocr.pid)"
+    echo "Unlimited-OCR-2 adapter already running: $(cat run/unlimited-ocr.pid)"
   else
     rm -f run/unlimited-ocr.pid
-    echo "Starting Unlimited-OCR adapter on ${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT} with ${UNLIMITED_OCR_MODEL_NAME}"
+    echo "Starting Unlimited-OCR-2 adapter on ${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT} with ${UNLIMITED_OCR_MODEL_NAME}"
     : > logs/unlimited-ocr.log
     HF_HOME="$UNLIMITED_OCR_HF_HOME" \
     HF_HUB_DISABLE_XET="$UNLIMITED_OCR_DISABLE_XET" \
@@ -544,7 +544,7 @@ if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
         > run/unlimited-ocr.pid
   fi
 
-  wait_for_http "http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health" "Unlimited-OCR adapter" || {
+  wait_for_http "http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health" "Unlimited-OCR-2 adapter" || {
     tail -n 100 logs/unlimited-ocr.log || true
     exit 1
   }
@@ -701,7 +701,7 @@ if truthy "$PANDOCR_ENABLE_PPOCRV6"; then
   echo "PP-OCRv6 API: http://${PADDLE_OCR_HOST}:${PADDLE_OCR_PORT}"
 fi
 if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  echo "Unlimited-OCR API: http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}"
+  echo "Unlimited-OCR-2 API: http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}"
 fi
 if truthy "$PANDOCR_ENABLE_PADDLEOCR_VL" && [[ "$PANDOCR_MACOS_BACKEND" == "mlx" ]]; then
   echo "MLX-VLM: http://${MLX_HOST}:${MLX_PORT}"

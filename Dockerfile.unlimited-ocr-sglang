@@ -1,7 +1,6 @@
-# CUDA 12.9 is the first toolkit line that can compile FlashInfer kernels for
-# Blackwell consumer GPUs (SM120). Keep the digest pinned so an upstream tag
-# move cannot silently reintroduce an older, incompatible toolkit.
-ARG CUDA_BASE_IMAGE=nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04@sha256:a2e1e2360c85298ac47ec2543b406ab1e8cec42e31ee47e4d32140ebc82e1067
+# The official OCR-2 SGLang wheel uses CUDA 13 kernels. Pin the toolkit
+# and artifact together, including Blackwell consumer GPU support.
+ARG CUDA_BASE_IMAGE=nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04@sha256:e071e85c52ad91fc9ea24158ff5330876b2d1a5c4ac83ccc6066976835873c01
 FROM ${CUDA_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -25,13 +24,14 @@ RUN apt-get update && \
       python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-ARG UNLIMITED_OCR_SGLANG_WHEEL_URL=https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5
+ARG UNLIMITED_OCR_SGLANG_WHEEL_URL=https://huggingface.co/baidu/Unlimited-OCR-2/resolve/9cf077c4b206e0e2a31879df937b0b0bcba3661c/wheel/sglang-0.5.20.dev10%2Bg8d62f5fb9c-py3-none-any.whl?download=true#sha256=a3f3e2c94e09de90b61b43d01475fd5d1aa818d16eec05204b8079c09c2ba70d
 
 RUN python -m venv /opt/venv && \
     pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
       "${UNLIMITED_OCR_SGLANG_WHEEL_URL}" \
-      kernels==0.11.7 \
+      kernels==0.14.1 \
+      fastokens==0.3.2 \
       pymupdf==1.27.2.2 \
       fastapi==0.136.1 \
       uvicorn==0.46.0 \

@@ -77,6 +77,8 @@ def test_windows_one_click_profiles_and_wait_guard_cover_all_models():
     script = read("scripts/windows-one-click.ps1")
     for profile in ("paddleocr-vl", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"):
         assert f'@("--profile", "{profile}")' in script
+    assert '@("run", "--pull", "never", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")' in script
+    assert '$createArguments += @("--pull", "never")' in script
     for model_id in ("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"):
         assert f'$running.Add("{model_id}")' in script
     assert "$runningLogicalModels.Count -gt 1" in script
@@ -215,17 +217,17 @@ def test_unlimited_ocr_sglang_wheel_uses_immutable_verified_upstream_artifact():
     compose = read("docker-compose.yml")
     server = read("server.py")
     for content in (dockerfile, compose, server):
-        assert "huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/" in content
-        assert "#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5" in content
+        assert "huggingface.co/baidu/Unlimited-OCR-2/resolve/9cf077c4b206e0e2a31879df937b0b0bcba3661c/" in content
+        assert "#sha256=a3f3e2c94e09de90b61b43d01475fd5d1aa818d16eec05204b8079c09c2ba70d" in content
         assert "/resolve/main/" not in content
 
 
-def test_unlimited_ocr_sglang_uses_digest_pinned_cuda_12_9_for_sm120():
+def test_unlimited_ocr_sglang_uses_digest_pinned_cuda_13_for_sm120():
     dockerfile = read("Dockerfile.unlimited-ocr-sglang")
     compose = read("docker-compose.yml")
     expected_image = (
-        "nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04@"
-        "sha256:a2e1e2360c85298ac47ec2543b406ab1e8cec42e31ee47e4d32140ebc82e1067"
+        "nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04@"
+        "sha256:e071e85c52ad91fc9ea24158ff5330876b2d1a5c4ac83ccc6066976835873c01"
     )
     assert expected_image in dockerfile
     assert expected_image in compose
@@ -263,9 +265,9 @@ def test_macos_launcher_requires_exactly_one_model():
     assert 'unlimited_ocr_adapter:app' in script
     assert 'UNLIMITED_OCR_SERVICE_URL=' in script
     assert 'PANDOCR_ENABLE_UNLIMITED_OCR="${PANDOCR_ENABLE_UNLIMITED_OCR:-0}"' in test_macos
-    assert 'Testing Unlimited-OCR adapter health' in test_macos
+    assert 'Testing Unlimited-OCR-2 adapter health' in test_macos
     assert 'http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health' in test_macos
-    assert 'Unlimited-OCR is missing from /api/models' in test_macos
+    assert 'Unlimited-OCR-2 is missing from /api/models' in test_macos
     assert 'PANDOCR_MACOS_BACKEND="$PANDOCR_MACOS_BACKEND"' in one_click
     assert 'PANDOCR_ENABLE_UNLIMITED_OCR=1' in one_click
     assert 'unlimited-ocr' in controller.split('MODEL_IDS =', 1)[1].split('\n', 1)[0]

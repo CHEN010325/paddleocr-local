@@ -76,7 +76,7 @@ def test_cpu_compose_has_no_gpu_or_controller_dependency():
     assert env["PADDLE_OCR_SERVICE_URL"] == "http://ocr:8080/ocr"
 
 
-def test_default_docker_catalog_remains_five_managed_models(tmp_path):
+def test_default_docker_catalog_exposes_six_managed_models(tmp_path):
     docker = shutil.which("docker")
     if not docker:
         pytest.skip("Docker CLI unavailable")
@@ -87,7 +87,7 @@ def test_default_docker_catalog_remains_five_managed_models(tmp_path):
          str(ROOT / "docker-compose.yml"), "config", "--format", "json"],
         env=env, capture_output=True, text=True, check=True)
     services = json.loads(result.stdout)["services"]
-    expected = ["paddleocr-vl-1.6", "pp-ocrv6", "ovisocr2", "hpd-parsing", "navidc-ocr"]
+    expected = ["paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"]
     for name in ("pandocr-web", "pandocr-controller"):
         settings = services[name]["environment"]
         assert settings["PANDOCR_MODEL_CATALOG"].split(",") == expected

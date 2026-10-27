@@ -51,11 +51,11 @@ if truthy "$PANDOCR_ENABLE_PPOCRV6"; then
 fi
 
 if truthy "$PANDOCR_ENABLE_UNLIMITED_OCR"; then
-  echo "Testing Unlimited-OCR adapter health..."
+  echo "Testing Unlimited-OCR-2 adapter health..."
   curl -fsS "http://${UNLIMITED_OCR_HOST}:${UNLIMITED_OCR_API_PORT}/health"
   echo
 
-  echo "Checking WebUI model catalog includes Unlimited-OCR..."
+  echo "Checking WebUI model catalog includes Unlimited-OCR-2..."
   python - "$PANDOCR_HOST" "$PANDOCR_PORT" <<'PY'
 import json
 import sys
@@ -66,8 +66,8 @@ with urllib.request.urlopen(f"http://{host}:{port}/api/models", timeout=5) as re
     payload = json.load(response)
 ids = {item.get("id") for item in payload.get("data", [])}
 if "unlimited-ocr" not in ids:
-    raise SystemExit("Unlimited-OCR is missing from /api/models")
-print("Unlimited-OCR model catalog OK")
+    raise SystemExit("Unlimited-OCR-2 is missing from /api/models")
+print("Unlimited-OCR-2 model catalog OK")
 PY
 fi
 

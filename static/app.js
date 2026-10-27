@@ -9,7 +9,7 @@ const UNLIMITED_OCR_COORDINATE_SIZE = 1000;
 const HPD_PARSING_COORDINATE_SIZE = 1000;
 const UNLIMITED_OCR_BACKENDS = ['transformers', 'sglang'];
 const STREAM_RENDER_MIN_INTERVAL_MS = 140;
-const STREAM_STATUS_MARKDOWN_RE = /^\s*\*\*Unlimited-OCR status\*\*/i;
+const STREAM_STATUS_MARKDOWN_RE = /^\s*\*\*Unlimited-OCR-2 status\*\*/i;
 const PDF_BATCH_SIZE_STORAGE_KEY = 'pandocr.pdfBatchSize';
 const MODEL_STORAGE_KEY = 'pandocr.selectedModelId';
 const API_TOKEN_STORAGE_KEY = 'pandocr.apiToken';
@@ -855,13 +855,13 @@ function requestModelDeploymentOptions(model) {
     if (model?.id !== UNLIMITED_OCR_MODEL_ID) return {};
 
     const input = window.prompt(
-        t('请输入 Unlimited-OCR 后端：transformers 或 sglang'),
+        t('请输入 Unlimited-OCR-2 后端：transformers 或 sglang'),
         selectedUnlimitedOcrBackend
     );
     if (input === null) return null;
     const backend = parseUnlimitedOcrBackendInput(input);
     if (!backend) {
-        alert(t('不支持的 Unlimited-OCR 后端，请输入 transformers 或 sglang。'));
+        alert(t('不支持的 Unlimited-OCR-2 后端，请输入 transformers 或 sglang。'));
         return null;
     }
     selectedUnlimitedOcrBackend = backend;
@@ -1136,7 +1136,7 @@ async function switchUnlimitedOcrBackend(backend) {
     } catch (error) {
         console.error(error);
         els.statusDot.className = 'dot error';
-        els.statusText.textContent = t('Unlimited-OCR 后端切换失败');
+        els.statusText.textContent = t('Unlimited-OCR-2 后端切换失败');
         return false;
     } finally {
         unlimitedOcrBackendSwitchInFlight = false;
@@ -3131,7 +3131,7 @@ function isStreamStatusMarkdown(markdown) {
 
 function stripStreamStatusMarkdown(markdown) {
     return String(markdown || '')
-        .replace(/(?:^|\n{2,})\s*\*\*Unlimited-OCR status\*\*\s*\n+\s*[^\n]*(?=\n{2,}|$)/gi, '\n\n')
+        .replace(/(?:^|\n{2,})\s*\*\*Unlimited-OCR-2 status\*\*\s*\n+\s*[^\n]*(?=\n{2,}|$)/gi, '\n\n')
         .trim();
 }
 
@@ -3333,7 +3333,7 @@ async function callStreamingUnlimitedOCR(batch, task, formData, model, signal = 
                 continue;
             }
             if (event.type === 'error') {
-                throw new Error(event.detail || 'Unlimited-OCR stream failed');
+                throw new Error(event.detail || 'Unlimited-OCR-2 stream failed');
             }
             if (event.type === 'progress' && typeof event.markdown === 'string') {
                 const isPlaceholder = event.placeholder === true;
@@ -3372,7 +3372,7 @@ async function callStreamingUnlimitedOCR(batch, task, formData, model, signal = 
             batch._streamStatus = event.message || '';
         }
         if (event?.type === 'error') {
-            throw new Error(event.detail || 'Unlimited-OCR stream failed');
+            throw new Error(event.detail || 'Unlimited-OCR-2 stream failed');
         }
         if (event?.type === 'final' && event.result) {
             finalResult = event.result;
@@ -5460,7 +5460,7 @@ function getConfiguredPdfBatchSize() {
 }
 
 function getPdfBatchSizeForModel(modelId = selectedModelId) {
-    // Unlimited-OCR's long-horizon R-SWA state can enter a repetition loop on
+    // Unlimited-OCR-2's long-horizon R-SWA state can enter a repetition loop on
     // dense multi-page PDFs. Keep WebUI requests page-local so each page gets
     // a fresh vision/decode context; the API/CLI may still use multi-page mode.
     if (modelId === UNLIMITED_OCR_MODEL_ID) return UNLIMITED_OCR_RECOMMENDED_PDF_BATCH_SIZE;

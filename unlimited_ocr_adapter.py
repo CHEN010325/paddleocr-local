@@ -27,7 +27,7 @@ def parse_bool_env(name: str, default: str = "0") -> bool:
 
 
 SGLANG_URL = os.getenv("UNLIMITED_OCR_SGLANG_URL", "http://unlimited-ocr-sglang:10000").rstrip("/")
-SERVED_MODEL_NAME = os.getenv("UNLIMITED_OCR_SERVED_MODEL_NAME", "Unlimited-OCR")
+SERVED_MODEL_NAME = os.getenv("UNLIMITED_OCR_SERVED_MODEL_NAME", "Unlimited-OCR-2")
 KNOWN_BACKENDS = {"transformers", "sglang"}
 SUPPORTED_BACKENDS = {
     item.strip().lower()
@@ -43,7 +43,7 @@ def normalize_backend(value: Any, fallback: str = "transformers") -> str:
         if fallback_backend in SUPPORTED_BACKENDS:
             return fallback_backend
         supported = ", ".join(sorted(SUPPORTED_BACKENDS))
-        raise HTTPException(status_code=400, detail=f"Unsupported Unlimited-OCR backend. Use one of: {supported}.")
+        raise HTTPException(status_code=400, detail=f"Unsupported Unlimited-OCR-2 backend. Use one of: {supported}.")
     return backend
 
 
@@ -65,10 +65,9 @@ def read_persisted_backend(default: str) -> str:
 
 DEFAULT_BACKEND = read_persisted_backend(normalize_backend(os.getenv("UNLIMITED_OCR_BACKEND", "transformers")))
 BACKEND = DEFAULT_BACKEND
-MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR")
+MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR-2")
 DEFAULT_MODEL_REVISIONS = {
-    "baidu/Unlimited-OCR": "07dea832e22aefee32ad281d4b80551282e1c168",
-    "sabafallah/Unlimited-OCR-Universal": "bc00ae36def7fe8d23980adf5a901125fe0040a2",
+    "baidu/Unlimited-OCR-2": "9cf077c4b206e0e2a31879df937b0b0bcba3661c",
 }
 MODEL_REVISION = os.getenv("UNLIMITED_OCR_MODEL_REVISION", DEFAULT_MODEL_REVISIONS.get(MODEL_NAME, "main"))
 REQUEST_TIMEOUT = float(os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200"))
@@ -79,7 +78,7 @@ MAX_RENDER_PIXELS = int(os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000")
 SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
 SGLANG_PDF_MAX_DIMENSION = int(os.getenv("UNLIMITED_OCR_SGLANG_PDF_MAX_DIMENSION", "1120"))
-SINGLE_PROMPT = os.getenv("UNLIMITED_OCR_SINGLE_PROMPT", "document parsing.")
+SINGLE_PROMPT = os.getenv("UNLIMITED_OCR_SINGLE_PROMPT", "Multi page parsing.")
 MULTI_PROMPT = os.getenv("UNLIMITED_OCR_MULTI_PROMPT", "Multi page parsing.")
 NO_REPEAT_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35"))
 SINGLE_NGRAM_WINDOW = int(os.getenv("UNLIMITED_OCR_SINGLE_NGRAM_WINDOW", "128"))
@@ -97,6 +96,8 @@ TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS = int(
     os.getenv("UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS", str(min(MAX_TOKENS, 4096)))
 )
 SGLANG_MAX_TOKENS = int(os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", str(max(1, MAX_TOKENS - 4096))))
+CONTEXT_LENGTH = int(os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "131072"))
+MAX_PAGE_TOKENS = int(os.getenv("UNLIMITED_OCR_MAX_PAGE_TOKENS", "20000"))
 SGLANG_CONTEXT_TOKEN_RESERVE = int(os.getenv("UNLIMITED_OCR_SGLANG_CONTEXT_TOKEN_RESERVE", "128"))
 ENABLE_DEGENERATION_GUARD = os.getenv("UNLIMITED_OCR_ENABLE_DEGENERATION_GUARD", "1").strip().lower() not in {
     "0",
@@ -112,7 +113,7 @@ DEGENERATION_REPEAT_MAX_EXTRA_GAP = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RE
 DEGENERATION_WINDOW_CHARS = int(os.getenv("UNLIMITED_OCR_DEGENERATION_WINDOW_CHARS", "4000"))
 DEGENERATION_RETRY_NGRAM_SIZE = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_NGRAM_SIZE", "8"))
 DEGENERATION_RETRY_WINDOW = int(os.getenv("UNLIMITED_OCR_DEGENERATION_RETRY_WINDOW", "512"))
-ENABLE_NO_REPEAT_PROCESSOR = os.getenv("UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR", "0").strip().lower() not in {
+ENABLE_NO_REPEAT_PROCESSOR = os.getenv("UNLIMITED_OCR_ENABLE_NO_REPEAT_PROCESSOR", "1").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -163,7 +164,7 @@ def transformers_runtime_label() -> str:
 
 
 def transformers_status_markdown(message: str) -> str:
-    return f"**Unlimited-OCR status**\n\n{message}"
+    return f"**Unlimited-OCR-2 status**\n\n{message}"
 
 
 def is_accelerator_oom(error: BaseException) -> bool:
@@ -172,20 +173,20 @@ def is_accelerator_oom(error: BaseException) -> bool:
 
 
 def transformers_error_detail(error: BaseException) -> str:
-    global TRANSFORMERS_MODEL_ERROR
     detail = str(error) or error.__class__.__name__
-    TRANSFORMERS_MODEL_ERROR = detail
+    # Request failures (including malformed images) do not invalidate loaded
+    # weights. Only model initialization failures belong in health.modelError.
 
     if is_accelerator_oom(error):
         cleanup_torch_accelerator_cache()
         if "mps" in detail.lower():
             return (
-                "Unlimited-OCR Transformers ran out of Apple Silicon MPS memory. "
+                "Unlimited-OCR-2 Transformers ran out of Apple Silicon MPS memory. "
                 f"Current settings: PDF_DPI={PDF_DPI}, MAX_TOKENS={MAX_TOKENS}. "
                 "Retry the batch after lowering UNLIMITED_OCR_PDF_DPI or UNLIMITED_OCR_MAX_TOKENS. "
                 f"Original error: {detail}"
             )
-        return f"Unlimited-OCR Transformers ran out of accelerator memory. Original error: {detail}"
+        return f"Unlimited-OCR-2 Transformers ran out of accelerator memory. Original error: {detail}"
 
     return detail
 
@@ -201,7 +202,7 @@ async def lifespan(_: FastAPI):
             preload_task.cancel()
 
 
-app = FastAPI(title="Unlimited-OCR Adapter", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Unlimited-OCR-2 Adapter", version="0.1.0", lifespan=lifespan)
 
 DET_BLOCK_RE = re.compile(r"<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|/det\|>")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z-]+|\d+")
@@ -308,7 +309,7 @@ def pdf_to_png_pages(file_bytes: bytes, dpi: int) -> list[bytes]:
         if document.page_count > MAX_PAGES_PER_REQUEST:
             raise HTTPException(
                 status_code=413,
-                detail=f"Unlimited-OCR request has {document.page_count} pages; max is {MAX_PAGES_PER_REQUEST}.",
+                detail=f"Unlimited-OCR-2 request has {document.page_count} pages; max is {MAX_PAGES_PER_REQUEST}.",
             )
         matrix = fitz.Matrix(dpi / 72, dpi / 72)
         estimated_pixels = sum(
@@ -459,8 +460,10 @@ async def get_transformers_components():
             tokenizer = AutoTokenizer.from_pretrained(
                 MODEL_NAME, trust_remote_code=True, revision=MODEL_REVISION
             )
+            logger.info("Loading Unlimited-OCR-2 checkpoint %s at %s", MODEL_NAME, MODEL_REVISION)
             model = AutoModel.from_pretrained(MODEL_NAME, **model_kwargs)
             model = model.eval()
+            logger.info("Moving Unlimited-OCR-2 weights to %s (%s)", device, dtype)
             if device == "cuda":
                 model = model.cuda()
             elif device != "cpu":
@@ -470,6 +473,7 @@ async def get_transformers_components():
                 "dtype": str(dtype).replace("torch.", ""),
                 "attentionImplementation": TRANSFORMERS_ATTENTION_IMPLEMENTATION or None,
             }
+            logger.info("Unlimited-OCR-2 weights are ready on %s", device)
             return tokenizer, model
 
         TRANSFORMERS_MODEL_LOADING = True
@@ -489,11 +493,11 @@ async def preload_transformers_components(force: bool = False) -> None:
     if not force and not PRELOAD_TRANSFORMERS:
         return
     try:
-        logger.info("Preloading Unlimited-OCR Transformers backend: %s", MODEL_NAME)
+        logger.info("Preloading Unlimited-OCR-2 Transformers backend: %s", MODEL_NAME)
         await get_transformers_components()
-        logger.info("Unlimited-OCR Transformers backend is warm")
+        logger.info("Unlimited-OCR-2 Transformers backend is warm")
     except Exception:
-        logger.exception("Failed to preload Unlimited-OCR Transformers backend")
+        logger.exception("Failed to preload Unlimited-OCR-2 Transformers backend")
 
 
 async def unload_transformers_components() -> dict:
@@ -559,6 +563,7 @@ def is_transformers_stdout_noise(line: str) -> bool:
 
 
 def extract_layout_text_from_transformers_stdout(stdout_text: str) -> str:
+    stdout_text = normalize_layout_syntax(stdout_text)
     if "<|det|>" not in stdout_text:
         return ""
 
@@ -568,7 +573,7 @@ def extract_layout_text_from_transformers_stdout(stdout_text: str) -> str:
     seen_layout = False
     for line in lines:
         stripped = line.strip()
-        if "<|det|>" in stripped:
+        if "<|det|>" in stripped or "<PAGE>" in stripped:
             seen_layout = True
         if not seen_layout or is_transformers_stdout_noise(stripped):
             continue
@@ -607,6 +612,8 @@ def should_render_stream_snapshot(
 def extract_text_from_transformers_result(result: Any, output_dir: str) -> str:
     if isinstance(result, str) and result.strip():
         return result
+    if isinstance(result, tuple) and result and isinstance(result[0], str):
+        return result[0]
     if isinstance(result, dict):
         for key in ("markdown", "text", "result", "output"):
             value = result.get(key)
@@ -697,11 +704,13 @@ def run_transformers_inference_sync(
                 if is_multi_page:
                     result = model.infer_multi(
                         tokenizer,
-                        prompt="<image>Multi page parsing.",
+                        prompt=MULTI_PROMPT,
                         image_files=image_paths,
                         output_path=output_dir,
                         image_size=1024,
-                        max_length=MAX_TOKENS,
+                        max_length=CONTEXT_LENGTH,
+                        max_new_tokens=MAX_TOKENS,
+                        max_page_tokens=MAX_PAGE_TOKENS,
                         no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
                         ngram_window=MULTI_NGRAM_WINDOW,
                         save_results=True,
@@ -713,19 +722,21 @@ def run_transformers_inference_sync(
                     for attempt_index, attempt in enumerate(attempts):
                         if attempt_index:
                             logger.warning(
-                                "Retrying Unlimited-OCR Transformers with %s after accelerator OOM",
+                                "Retrying Unlimited-OCR-2 Transformers with %s after accelerator OOM",
                                 attempt["label"],
                             )
                         try:
                             result = model.infer(
                                 tokenizer,
-                                prompt="<image>document parsing.",
+                                prompt=SINGLE_PROMPT,
                                 image_file=image_paths[0],
                                 output_path=output_dir,
                                 base_size=attempt["base_size"],
                                 image_size=attempt["image_size"],
                                 crop_mode=attempt["crop_mode"],
-                                max_length=attempt["max_tokens"],
+                                max_length=CONTEXT_LENGTH,
+                                max_new_tokens=attempt["max_tokens"],
+                                max_page_tokens=MAX_PAGE_TOKENS,
                                 no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
                                 ngram_window=SINGLE_NGRAM_WINDOW,
                                 save_results=True,
@@ -744,9 +755,9 @@ def run_transformers_inference_sync(
                                 raise
                             cleanup_torch_accelerator_cache()
                     else:
-                        raise last_error or RuntimeError("Unlimited-OCR Transformers inference failed")
+                        raise last_error or RuntimeError("Unlimited-OCR-2 Transformers inference failed")
             raw_layout_text = extract_layout_text_from_transformers_stdout(capture.text())
-            return raw_layout_text or extract_text_from_transformers_result(result, output_dir), images_config
+            return extract_text_from_transformers_result(result, output_dir) or raw_layout_text, images_config
     finally:
         cleanup_torch_accelerator_cache()
 
@@ -766,13 +777,13 @@ async def stream_transformers_adapter_events(
     if TRANSFORMERS_MODEL is None:
         yield {
             "type": "status",
-            "message": "Loading Unlimited-OCR Transformers backend...",
+            "message": "Loading Unlimited-OCR-2 Transformers backend...",
         }
     tokenizer, model = await get_transformers_components()
     yield {
         "type": "status",
         "message": (
-            "Unlimited-OCR Transformers backend is ready on "
+            "Unlimited-OCR-2 Transformers backend is ready on "
             f"{transformers_runtime_label()}. Parsing {page_count} page(s) at {PDF_DPI} DPI "
             f"with max {MAX_TOKENS} tokens."
         ),
@@ -820,7 +831,7 @@ async def stream_transformers_adapter_events(
                     yield {
                         "type": "status",
                         "message": (
-                            f"Still parsing with Unlimited-OCR on {transformers_runtime_label()} "
+                            f"Still parsing with Unlimited-OCR-2 on {transformers_runtime_label()} "
                             f"after {elapsed}s. Dense PDF pages can take several minutes on Apple Silicon."
                         ),
                     }
@@ -860,7 +871,7 @@ async def stream_transformers_adapter_events(
         if result_holder.get("error"):
             err = result_holder["error"]
             logger.error(
-                "Unlimited-OCR Transformers inference failed",
+                "Unlimited-OCR-2 Transformers inference failed",
                 exc_info=(type(err), err, err.__traceback__),
             )
             yield {"type": "error", "detail": transformers_error_detail(err)}
@@ -868,7 +879,7 @@ async def stream_transformers_adapter_events(
 
         result_text, images_config = result_holder.get("result", ("", {"backend": "transformers"}))
         raw_stdout = extract_layout_text_from_transformers_stdout(stdout_writer.text())
-        raw_text = raw_stdout or result_text
+        raw_text = result_text or raw_stdout
         result = await asyncio.to_thread(
             build_adapter_response,
             raw_text,
@@ -908,7 +919,7 @@ def build_sglang_payload(image_pages: list[bytes], file_type: int) -> dict:
     is_multi_page = len(image_pages) > 1
     prompt = MULTI_PROMPT if is_multi_page else SINGLE_PROMPT
     # Dense PDF pages (especially algorithms/equations) are more stable in
-    # Unlimited-OCR's ``base`` layout mode.  ``gundam`` remains the default
+    # Unlimited-OCR-2's ``base`` layout mode.  ``gundam`` remains the default
     # for standalone images, while every PDF page uses the same deterministic
     # mode even when the WebUI sends one page per request.
     image_mode = MULTI_IMAGE_MODE if is_multi_page or file_type == 0 else SINGLE_IMAGE_MODE
@@ -924,13 +935,13 @@ def build_sglang_payload(image_pages: list[bytes], file_type: int) -> dict:
         "messages": [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": prompt}]
-                + [encode_image_content(image_bytes) for image_bytes in request_pages],
+                "content": [encode_image_content(image_bytes) for image_bytes in request_pages]
+                + [{"type": "text", "text": "<PAGE><image>" * len(request_pages) + prompt}],
             }
         ],
         "temperature": 0,
         "skip_special_tokens": False,
-        "images_config": {"image_mode": image_mode, "backend": "sglang"},
+        "images_config": {"image_mode": image_mode, "crop_mode": image_mode == "gundam", "backend": "sglang"},
         "stream": True,
     }
     if SGLANG_MAX_TOKENS > 0:
@@ -942,6 +953,9 @@ def build_sglang_payload(image_pages: list[bytes], file_type: int) -> dict:
         payload["custom_params"] = {
             "ngram_size": NO_REPEAT_NGRAM_SIZE,
             "window_size": ngram_window,
+            "page_token_id": 128827,
+            "eos_token_id": 1,
+            "max_page_tokens": MAX_PAGE_TOKENS,
         }
 
     return payload
@@ -1079,7 +1093,7 @@ async def generate_markdown(image_pages: list[bytes], file_type: int, backend: s
                         payload = adjusted_payload
                         context_adjusted = True
                         continue
-                    raise HTTPException(status_code=response.status_code, detail=f"Unlimited-OCR upstream error: {body}")
+                    raise HTTPException(status_code=response.status_code, detail=f"Unlimited-OCR-2 upstream error: {body}")
                 try:
                     text = await collect_streaming_response(response)
                 except DegenerateGenerationError as err:
@@ -1090,20 +1104,35 @@ async def generate_markdown(image_pages: list[bytes], file_type: int, backend: s
                     raise HTTPException(
                         status_code=502,
                         detail=(
-                            "Unlimited-OCR generation remained repetitive after the guarded retry "
+                            "Unlimited-OCR-2 generation remained repetitive after the guarded retry "
                             f"near '{err}'. Try the Transformers backend for this document."
                         ),
                     ) from err
                 return text, payload.get("images_config", {})
-    raise HTTPException(status_code=500, detail="Unlimited-OCR SGLang request failed before streaming.")
+    raise HTTPException(status_code=500, detail="Unlimited-OCR-2 SGLang request failed before streaming.")
 
 
 def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def normalize_layout_syntax(text: str) -> str:
+    """Normalize the released tokenizer's BLOCK/FORK layout into det spans."""
+    text = re.sub(
+        r"<BLOCK>\s*([A-Za-z_][\w-]*)(?:<LEVEL\d+>)?\s*(\[[^\]\n]+\])\s*(?:<(?:FORK|CHILD)>)?",
+        lambda match: f"<|det|>{match.group(1)}{match.group(2)}<|/det|>",
+        text,
+    )
+    # A streaming header is not document prose. Wait for its closing bracket
+    # instead of leaking coordinates into the preview as tokens arrive.
+    text = re.sub(r"<BLOCK>\s*[A-Za-z_][\w-]*(?:<LEVEL\d+>)?\s*\[[^\]\n]*$", "", text)
+    return re.sub(r"<(?:BLOCK|FORK|CHILD|LEVEL\d+)>", "", text)
+
+
 def compact_block_text(text: str) -> str:
     text = normalize_newlines(text)
+    text = text.replace("<PAGE>", "\n\n")
+    text = re.sub(r"<｜(?:begin▁of▁sentence|end▁of▁sentence)｜>", "", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -1119,16 +1148,19 @@ _UNLIMITED_NUMBERED_LINE_RE = re.compile(r"^\s*\d{1,3}\s*:\s*")
 def detect_unlimited_structural_artifacts(text: str) -> str | None:
     """Detect leaked layout/decoder scaffolding in an unstructured stream.
 
-    Unlimited-OCR normally emits ``<|det|>...`` blocks.  During a bad
+    Unlimited-OCR-2 emits layout blocks. During a bad
     generation it can instead print its internal algorithm trace, including
     line numbers and ``text [x, y, w, h]`` coordinates.  That trace must never
     be presented as document text or allowed to grow the browser DOM forever.
     """
     normalized = normalize_newlines(str(text))
+    for header in re.finditer(r"<BLOCK>\s*[A-Za-z_][\w-]*(?:<LEVEL\d+>)?\s*\[([^\]\n<]*)", normalized):
+        if len(re.findall(r"-?\d+(?:\.\d+)?", header.group(1))) >= 16:
+            return "layout coordinate loop"
     # Once a real det block exists, numbered lines may be legitimate paper
     # content (algorithm pseudocode).  Only apply the fallback-trace detector
     # to the unstructured stream prefix where layout metadata has leaked.
-    if "<|det|>" in normalized:
+    if "<|det|>" in normalized or "<BLOCK>" in normalized:
         return None
     bbox_count = len(_UNLIMITED_BBOX_ARTIFACT_RE.findall(normalized))
     numbered_lines = sum(
@@ -1165,16 +1197,19 @@ def parse_bbox(raw_bbox: str | None) -> list[float] | None:
 
 
 def parse_layout_blocks(markdown: str) -> list[dict]:
-    text = normalize_newlines(markdown)
+    text = normalize_newlines(normalize_layout_syntax(markdown))
     matches = list(DET_BLOCK_RE.finditer(text))
     blocks: list[dict] = []
+    boundaries = [match.start() for match in re.finditer(re.escape("<PAGE>"), text)]
     for index, match in enumerate(matches):
         next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        page_index = sum(position < match.start() for position in boundaries) - 1
         blocks.append(
             {
                 "label": match.group(1),
                 "bbox": parse_bbox(match.group(2)),
                 "text": text[match.end() : next_start],
+                **({"explicit_page_index": max(0, page_index)} if boundaries else {}),
             }
         )
     return blocks
@@ -1220,7 +1255,7 @@ def backfill_visual_blocks(blocks: list[dict]) -> None:
         label = str(block.get("label") or "").lower().strip()
         if label not in IMAGE_LABELS and label not in {"table", "algorithm"}:
             continue
-        if block.get("page_confidence") == "text":
+        if block.get("page_confidence") in {"text", "marker"}:
             continue
         for next_block in blocks[index + 1 : min(len(blocks), index + 4)]:
             next_label = str(next_block.get("label") or "").lower().strip()
@@ -1236,6 +1271,12 @@ def assign_block_pages(blocks: list[dict], page_count: int, page_texts: list[str
     page_count = max(1, int(page_count or 1))
     for block in blocks:
         bbox = block.get("bbox")
+        if "explicit_page_index" in block:
+            page_index = max(0, min(int(block["explicit_page_index"]), page_count - 1))
+            block["page_index"] = page_index
+            block["page_confidence"] = "marker"
+            last_y = bbox[1] if bbox else None
+            continue
         anchored_page = anchor_page_for_block(block, page_texts, page_index)
         if anchored_page is not None:
             page_index = max(0, min(anchored_page, page_count - 1))
@@ -1437,7 +1478,7 @@ def crop_block_image(block: dict, image_pages: list[bytes], image_number: int) -
         data = base64.b64encode(output.getvalue()).decode("utf-8")
         return path, data
     except Exception as err:
-        logger.warning("Failed to crop Unlimited-OCR image block: %s", err)
+        logger.warning("Failed to crop Unlimited-OCR-2 image block: %s", err)
         return None
 
 
@@ -1468,7 +1509,7 @@ def render_unlimited_ocr_document(
     image_pages: list[bytes] | None = None,
     page_texts: list[str] | None = None,
 ) -> tuple[str, dict]:
-    text = normalize_newlines(markdown)
+    text = normalize_newlines(normalize_layout_syntax(markdown))
     matches = list(DET_BLOCK_RE.finditer(text))
     if not matches:
         return sanitize_unlimited_ocr_fallback(text), {}
@@ -1539,6 +1580,10 @@ def build_layout_parsing_results(
 
     layout_blocks = parse_layout_blocks(raw_text)
     if not layout_blocks:
+        if "<PAGE>" in raw_text:
+            for page_index, page_text in enumerate(raw_text.split("<PAGE>")[1:page_count + 1]):
+                pages[page_index]["markdown"] = {"text": normalize_markdown(page_text), "images": {}}
+            return pages
         pages[0]["markdown"] = {"text": rendered_text, "images": images}
         return pages
 
@@ -1562,7 +1607,7 @@ def build_layout_parsing_results(
 
 def normalize_markdown(markdown: str) -> str:
     text = str(markdown)
-    if "<|det|>" in text:
+    if "<|det|>" in text or "<BLOCK>" in text:
         rendered, _ = render_unlimited_ocr_document(text)
         return rendered
     return sanitize_unlimited_ocr_fallback(text)
@@ -1574,7 +1619,7 @@ def render_streaming_markdown(
     page_texts: list[str] | None = None,
 ) -> tuple[str, dict]:
     text = str(markdown)
-    if "<|det|>" in text:
+    if "<|det|>" in text or "<BLOCK>" in text:
         return render_unlimited_ocr_document(text, image_pages, page_texts)
     return sanitize_unlimited_ocr_fallback(text), {}
 
@@ -1594,7 +1639,7 @@ def build_adapter_response(
     page_texts: list[str] | None = None,
 ) -> dict:
     raw_text = normalize_newlines(str(markdown))
-    if "<|det|>" in raw_text:
+    if "<|det|>" in raw_text or "<BLOCK>" in raw_text:
         text, images = render_unlimited_ocr_document(raw_text, image_pages, page_texts)
     else:
         text = normalize_markdown(raw_text)
@@ -1652,7 +1697,7 @@ async def stream_sglang_payload_events(
                     else:
                         terminal_error = {
                             "type": "error",
-                            "detail": f"Unlimited-OCR upstream error: {body}",
+                            "detail": f"Unlimited-OCR-2 upstream error: {body}",
                         }
                 else:
                     async for line in response.aiter_lines():
@@ -1672,7 +1717,7 @@ async def stream_sglang_payload_events(
                                 terminal_error = {
                                     "type": "error",
                                     "detail": (
-                                        "Unlimited-OCR generation remained repetitive after the guarded retry "
+                                        "Unlimited-OCR-2 generation remained repetitive after the guarded retry "
                                         f"near '{repetition}'. Try a smaller PDF batch size, such as 5 pages, "
                                         "or use the Transformers backend for this document."
                                     ),
@@ -1738,7 +1783,7 @@ async def stream_sglang_payload_events(
             }
             return
 
-    yield {"type": "error", "detail": "Unlimited-OCR SGLang retry limit was exhausted."}
+    yield {"type": "error", "detail": "Unlimited-OCR-2 SGLang retry limit was exhausted."}
 
 
 async def stream_adapter_events(
@@ -1766,13 +1811,13 @@ async def stream_adapter_events(
         yield {
             "type": "error",
             "detail": (
-                "Unlimited-OCR generation became repetitive "
+                "Unlimited-OCR-2 generation became repetitive "
                 f"near '{err}'. Try a smaller PDF batch size, such as 5 pages, "
                 "or use the Transformers backend for this document."
             ),
         }
     except Exception as err:
-        logger.exception("Unlimited-OCR streaming failed")
+        logger.exception("Unlimited-OCR-2 streaming failed")
         yield {"type": "error", "detail": str(err)}
 
 

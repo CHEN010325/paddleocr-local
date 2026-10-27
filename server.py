@@ -17,7 +17,7 @@ import contextlib
 import tarfile
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from PIL import Image
 from typing import List, Literal, Optional, Union
 from urllib.parse import quote, urlsplit
@@ -59,7 +59,7 @@ def normalize_unlimited_ocr_backend(value: str | None, fallback: str | None = No
     if fallback_backend in UNLIMITED_OCR_SUPPORTED_BACKENDS:
         return fallback_backend
     supported = ", ".join(sorted(UNLIMITED_OCR_SUPPORTED_BACKENDS))
-    raise HTTPException(status_code=400, detail=f"Unsupported Unlimited-OCR backend. Use one of: {supported}.")
+    raise HTTPException(status_code=400, detail=f"Unsupported Unlimited-OCR-2 backend. Use one of: {supported}.")
 
 
 def parse_positive_int_env(name: str, default: str) -> int:
@@ -106,27 +106,25 @@ PADDLE_OCR_SERVICE_URL = os.getenv("PADDLE_OCR_SERVICE_URL", "http://localhost:8
 PPOCR_V6_MODEL_NAME = os.getenv("PPOCR_V6_MODEL_NAME", "PP-OCRv6_medium")
 PADDLE_REQUEST_TIMEOUT = float(os.getenv("PADDLE_REQUEST_TIMEOUT", "3600"))
 UNLIMITED_OCR_SERVICE_URL = os.getenv("UNLIMITED_OCR_SERVICE_URL", "http://localhost:8083/ocr")
-UNLIMITED_OCR_MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR")
+UNLIMITED_OCR_MODEL_NAME = os.getenv("UNLIMITED_OCR_MODEL_NAME", "baidu/Unlimited-OCR-2")
 UNLIMITED_OCR_MODEL_REVISION = os.getenv(
-    "UNLIMITED_OCR_MODEL_REVISION", "07dea832e22aefee32ad281d4b80551282e1c168"
+    "UNLIMITED_OCR_MODEL_REVISION", "9cf077c4b206e0e2a31879df937b0b0bcba3661c"
 )
-UNLIMITED_OCR_SERVED_MODEL_NAME = os.getenv("UNLIMITED_OCR_SERVED_MODEL_NAME", "Unlimited-OCR")
+UNLIMITED_OCR_SERVED_MODEL_NAME = os.getenv("UNLIMITED_OCR_SERVED_MODEL_NAME", "Unlimited-OCR-2")
 UNLIMITED_OCR_BACKEND = normalize_unlimited_ocr_backend(os.getenv("UNLIMITED_OCR_BACKEND"), "transformers")
 UNLIMITED_OCR_PRELOAD = os.getenv("UNLIMITED_OCR_PRELOAD", "1")
 UNLIMITED_OCR_API_PORT = os.getenv("UNLIMITED_OCR_API_PORT", "8083")
 UNLIMITED_OCR_SGLANG_PORT = os.getenv("UNLIMITED_OCR_SGLANG_PORT", "10000")
-UNLIMITED_OCR_ATTENTION_BACKEND = os.getenv("UNLIMITED_OCR_ATTENTION_BACKEND", "flashinfer")
-UNLIMITED_OCR_PAGE_SIZE = os.getenv("UNLIMITED_OCR_PAGE_SIZE", "1")
-UNLIMITED_OCR_MEM_FRACTION_STATIC = os.getenv("UNLIMITED_OCR_MEM_FRACTION_STATIC", "0.8")
-UNLIMITED_OCR_CONTEXT_LENGTH = os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "32768")
+UNLIMITED_OCR_MEM_FRACTION_STATIC = os.getenv("UNLIMITED_OCR_MEM_FRACTION_STATIC", "0.7")
+UNLIMITED_OCR_CONTEXT_LENGTH = os.getenv("UNLIMITED_OCR_CONTEXT_LENGTH", "131072")
 UNLIMITED_OCR_REQUEST_TIMEOUT = os.getenv("UNLIMITED_OCR_REQUEST_TIMEOUT", "1200")
 UNLIMITED_OCR_PDF_DPI = os.getenv("UNLIMITED_OCR_PDF_DPI", "300")
 UNLIMITED_OCR_MAX_PAGES_PER_REQUEST = os.getenv("UNLIMITED_OCR_MAX_PAGES_PER_REQUEST", "50")
 UNLIMITED_OCR_MAX_RENDER_PIXELS = os.getenv("UNLIMITED_OCR_MAX_RENDER_PIXELS", "60000000")
 UNLIMITED_OCR_SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "gundam")
 UNLIMITED_OCR_MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
-UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "32768")
-UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "28672")
+UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "8192")
+UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "8192")
 OVISOCR2_SERVICE_URL = os.getenv("OVISOCR2_SERVICE_URL", "http://localhost:8084/ocr")
 OVISOCR2_MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
 OVISOCR2_MODEL_REVISION = os.getenv(
@@ -176,7 +174,7 @@ NAVIDC_OCR_DTYPE = os.getenv("NAVIDC_OCR_DTYPE", "bfloat16")
 NAVIDC_OCR_BACKEND = os.getenv("NAVIDC_OCR_BACKEND", "vllm-async-engine")
 UNLIMITED_OCR_SGLANG_WHEEL_URL = os.getenv(
     "UNLIMITED_OCR_SGLANG_WHEEL_URL",
-    "https://huggingface.co/baidu/Unlimited-OCR/resolve/07dea832e22aefee32ad281d4b80551282e1c168/wheel/sglang-0.0.0.dev11416%2Bg92e8bb79e-py3-none-any.whl?download=true#sha256=2644a1f349c55f0ca822e70a70679c98475754ec4722c3be1b18a72bac477cd5",
+    "https://huggingface.co/baidu/Unlimited-OCR-2/resolve/9cf077c4b206e0e2a31879df937b0b0bcba3661c/wheel/sglang-0.5.20.dev10%2Bg8d62f5fb9c-py3-none-any.whl?download=true#sha256=a3f3e2c94e09de90b61b43d01475fd5d1aa818d16eec05204b8079c09c2ba70d",
 )
 PROJECT_ROOT = Path(__file__).resolve().parent
 TASK_DATA_DIR = Path(os.getenv("PANDOCR_TASK_DATA_DIR", "data/tasks")).resolve()
@@ -518,7 +516,7 @@ def model_catalog() -> list[dict]:
         "unlimited-ocr": {
             "id": "unlimited-ocr",
             "name": UNLIMITED_OCR_MODEL_NAME,
-            "label": "Unlimited-OCR",
+            "label": "Unlimited-OCR-2",
             "kind": "document_parsing",
             "endpoint": "/api/unlimited-ocr",
         },
@@ -950,6 +948,7 @@ async def inspect_container(name: str) -> dict:
         "running": bool(state.get("Running")),
         "state": state.get("Status") or "unknown",
         "health": health.get("Status") or "none",
+        "image": (payload.get("Config") or {}).get("Image"),
     }
 
 
@@ -978,9 +977,9 @@ def docker_image_name_for(service_name: str) -> str:
     if service_name == "paddleocr-ocr-api":
         return "pandocr-ocr-api:latest"
     if service_name == "unlimited-ocr-api":
-        return "pandocr-unlimited-ocr-transformers:latest"
+        return "pandocr-unlimited-ocr2-transformers:latest"
     if service_name == "unlimited-ocr-sglang":
-        return "pandocr-unlimited-ocr-sglang:latest"
+        return "pandocr-unlimited-ocr2-sglang:latest"
     if service_name == "ovisocr2-api":
         return "pandocr-ovisocr2:latest"
     if service_name == "hpd-parsing-server":
@@ -1127,15 +1126,17 @@ async def docker_host_repo_root() -> str:
     data = await docker_inspect_self()
     mounts = data.get("Mounts") or []
     for mount in mounts:
-        if mount.get("Destination") == "/app/static" and mount.get("Source"):
-            return str(Path(mount["Source"]).parent)
-        if mount.get("Destination") == "/app/server.py" and mount.get("Source"):
-            return str(Path(mount["Source"]).parent)
-        if mount.get("Destination") == "/app/data" and mount.get("Source"):
+        if mount.get("Destination") in {"/app/static", "/app/server.py", "/app/data"} and mount.get("Source"):
             # Release images only bind the repository's data directory into
             # the WebUI container.  Its host-side parent is still the checkout
             # root needed when the controller creates model containers.
-            return str(Path(mount["Source"]).parent)
+            source = str(mount["Source"])
+            # Docker Desktop reports Windows paths even to the Linux controller.
+            # POSIX Path treats their backslashes as filename characters and
+            # silently resolves the parent to '.', creating the wrong cache.
+            if PureWindowsPath(source).drive:
+                return PureWindowsPath(source).parent.as_posix()
+            return str(Path(source).parent)
     return str(PROJECT_ROOT)
 
 
@@ -1187,7 +1188,18 @@ def host_config(
 async def docker_create_container(name: str, payload: dict) -> None:
     existing = await inspect_container(name)
     if existing["exists"]:
-        return
+        if (name not in {"unlimited-ocr-api", "unlimited-ocr-sglang"}
+                or not existing.get("image") or existing["image"] == payload.get("Image")):
+            return
+        # The logical service IDs stay compatible with saved tasks, but an
+        # OCR-1 container must never serve OCR-2 through its old dependencies.
+        if existing.get("running"):
+            await docker_container_action(name, "stop")
+        await assert_containers_stopped_twice([(name, name)], context="OCR-2 container upgrade")
+        removed = await docker_api_request("DELETE", f"/containers/{quote(name, safe='')}?v=0", timeout=120)
+        if removed.status_code not in {204, 404}:
+            raise RuntimeError(f"Docker OCR-2 container upgrade failed for {name}: {removed.text}")
+        # No force removal and v=0: mounted model/task data and volumes stay.
     response = await docker_api_request(
         "POST",
         f"/containers/create?name={quote(name, safe='')}",
@@ -1282,6 +1294,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"UNLIMITED_OCR_SINGLE_IMAGE_MODE={UNLIMITED_OCR_SINGLE_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MULTI_IMAGE_MODE={UNLIMITED_OCR_MULTI_IMAGE_MODE}",
                 f"UNLIMITED_OCR_MAX_TOKENS={UNLIMITED_OCR_MAX_TOKENS}",
+                f"UNLIMITED_OCR_CONTEXT_LENGTH={UNLIMITED_OCR_CONTEXT_LENGTH}",
                 f"UNLIMITED_OCR_SGLANG_MAX_TOKENS={UNLIMITED_OCR_SGLANG_MAX_TOKENS}",
                 "PANDOCR_RUNTIME_SETTINGS_FILE=/app/data/runtime-settings.json",
             ],
@@ -1290,6 +1303,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             "HostConfig": host_config(
                 network_name=network_name,
                 binds=[
+                    bind_path(host_root, "unlimited_ocr_adapter.py", "/app/unlimited_ocr_adapter.py", readonly=True),
                     bind_path(host_root, "model_cache_unlimited_ocr", "/root/.cache/huggingface"),
                     bind_path(host_root, "data", "/app/data"),
                 ],
@@ -1304,22 +1318,26 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 "python3",
                 "-m",
                 "sglang.launch_server",
-                "--model",
+                "--model-path",
                 UNLIMITED_OCR_MODEL_NAME,
                 "--revision",
                 UNLIMITED_OCR_MODEL_REVISION,
                 "--served-model-name",
                 UNLIMITED_OCR_SERVED_MODEL_NAME,
-                "--attention-backend",
-                UNLIMITED_OCR_ATTENTION_BACKEND,
-                "--page-size",
-                UNLIMITED_OCR_PAGE_SIZE,
+                "--chat-template", "unlimited-ocr",
+                "--tokenizer-backend", "fastokens",
                 "--mem-fraction-static",
                 UNLIMITED_OCR_MEM_FRACTION_STATIC,
                 "--context-length",
                 UNLIMITED_OCR_CONTEXT_LENGTH,
                 "--enable-custom-logit-processor",
-                "--disable-overlap-schedule",
+                "--enable-streaming-session",
+                "--allow-auto-truncate",
+                "--disable-radix-cache",
+                "--mm-preprocess-cache-size-mb", "0",
+                "--max-running-requests", "1",
+                "--max-prefill-tokens", "2048",
+                "--disable-cuda-graph",
                 "--skip-server-warmup",
                 "--host",
                 "0.0.0.0",
@@ -1329,6 +1347,19 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             "Env": [
                 "HF_HOME=/root/.cache/huggingface",
                 f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
+                "SGLANG_UOCR_EANABLE_DOC_LIMIT=1",
+                "SGLANG_UOCR_DOC_GUNDAM_PAGE_WINDOW=10",
+                "SGLANG_UOCR_DOC_BASE_PAGE_WINDOW=10",
+                "SGLANG_UOCR_MAX_PAGE_TOKENS=20000",
+                "SGLANG_OPT_UOCR_SAM_REL_POS_BIAS_MB=64",
+                "SGLANG_UOCR_SHM_WRAP_MODEL_DATA=1",
+                "SGLANG_UOCR_SHM_WRAP_MIN_MB=1",
+                "SGLANG_VLM_CACHE_SIZE_MB=0",
+                # The pinned wheel otherwise skips eager decode RoPE while
+                # waiting for graph-owned coordinate buffers that do not exist.
+                "SGLANG_UOCR_GRAPH_METADATA_REFRESH=0",
+                "SGLANG_UOCR_GRAPH_METADATA_INPUTS=0",
+                "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
             ],
             "User": "root",
             "ExposedPorts": {"10000/tcp": {}},
@@ -1493,6 +1524,14 @@ async def ensure_model_runtime_created(model_id: str, backend: str | None = None
         await ensure_runtime_service_created(service_name)
 
 
+async def unlimited_ocr_generation_upgrade_needed() -> bool:
+    for name in services_for_model_deploy("unlimited-ocr", unlimited_ocr_runtime_backend):
+        existing = await inspect_container(name)
+        if existing.get("exists") and existing.get("image") and existing["image"] != docker_image_name_for(name):
+            return True
+    return False
+
+
 async def fetch_http_health(url: str) -> tuple[bool, dict]:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -1544,7 +1583,7 @@ async def enrich_unlimited_ocr_runtime_status(model_id: str, status: dict) -> di
         status["sglangContainer"] = sglang_container
         # The SGLang worker is intentionally not part of the adapter's required
         # container list because the Transformers backend does not need it.  It
-        # still represents a running Unlimited-OCR runtime and must not be
+        # still represents a running Unlimited-OCR-2 runtime and must not be
         # hidden if the adapter stopped unexpectedly.
         if sglang_container.get("running") and not status.get("running"):
             status["running"] = True
@@ -1946,7 +1985,7 @@ async def acquire_controller_ocr_lease(model_id: str) -> dict:
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is switching. Wait before starting OCR.")
         if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
-            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait before starting OCR.")
+            raise HTTPException(status_code=409, detail="Unlimited-OCR-2 backend is switching. Wait before starting OCR.")
         if model_runtime_operation.get("state") == "switching":
             raise HTTPException(status_code=409, detail="Model runtime is switching. Wait before starting OCR.")
         leased_model_ids = {str(lease.get("modelId") or "") for lease in controller_ocr_leases.values()}
@@ -2056,7 +2095,7 @@ async def call_unlimited_ocr_adapter_control(path: str, *, timeout: float | None
     async with httpx.AsyncClient(timeout=control_timeout) as client:
         response = await client.post(f"{unlimited_ocr_adapter_base_url()}{path}")
     if response.status_code >= 400:
-        raise RuntimeError(f"Unlimited-OCR adapter control failed ({response.status_code}): {response.text}")
+        raise RuntimeError(f"Unlimited-OCR-2 adapter control failed ({response.status_code}): {response.text}")
     try:
         data = response.json()
         return data if isinstance(data, dict) else {}
@@ -2071,7 +2110,7 @@ async def wait_unlimited_ocr_backend_ready(backend: str, timeout: float) -> None
         if status.get("ready") and status.get("unlimitedOcrBackend") == backend:
             return
         await asyncio.sleep(3)
-    raise TimeoutError(f"Timed out waiting for Unlimited-OCR {backend} backend to become ready")
+    raise TimeoutError(f"Timed out waiting for Unlimited-OCR-2 {backend} backend to become ready")
 
 
 async def wait_unlimited_ocr_adapter_http(timeout: float) -> None:
@@ -2081,7 +2120,7 @@ async def wait_unlimited_ocr_adapter_http(timeout: float) -> None:
         if health_ok:
             return
         await asyncio.sleep(2)
-    raise TimeoutError("Timed out waiting for Unlimited-OCR adapter API")
+    raise TimeoutError("Timed out waiting for Unlimited-OCR-2 adapter API")
 
 
 async def ensure_unlimited_ocr_backend_runtime(
@@ -2113,7 +2152,7 @@ async def ensure_unlimited_ocr_backend_runtime(
         await docker_container_action("unlimited-ocr-sglang", "stop")
         await assert_containers_stopped_twice(
             [("unlimited-ocr:unlimited-ocr-sglang", "unlimited-ocr-sglang")],
-            context="Unlimited-OCR backend release check failed; SGLang is still running",
+            context="Unlimited-OCR-2 backend release check failed; SGLang is still running",
         )
         if not gpu_release_gate_passed:
             await wait_for_stable_gpu_release("unlimited-ocr", timeout=timeout)
@@ -2285,6 +2324,8 @@ async def activate_model_runtime(model_id: str) -> bool:
             await stop_non_target_model_containers(model_id)
             await assert_non_target_model_containers_stopped(model_id)
             non_target_exclusivity_confirmed = True
+            if model_id == "unlimited-ocr" and await unlimited_ocr_generation_upgrade_needed():
+                await ensure_model_runtime_created(model_id, unlimited_ocr_runtime_backend)
 
             # An idempotent request for the already unique, ready target must
             # not compare free VRAM against a model that is intentionally still
@@ -2357,7 +2398,7 @@ async def schedule_model_runtime_activation(model_id: str) -> None:
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is already busy. Wait for it to finish.")
         if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
-            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait for it to finish.")
+            raise HTTPException(status_code=409, detail="Unlimited-OCR-2 backend is switching. Wait for it to finish.")
         set_model_runtime_operation("switching", f"Switching to {model_id}", model_id)
         model_runtime_task = asyncio.create_task(activate_model_runtime(model_id))
 
@@ -2403,16 +2444,28 @@ async def schedule_model_runtime_deploy(model_id: str, backend: str | None = Non
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is already busy. Wait for it to finish.")
         if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
-            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is switching. Wait for it to finish.")
+            raise HTTPException(status_code=409, detail="Unlimited-OCR-2 backend is switching. Wait for it to finish.")
         set_model_runtime_operation("switching", f"Deploying {model_id}", model_id)
         model_runtime_task = asyncio.create_task(deploy_and_activate_model_runtime(model_id, backend))
 
 
 async def activate_unlimited_ocr_backend(backend: str) -> None:
     global unlimited_ocr_runtime_backend
+    try:
+        if await unlimited_ocr_generation_upgrade_needed():
+            status = await model_runtime_status("unlimited-ocr")
+            if status.get("running"):
+                # Full activation handles migration and the GPU release gate;
+                # entering the backend lock first would deadlock that activation.
+                await deploy_and_activate_model_runtime("unlimited-ocr", backend)
+                return
+    except Exception as err:
+        logger.exception("Unlimited-OCR-2 generation check failed")
+        set_model_runtime_operation("error", str(err), "unlimited-ocr")
+        return
     previous_backend = unlimited_ocr_runtime_backend
     async with model_runtime_lock:
-        set_model_runtime_operation("switching", f"Switching Unlimited-OCR backend to {backend}", "unlimited-ocr")
+        set_model_runtime_operation("switching", f"Switching Unlimited-OCR-2 backend to {backend}", "unlimited-ocr")
         switch_started_at = time.monotonic()
         unlimited_ocr_runtime_backend = backend
         try:
@@ -2421,9 +2474,9 @@ async def activate_unlimited_ocr_backend(backend: str) -> None:
                 remaining_timeout = max(3, MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at))
                 await ensure_unlimited_ocr_backend_runtime(backend, remaining_timeout)
             save_runtime_settings({"unlimitedOcrBackend": backend})
-            set_model_runtime_operation("ready", f"Unlimited-OCR {backend} backend is ready", "unlimited-ocr")
+            set_model_runtime_operation("ready", f"Unlimited-OCR-2 {backend} backend is ready", "unlimited-ocr")
         except Exception as err:
-            logger.exception("Unlimited-OCR backend switch failed")
+            logger.exception("Unlimited-OCR-2 backend switch failed")
             unlimited_ocr_runtime_backend = previous_backend
             with contextlib.suppress(Exception):
                 remaining_timeout = max(3, MODEL_SWITCH_TIMEOUT - (time.monotonic() - switch_started_at))
@@ -2434,7 +2487,7 @@ async def activate_unlimited_ocr_backend(backend: str) -> None:
 async def schedule_unlimited_ocr_backend_activation(backend: str) -> None:
     global unlimited_ocr_backend_task
     if not ENABLE_UNLIMITED_OCR:
-        raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+        raise HTTPException(status_code=404, detail="Unlimited-OCR-2 is not enabled")
     resolved_backend = normalize_unlimited_ocr_backend(backend)
     async with model_runtime_lock:
         require_controller_ocr_lease_store_ready()
@@ -2443,11 +2496,11 @@ async def schedule_unlimited_ocr_backend_activation(backend: str) -> None:
         if model_runtime_task and not model_runtime_task.done():
             raise HTTPException(status_code=409, detail="Model runtime is switching. Wait for it to finish before switching backends.")
         if unlimited_ocr_backend_task and not unlimited_ocr_backend_task.done():
-            raise HTTPException(status_code=409, detail="Unlimited-OCR backend is already switching.")
+            raise HTTPException(status_code=409, detail="Unlimited-OCR-2 backend is already switching.")
         if unlimited_ocr_runtime_backend == resolved_backend:
             save_runtime_settings({"unlimitedOcrBackend": resolved_backend})
             return
-        set_model_runtime_operation("switching", f"Switching Unlimited-OCR backend to {resolved_backend}", "unlimited-ocr")
+        set_model_runtime_operation("switching", f"Switching Unlimited-OCR-2 backend to {resolved_backend}", "unlimited-ocr")
         unlimited_ocr_backend_task = asyncio.create_task(activate_unlimited_ocr_backend(resolved_backend))
 
 
@@ -2626,7 +2679,7 @@ async def deploy_model_runtime(request: ModelDeployRequest):
 @app.get("/api/unlimited-ocr/backend")
 async def get_unlimited_ocr_backend():
     if not ENABLE_UNLIMITED_OCR:
-        raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+        raise HTTPException(status_code=404, detail="Unlimited-OCR-2 is not enabled")
     if MODEL_CONTROL_MODE == "remote":
         return await controller_api_request("GET", "/unlimited-ocr/backend")
     return {
@@ -3812,7 +3865,7 @@ def clean_unlimited_ocr_markdown(markdown: str) -> str:
 
 def parse_unlimited_ocr_response(data: dict) -> dict:
     if not isinstance(data, dict):
-        raise HTTPException(status_code=500, detail="Unexpected response format from Unlimited-OCR service")
+        raise HTTPException(status_code=500, detail="Unexpected response format from Unlimited-OCR-2 service")
 
     markdown = data.get("markdown")
     if markdown is None:
@@ -3946,7 +3999,7 @@ class OCRSlotStreamingResponse(StreamingResponse):
                 if close_iterator is not None:
                     await close_iterator()
             except Exception:
-                logger.exception("Failed to close Unlimited-OCR response iterator")
+                logger.exception("Failed to close Unlimited-OCR-2 response iterator")
             finally:
                 await self._release_guard.release_once()
 
@@ -4011,17 +4064,17 @@ async def run_ppocrv6_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -
 
 async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
     if not ENABLE_UNLIMITED_OCR:
-        raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+        raise HTTPException(status_code=404, detail="Unlimited-OCR-2 is not enabled")
 
     controller_lease_id = await acquire_ocr_slot(
         "unlimited-ocr",
-        "Unlimited-OCR service is not ready. Switch to this model and wait for it to become ready.",
+        "Unlimited-OCR-2 service is not ready. Switch to this model and wait for it to become ready.",
     )
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
         payload = build_unlimited_ocr_payload(ocr_request, base64_data, file_type)
 
-        logger.info("Sending request to Unlimited-OCR adapter at %s", UNLIMITED_OCR_SERVICE_URL)
+        logger.info("Sending request to Unlimited-OCR-2 adapter at %s", UNLIMITED_OCR_SERVICE_URL)
         timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -4031,8 +4084,8 @@ async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRIn
             )
 
             if resp.status_code != 200:
-                logger.warning("Unlimited-OCR Service Error (HTTP %s): %s", resp.status_code, resp.text)
-                raise HTTPException(status_code=resp.status_code, detail=f"Upstream Unlimited-OCR error: {resp.text}")
+                logger.warning("Unlimited-OCR-2 Service Error (HTTP %s): %s", resp.status_code, resp.text)
+                raise HTTPException(status_code=resp.status_code, detail=f"Upstream Unlimited-OCR-2 error: {resp.text}")
 
             return parse_unlimited_ocr_response(resp.json())
     finally:
@@ -4144,13 +4197,13 @@ async def stream_unlimited_ocr_events(
             ) as resp:
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode("utf-8", errors="replace")
-                    yield json.dumps({"type": "error", "detail": f"Upstream Unlimited-OCR error: {body}"}, ensure_ascii=False) + "\n"
+                    yield json.dumps({"type": "error", "detail": f"Upstream Unlimited-OCR-2 error: {body}"}, ensure_ascii=False) + "\n"
                     return
                 async for line in resp.aiter_lines():
                     if line:
                         yield line + "\n"
     except Exception as err:
-        logger.exception("Unlimited-OCR stream proxy failed")
+        logger.exception("Unlimited-OCR-2 stream proxy failed")
         yield json.dumps({"type": "error", "detail": str(err)}, ensure_ascii=False) + "\n"
     finally:
         await slot_release.release_once()
@@ -4240,16 +4293,16 @@ async def proxy_ppocrv6(request: Request):
 
 @app.post("/api/unlimited-ocr")
 async def proxy_unlimited_ocr(request: Request):
-    """Proxy request to the optional Unlimited-OCR adapter service."""
+    """Proxy request to the optional Unlimited-OCR-2 adapter service."""
     try:
         ocr_request, raw_image = await parse_ocr_input(request)
         base64_size = validate_proxy_input_size(raw_image)
-        logger.info("Received Unlimited-OCR request. Base64 input size: %s bytes", base64_size)
+        logger.info("Received Unlimited-OCR-2 request. Base64 input size: %s bytes", base64_size)
         return await run_unlimited_ocr_request(ocr_request, raw_image)
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Unlimited-OCR Proxy Error")
+        logger.exception("Unlimited-OCR-2 Proxy Error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4303,12 +4356,12 @@ async def proxy_unlimited_ocr_stream(request: Request):
     try:
         ocr_request, raw_image = await parse_ocr_input(request)
         base64_size = validate_proxy_input_size(raw_image)
-        logger.info("Received streaming Unlimited-OCR request. Base64 input size: %s bytes", base64_size)
+        logger.info("Received streaming Unlimited-OCR-2 request. Base64 input size: %s bytes", base64_size)
         if not ENABLE_UNLIMITED_OCR:
-            raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+            raise HTTPException(status_code=404, detail="Unlimited-OCR-2 is not enabled")
         controller_lease_id = await acquire_ocr_slot(
             "unlimited-ocr",
-            "Unlimited-OCR service is not ready. Switch to this model and wait for it to become ready.",
+            "Unlimited-OCR-2 service is not ready. Switch to this model and wait for it to become ready.",
         )
         release_guard = OCRSlotReleaseGuard(controller_lease_id)
         return OCRSlotStreamingResponse(
@@ -4324,7 +4377,7 @@ async def proxy_unlimited_ocr_stream(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Unlimited-OCR Stream Proxy Error")
+        logger.exception("Unlimited-OCR-2 Stream Proxy Error")
         raise HTTPException(status_code=500, detail=str(e))
 
 

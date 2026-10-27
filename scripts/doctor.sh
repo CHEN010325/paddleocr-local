@@ -108,24 +108,24 @@ missing = [
 raise SystemExit(1 if missing else 0)
 PY
 	      then
-	        pass "macOS Unlimited-OCR virtual environment exists: .venv-unlimited-ocr-macos"
+	        pass "macOS Unlimited-OCR-2 virtual environment exists: .venv-unlimited-ocr-macos"
 	      else
-	        warn "macOS Unlimited-OCR virtual environment exists but dependencies are incomplete."
+	        warn "macOS Unlimited-OCR-2 virtual environment exists but dependencies are incomplete."
 	      fi
 	    else
-	      warn "macOS Unlimited-OCR virtual environment is not installed yet. The one-click script will create it."
+	      warn "macOS Unlimited-OCR-2 virtual environment is not installed yet. The one-click script will create it."
 	    fi
 	
 	    check_port_hint 8000 "WebUI"
 	    check_port_hint 8081 "PaddleOCR-VL API"
 	    check_port_hint 8082 "PP-OCRv6 API"
-	    check_port_hint 8083 "Unlimited-OCR API"
+	    check_port_hint 8083 "Unlimited-OCR-2 API"
 	    check_port_hint 8111 "MLX-VLM"
 	
 	    check_http "WebUI" "http://127.0.0.1:8000/"
 	    check_http "PaddleOCR-VL API" "http://127.0.0.1:8081/health"
 	    check_http "PP-OCRv6 API" "http://127.0.0.1:8082/health"
-	    check_http "Unlimited-OCR API" "http://127.0.0.1:8083/health"
+	    check_http "Unlimited-OCR-2 API" "http://127.0.0.1:8083/health"
 
     printf "\nRecommended one-click command:\n"
     printf "  ./macos-one-click.command\n"

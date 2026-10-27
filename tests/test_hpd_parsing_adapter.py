@@ -307,8 +307,8 @@ def test_one_click_and_runtime_include_hpd_parsing():
     legacy_sglang = re.search(r'\{ \$_ -in @\("9".*?\n\s*\}', script, re.DOTALL)
     assert legacy_all and 'Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"' not in legacy_all.group(0)
     assert legacy_sglang and 'Add-DeploymentModel -Models $selected -ModelId "hpd-parsing"' not in legacy_sglang.group(0)
-    assert '$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "ovisocr2", "hpd-parsing", "navidc-ocr")' in script
-    assert '$script:RuntimeModelCatalogIds += "unlimited-ocr"' in script
+    assert '$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr")' in script
+    assert '$script:RuntimeModelCatalogIds = @($script:ModelCatalogIds)' in script
     assert '"6", "navi", "navidc", "navidc-ocr"' in script
     assert '"11", "all-five", "full-five", "all", "full"' in script
     assert '$createArguments += "--no-build"' in script

@@ -272,7 +272,7 @@ test('task persistence strips transient payloads and status placeholders', () =>
 
     assert.equal(
         evaluate(`stripStreamStatusMarkdown(
-            'Final text\\n\\n**Unlimited-OCR status**\\n\\nLoading model'
+            'Final text\\n\\n**Unlimited-OCR-2 status**\\n\\nLoading model'
         )`),
         'Final text'
     );

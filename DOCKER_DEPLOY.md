@@ -2,15 +2,15 @@
 
 ## 服务组成
 
-`docker-compose.yml` 包含常驻 WebUI、隔离的内部控制/转换服务、五个默认产品模型的独立 profile，以及仅供隔离实验的非默认 Unlimited-OCR profile：
+`docker-compose.yml` 包含常驻 WebUI、隔离的内部控制/转换服务、六个默认产品模型的独立 profile：
 
 | 服务 | Profile | 作用 | 对外端口 |
 | --- | --- | --- | --- |
 | `paddleocr-vlm-server` | `paddleocr-vl` | VLLM 推理，加载 `PaddleOCR-VL-1.6-0.9B` | 无 |
 | `paddleocr-vl-api` | `paddleocr-vl` | PaddleX layout-parsing API | `8081:8080` |
 | `paddleocr-ocr-api` | `pp-ocrv6` | PaddleX OCR API，默认使用 PP-OCRv6 | `8082:8080` |
-| `unlimited-ocr-api` | `unlimited-ocr` | Unlimited-OCR 适配服务 | `8083:8080` |
-| `unlimited-ocr-sglang` | `unlimited-ocr` | Unlimited-OCR SGLang 推理（按 backend 启用） | `10000:10000` |
+| `unlimited-ocr-api` | `unlimited-ocr` | Unlimited-OCR-2 适配服务 | `8083:8080` |
+| `unlimited-ocr-sglang` | `unlimited-ocr` | Unlimited-OCR-2 SGLang 推理（按 backend 启用） | `10000:10000` |
 | `ovisocr2-api` | `ovisocr2` | OvisOCR2 独立 vLLM 推理 | `8084:8080` |
 | `hpd-parsing-server` | `hpd-parsing` | HPD-Parsing 官方定制 vLLM 推理 | 无 |
 | `hpd-parsing-api` | `hpd-parsing` | HPD-Parsing 图片/PDF 与 Markdown 适配服务 | `8085:8080` |
@@ -61,16 +61,16 @@ PANDOCR_MAX_CONCURRENT_OCR=1
 PANDOCR_ENFORCE_ORIGIN_CHECK=1
 PANDOCR_API_TOKEN=
 PANDOCR_ENABLE_API_DOCS=0
-UNLIMITED_OCR_MODEL_REVISION=07dea832e22aefee32ad281d4b80551282e1c168
+UNLIMITED_OCR_MODEL_REVISION=9cf077c4b206e0e2a31879df937b0b0bcba3661c
 UNLIMITED_OCR_MAX_RENDER_PIXELS=60000000
 OVISOCR2_MODEL_REVISION=65c619d374b55d4152e85150fc1b003700bc1f0c
 ```
 
-模型切换在停止旧容器后会连续两次确认其 `Running=false`，并对所选 GPU 做连续稳定的空闲显存采样；默认要求 3 个样本、间隔 500 ms、窗口波动不超过 128 MiB，释放门禁最多等待 60 秒且永远不会超过 `PANDOCR_MODEL_SWITCH_TIMEOUT`。任一探针不可用、数据缺失、空闲显存不足或不稳定都会失败关闭，不会启动目标模型。五模型空闲显存下限分别为 PaddleOCR-VL 6656 MiB、PP-OCRv6 4096 MiB，其余三模型 6656 MiB。
+模型切换在停止旧容器后会连续两次确认其 `Running=false`，并对所选 GPU 做连续稳定的空闲显存采样；默认要求 3 个样本、间隔 500 ms、窗口波动不超过 128 MiB，释放门禁最多等待 60 秒且永远不会超过 `PANDOCR_MODEL_SWITCH_TIMEOUT`。任一探针不可用、数据缺失、空闲显存不足或不稳定都会失败关闭，不会启动目标模型。六模型空闲显存下限分别为 PaddleOCR-VL 6656 MiB、PP-OCRv6 4096 MiB，其余四模型 6656 MiB。
 
-Unlimited-OCR 的 SGLang 运行镜像使用 digest 固定的 CUDA 12.9.1 基础镜像；这是 RTX 50 / Blackwell（SM120）执行 FlashInfer JIT 与 CUDA Graph 的必要条件。不要把 `UNLIMITED_OCR_SGLANG_CUDA_BASE_IMAGE` 回退到 CUDA 12.6，否则服务可能在权重加载完成后才因 SM120 架构检查失败。
+Unlimited-OCR-2 两条后端镜像使用 digest 固定的 CUDA 13.0.2 基础镜像，与 PyTorch 2.13 及第二代官方 SGLang wheel 的 cu13 组件匹配，并覆盖 RTX 50 / Blackwell（SM120）。不要将工具链单独回退到 CUDA 12.6；升级时应一起核验 wheel、PyTorch 与 CUDA 版本。部署说明见 [Unlimited-OCR-2](docs/unlimited-ocr.md)。
 
-`PANDOCR_MAX_UPLOAD_MB` 限制解码后的原文件；JSON 中的 base64 会额外膨胀，`PANDOCR_MAX_HTTP_BODY_MB=0` 表示自动计算安全的请求体上限。Unlimited-OCR 会在渲染 PDF 前按 `UNLIMITED_OCR_MAX_RENDER_PIXELS` 拒绝像素预算过大的文件，OvisOCR2 则逐页渲染和推理。远程模型 revision 与上游 Paddle/CUDA/Python 镜像均锁定到已核验提交或 digest；升级时应同时更新标签和哈希。
+`PANDOCR_MAX_UPLOAD_MB` 限制解码后的原文件；JSON 中的 base64 会额外膨胀，`PANDOCR_MAX_HTTP_BODY_MB=0` 表示自动计算安全的请求体上限。Unlimited-OCR-2 会在渲染 PDF 前按 `UNLIMITED_OCR_MAX_RENDER_PIXELS` 拒绝像素预算过大的文件，OvisOCR2 则逐页渲染和推理。远程模型 revision 与上游 Paddle/CUDA/Python 镜像均锁定到已核验提交或 digest；升级时应同时更新标签和哈希。
 
 RTX 30/40 系列等非 Blackwell NVIDIA GPU 使用 `env.docker`，或把两个镜像标签改为：
 

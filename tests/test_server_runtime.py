@@ -63,6 +63,11 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         cls.server = importlib.import_module("server")
 
     async def asyncSetUp(self):
+        # Generic lifecycle tests use synthetic containers. Migration has its
+        # own protocol tests and must not probe a real local Docker socket.
+        migration = patch.object(self.server, "unlimited_ocr_generation_upgrade_needed", new=AsyncMock(return_value=False))
+        migration.start()
+        self.addCleanup(migration.stop)
         self.server.model_runtime_lock = asyncio.Lock()
         self.server.model_runtime_task = None
         self.server.unlimited_ocr_backend_task = None

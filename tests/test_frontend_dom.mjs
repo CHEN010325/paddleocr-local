@@ -632,7 +632,7 @@ test('task, PDF, OCR, visual editor, and official-layout workflows execute', { t
     evaluate("layoutLabelText('image_caption'); layoutLabelText('unknown')");
 
     evaluate("rebuildTaskResultFromCompletedBatches(getActiveTask()); appendTaskMarkdown(getActiveTask(),'more')");
-    evaluate("isStreamStatusMarkdown('**Unlimited-OCR status**'); rebuildTaskMarkdownFromBatches(getActiveTask())");
+    evaluate("isStreamStatusMarkdown('**Unlimited-OCR-2 status**'); rebuildTaskMarkdownFromBatches(getActiveTask())");
     evaluate("refreshTaskUi(getActiveTask(),{autoFollow:true}); followStreamingResult({pageNumber:1,pageProgress:.5})");
     evaluate("scrollSourceToStreamingPosition({pageNumber:1,pageProgress:.5,bbox:[1,2,3,4],pageWidth:1000,pageHeight:1000})");
     evaluate("updateActionState(getActiveTask()); startButtonLabel(getActiveTask()); activeResultCopyText(getActiveTask())");
@@ -2615,7 +2615,7 @@ test('last branch outcomes cover append paths and zero-valued metadata', async (
       renderedPPOCRVisualContext=context;
       task.ocrResults.push({sourcePage:2,ocrLines:[{text:'b',box:[1,2,3,4]}]});
       renderPPOCRVisualResult(task,'next');
-      taskForPersistence({batches:[{markdown:'**Unlimited-OCR status**\\nworking'}]},{includeResults:true});
+      taskForPersistence({batches:[{markdown:'**Unlimited-OCR-2 status**\\nworking'}]},{includeResults:true});
     `);
 
     ev(`

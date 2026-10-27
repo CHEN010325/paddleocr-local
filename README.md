@@ -2,7 +2,7 @@
 
 **把 PDF、图片和 Office 文档变成可编辑 Markdown 的本地文档工作台。** 一套界面运行五种 OCR / 文档解析模型，结果留在自己的机器上，并支持批处理、CLI、Apple Silicon 以及可编辑、可搜索导出。
 
-Windows 一键部署与 Linux/Docker 默认显示五个模型，按需部署和切换，只运行当前选中的模型。已有独立模型服务的用户，可选用[外部 API 模式](docs/external-engines.md)：该模式只显示自行配置的服务；远程服务会接收待识别内容。
+Windows 一键部署与 Linux/Docker 默认显示六个模型，按需部署和切换，只运行当前选中的模型。已有独立模型服务的用户，可选用[外部 API 模式](docs/external-engines.md)：该模式只显示自行配置的服务；远程服务会接收待识别内容。
 
 [English](README.en.md) · [快速开始](QUICKSTART.md) · [CLI](CLI.md) · [硬件兼容表](docs/compatibility.md) · [路线图](ROADMAP.md) · [参与贡献](CONTRIBUTING.md)
 
@@ -16,7 +16,7 @@ Windows 一键部署与 Linux/Docker 默认显示五个模型，按需部署和�
 ## 为什么用它
 
 - **完全本地**：文档、解析结果和历史任务保存在自己的机器上。
-- **五模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR2、HPD-Parsing、NaviDC-OCR。Unlimited-OCR 默认不启动；Windows/Linux Docker 默认目录不展示，macOS 可按需选择实验适配器。
+- **六模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、Unlimited-OCR-2、OvisOCR2、HPD-Parsing、NaviDC-OCR。按需部署，只运行当前选择的模型；Unlimited-OCR-2 支持 Transformers / SGLang 双后端。
 - **照顾单卡机器**：只启动当前模型，切换时自动释放其他模型占用的显存。
 - **跨平台部署**：Windows / Linux NVIDIA Docker，macOS Apple Silicon 原生与 MLX 路径。
 - **不只是文本框**：逐页进度、原文对照、表格与公式渲染、任务恢复、可编辑与可搜索导出。
@@ -82,14 +82,14 @@ cp env.docker env.txt
 ./deploy.sh
 ```
 
-部署完成后打开 <http://localhost:8000>。五个默认逻辑模型分别受 Compose profile 保护；部署脚本只创建未运行的待机容器，由控制器启动一个选定模型。切换时必须先完整停止旧模型并释放显存，确认后才启动新模型，因此任意时刻显存只驻留当前选择的一个逻辑模型；绝不会通过裸 `docker compose up` 同时加载多个模型。首次运行需要下载镜像或模型，耗时取决于网络和所选模型。高级配置请查看 [Docker 部署文档](DOCKER_DEPLOY.md)。想先快速演示导出与恢复流程，可使用 [60 秒快速演示](docs/QUICK_DEMO.md)。
+部署完成后打开 <http://localhost:8000>。六个默认逻辑模型分别受 Compose profile 保护；部署脚本只创建未运行的待机容器，由控制器启动一个选定模型。切换时必须先完整停止旧模型并释放显存，确认后才启动新模型，因此任意时刻显存只驻留当前选择的一个逻辑模型；绝不会通过裸 `docker compose up` 同时加载多个模型。首次运行需要下载镜像或模型，耗时取决于网络和所选模型。高级配置请查看 [Docker 部署文档](DOCKER_DEPLOY.md)。想先快速演示导出与恢复流程，可使用 [60 秒快速演示](docs/QUICK_DEMO.md)。
 
 ## 主要能力
 
 - 批量上传图片、PDF、PPT/PPTX、DOC/DOCX
 - PDF 按页或按批解析，显示进度并从中断处恢复
 - 失败批次单独重试，不必重复解析已完成批次
-- 五模型按需部署、显存预检和运行时切换
+- 六模型按需部署、显存预检和运行时切换
 - 根据显存与模型能力给出推荐模型，并支持一键切换
 - Markdown、表格、公式、代码和图片区域渲染
 - 原文件与解析结果左右对照、滚动同步

@@ -23,7 +23,7 @@ docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 120
 ```
 
 独立模型服务（本地或远程）可使用 [API 引擎接入](docs/external-engines.md)。
-Unlimited-OCR 不在默认目录时，参见 [按需启用说明](docs/unlimited-ocr.md)。
+Unlimited-OCR-2 双后端部署参见 [使用说明](docs/unlimited-ocr.md)。
 
 ## macOS Apple Silicon 部署步骤
 
@@ -84,7 +84,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-默认产品线和 WebUI 模型目录包含 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`OvisOCR2`、`HPD-Parsing` 和 `NaviDC-OCR` 五个模型。脚本只拉取或构建选中模型的对应服务、WebUI 及两个隔离支持服务。Unlimited-OCR 默认不启动；Windows/Linux Docker 中保持为隐藏的实验 profile，macOS 可用 `./macos-one-click.command --model unlimited-ocr` 按需选择。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
+默认产品线和 WebUI 模型目录包含 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR-2`、`OvisOCR2`、`HPD-Parsing` 和 `NaviDC-OCR` 六个模型。脚本只拉取或构建选中模型的对应服务、WebUI 及两个隔离支持服务。Unlimited-OCR-2 已替换第一代并进入默认目录，支持 Transformers / SGLang 双后端；详见[部署说明](docs/unlimited-ocr.md)。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
 
 只做预检、不启动服务：
 

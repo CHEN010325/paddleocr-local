@@ -1,6 +1,6 @@
 # Release 流程
 
-当前默认产品线包含五个模型：PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR2、HPD-Parsing 和 NaviDC-OCR。Unlimited-OCR 代码仍保留用于隔离实验；它不属于 Windows/Linux 默认部署、默认 WebUI 目录或 Release 宣传内容，macOS 仅按需启用。
+当前 Windows/Linux 默认产品线包含六个模型：PaddleOCR-VL 1.6、PP-OCRv6、Unlimited-OCR-2、OvisOCR2、HPD-Parsing 和 NaviDC-OCR。Unlimited-OCR-2 已替换第一代，支持 Transformers 和官方专用 SGLang 后端。发布前分别核验两条路线；原生 macOS MPS 尚未完成第二代验收。
 
 ## 发布前
 

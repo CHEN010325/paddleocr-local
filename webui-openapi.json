@@ -1071,7 +1071,7 @@
     "/api/unlimited-ocr": {
       "post": {
         "summary": "Proxy Unlimited Ocr",
-        "description": "Proxy request to the optional Unlimited-OCR adapter service.",
+        "description": "Proxy request to the optional Unlimited-OCR-2 adapter service.",
         "operationId": "proxy_unlimited_ocr_api_unlimited_ocr_post",
         "responses": {
           "200": {

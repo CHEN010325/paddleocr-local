@@ -990,7 +990,7 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.server.logger, "exception") as log_exception:
             await response_with_close_error(scope, receive, send)
         log_exception.assert_called_once_with(
-            "Failed to close Unlimited-OCR response iterator"
+            "Failed to close Unlimited-OCR-2 response iterator"
         )
         release_after_close_error.release_once.assert_awaited_once()
 

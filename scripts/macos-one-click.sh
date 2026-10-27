@@ -60,7 +60,7 @@ if [[ -z "$REQUESTED_MODEL" ]]; then
     printf "\nChoose one model to install and start:\n"
     printf "  1) PaddleOCR-VL 1.6  Document parsing (MLX)\n"
     printf "  2) PP-OCRv6          Text recognition\n"
-    printf "  3) Unlimited-OCR     Long-document parsing (Transformers/MPS)\n"
+    printf "  3) Unlimited-OCR-2     Long-document parsing (Transformers/MPS)\n"
     printf "  4) OvisOCR2          Document parsing (MLX, Transformers fallback)\n"
     printf "  5) HPD-Parsing       Document parsing (Transformers/MPS)\n\n"
     read -r -p "Select a model [1]: " REQUESTED_MODEL
@@ -88,8 +88,8 @@ PANDOCR_MACOS_BACKEND="${PANDOCR_MACOS_BACKEND:-mlx}"
 UNLIMITED_OCR_MACOS_VENV="${UNLIMITED_OCR_MACOS_VENV:-.venv-unlimited-ocr-macos}"
 UNLIMITED_OCR_HOST="${UNLIMITED_OCR_HOST:-127.0.0.1}"
 UNLIMITED_OCR_API_PORT="${UNLIMITED_OCR_API_PORT:-8083}"
-UNLIMITED_OCR_MODEL_NAME="${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR}"
-UNLIMITED_OCR_MODEL_REVISION="${UNLIMITED_OCR_MODEL_REVISION:-07dea832e22aefee32ad281d4b80551282e1c168}"
+UNLIMITED_OCR_MODEL_NAME="${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}"
+UNLIMITED_OCR_MODEL_REVISION="${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}"
 UNLIMITED_OCR_BACKEND="${UNLIMITED_OCR_BACKEND:-transformers}"
 UNLIMITED_OCR_SUPPORTED_BACKENDS="${UNLIMITED_OCR_SUPPORTED_BACKENDS:-transformers}"
 UNLIMITED_OCR_PRELOAD="${UNLIMITED_OCR_PRELOAD:-0}"
@@ -307,17 +307,17 @@ run_unlimited_ocr_setup_if_needed() {
   fi
 
   if truthy "$PANDOCR_ONE_CLICK_FORCE_SETUP"; then
-    step "Installing macOS Unlimited-OCR dependencies"
+    step "Installing macOS Unlimited-OCR-2 dependencies"
     PYTHON_BIN="$setup_python" UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
     return
   fi
 
   if unlimited_ocr_env_ready; then
-    step "macOS Unlimited-OCR dependencies are already installed"
+    step "macOS Unlimited-OCR-2 dependencies are already installed"
     return
   fi
 
-  step "Installing macOS Unlimited-OCR dependencies"
+  step "Installing macOS Unlimited-OCR-2 dependencies"
   PYTHON_BIN="$setup_python" UNLIMITED_OCR_MACOS_VENV="$UNLIMITED_OCR_MACOS_VENV" bash scripts/setup-macos-unlimited-ocr.sh
 }
 

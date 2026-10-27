@@ -14,7 +14,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 if [[ "$(uname -m)" != "arm64" ]]; then
-  echo "Apple Silicon arm64 is required for the macOS Unlimited-OCR MPS route."
+  echo "Apple Silicon arm64 is required for the macOS Unlimited-OCR-2 MPS route."
   exit 1
 fi
 
@@ -30,13 +30,13 @@ PYTHON_VERSION="$(python_minor_version "$PYTHON_BIN")"
 echo "Using Python: $($PYTHON_BIN -c 'import sys; print(sys.executable)')"
 if [[ -x "$VENV_DIR/bin/python" ]]; then
   if [[ "$VENV_PYTHON_VERSION" == "3.12" || "$VENV_PYTHON_VERSION" == "3.13" ]]; then
-    echo "Reusing Unlimited-OCR virtual environment: $VENV_DIR (Python $VENV_PYTHON_VERSION)"
+    echo "Reusing Unlimited-OCR-2 virtual environment: $VENV_DIR (Python $VENV_PYTHON_VERSION)"
   else
     echo "Recreating $VENV_DIR with Python $PYTHON_VERSION because its Python ${VENV_PYTHON_VERSION:-unknown} is unsupported."
     "$PYTHON_BIN" -m venv --clear "$VENV_DIR"
   fi
 else
-  echo "Creating Unlimited-OCR virtual environment: $VENV_DIR (Python $PYTHON_VERSION)"
+  echo "Creating Unlimited-OCR-2 virtual environment: $VENV_DIR (Python $PYTHON_VERSION)"
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
@@ -64,12 +64,12 @@ required = [
 ]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
-    raise SystemExit(f"Missing Unlimited-OCR dependencies: {', '.join(missing)}")
+    raise SystemExit(f"Missing Unlimited-OCR-2 dependencies: {', '.join(missing)}")
 
 print("torch", torch.__version__)
 print("transformers", transformers.__version__)
 print("mps available", torch.backends.mps.is_available())
 PY
 
-echo "macOS Unlimited-OCR setup complete."
+echo "macOS Unlimited-OCR-2 setup complete."
 echo "Start with: PANDOCR_ENABLE_UNLIMITED_OCR=1 bash scripts/start-macos.sh"

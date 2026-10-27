@@ -1,8 +1,8 @@
 # PaddleOCR Local
 
-**A local document workbench that turns PDFs, images, and Office files into editable Markdown.** Run five OCR/document-parsing models behind one UI, keep data on your machine, automate with the CLI or watch folder, and create editable or searchable exports.
+**A local document workbench that turns PDFs, images, and Office files into editable Markdown.** Run six OCR/document-parsing models behind one UI, keep data on your machine, automate with the CLI or watch folder, and create editable or searchable exports.
 
-The default Windows one-click and Linux/Docker deployments show five models for on-demand deployment and switching, with only the selected model running. The optional [external API mode](docs/external-engines.md) shows only the services you configure. Remote services receive the document content you send for recognition.
+The default Windows one-click and Linux/Docker deployments show six models for on-demand deployment and switching, with only the selected model running. The optional [external API mode](docs/external-engines.md) shows only the services you configure. Remote services receive the document content you send for recognition.
 
 [简体中文](README.md) · [Quick start](QUICKSTART.md) · [CLI](CLI.md) · [Compatibility](docs/compatibility.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
@@ -19,7 +19,7 @@ and open http://127.0.0.1:8000. See [CPU deployment and validation scope](docs/c
 Footnotes and sidebar text are retained by default; explicit ignore switches are available.
 
 - **Local-first**: documents, results, and task history stay on your machine.
-- **Five models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR2, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR is not started by default; it is hidden from the default Windows/Linux Docker catalog and remains an opt-in macOS experiment.
+- **Six models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, Unlimited-OCR-2, OvisOCR2, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR-2 replaces the first generation and supports both Transformers and SGLang. Only the selected model runs.
 - **Single-GPU friendly**: only the active model runs; switching releases the others' VRAM.
 - **Cross-platform**: Windows/Linux NVIDIA Docker plus native and MLX paths for Apple Silicon.
 - **Built for documents**: page progress, recovery, source/result comparison, tables, formulas, and editable/searchable exports.
@@ -72,14 +72,14 @@ cp env.docker env.txt
 ./deploy.sh
 ```
 
-Then open <http://localhost:8000>. Each of the five logical models is guarded by its own Compose profile. The deployment script creates stopped standby containers and lets the controller start exactly one selected model. A switch fully stops the old model and releases its GPU memory before the new model starts, so GPU memory contains only the currently selected logical model at every moment. The scripts never use a bare `docker compose up` that could load multiple models. The first run downloads images or model weights. See [Docker deployment](DOCKER_DEPLOY.md) for advanced configuration, or use the [60-second demo](docs/QUICK_DEMO.md) to exercise export and recovery first.
+Then open <http://localhost:8000>. Each of the six logical models is guarded by its own Compose profile. The deployment script creates stopped standby containers and lets the controller start exactly one selected model. A switch fully stops the old model and releases its GPU memory before the new model starts, so GPU memory contains only the currently selected logical model at every moment. The scripts never use a bare `docker compose up` that could load multiple models. The first run downloads images or model weights. See [Docker deployment](DOCKER_DEPLOY.md) for advanced configuration, or use the [60-second demo](docs/QUICK_DEMO.md) to exercise export and recovery first.
 
 ## Features
 
 - Multi-file image, PDF, PPT/PPTX, DOC/DOCX upload
 - Page/batch PDF processing, progress, persistence, and interrupted-task recovery
 - Retry failed batches without reprocessing completed batches
-- On-demand deployment, VRAM preflight, and runtime switching for five default models
+- On-demand deployment, VRAM preflight, and runtime switching for six default models
 - Hardware-aware model recommendation with one-click switching
 - Markdown, table, formula, code, and extracted-image rendering
 - Side-by-side source and result views with synchronized scrolling

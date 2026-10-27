@@ -90,7 +90,7 @@ async def deploy_model(request: server.ModelDeployRequest):
 @app.get("/unlimited-ocr/backend")
 async def get_backend():
     if not server.ENABLE_UNLIMITED_OCR:
-        raise HTTPException(status_code=404, detail="Unlimited-OCR is not enabled")
+        raise HTTPException(status_code=404, detail="Unlimited-OCR-2 is not enabled")
     return {
         "backend": server.unlimited_ocr_runtime_backend,
         "supportedBackends": sorted(server.UNLIMITED_OCR_SUPPORTED_BACKENDS),

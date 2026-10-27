@@ -27,7 +27,7 @@ stop_pid_file() {
 stop_pid_file run/paddlex.pid "PaddleX service" "paddlex --serve"
 stop_pid_file run/ppocrv6.pid "PP-OCRv6 service" "paddlex --serve"
 stop_pid_file run/mlx-vlm.pid "MLX-VLM service" "mlx_vlm.server"
-stop_pid_file run/unlimited-ocr.pid "Unlimited-OCR adapter" "unlimited_ocr_adapter:app"
+stop_pid_file run/unlimited-ocr.pid "Unlimited-OCR-2 adapter" "unlimited_ocr_adapter:app"
 stop_pid_file run/ovisocr2.pid "OvisOCR2 adapter" "ovisocr2_adapter:app"
 stop_pid_file run/hpd-parsing.pid "HPD-Parsing adapter" "hpd_parsing_adapter:app"
 stop_pid_file run/hpd-parsing-backend.pid "HPD-Parsing MPS backend" "hpd_parsing_macos_server:app"

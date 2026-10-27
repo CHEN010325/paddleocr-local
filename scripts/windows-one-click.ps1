@@ -32,7 +32,7 @@ $script:EnableNavidcOcr = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
 $script:DeployModelIds = @("paddleocr-vl-1.6")
-$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "ovisocr2", "hpd-parsing", "navidc-ocr")
+$script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr")
 $script:RuntimeModelCatalogIds = @($script:ModelCatalogIds)
 Set-Location $script:RepoRoot
 
@@ -179,7 +179,7 @@ function Test-GpuSupportsSglang {
 
     if ([double]$Gpu.ComputeCapability -lt 7.5) {
         $compute = Format-ComputeCapability $Gpu.ComputeCapability
-        throw "Unlimited-OCR SGLang requires NVIDIA compute capability sm75 or newer. GPU $($Gpu.Index) ($($Gpu.Name)) is $compute. Use -UnlimitedOcrBackend transformers on this GPU."
+        throw "Unlimited-OCR-2 SGLang requires NVIDIA compute capability sm75 or newer. GPU $($Gpu.Index) ($($Gpu.Name)) is $compute. Use -UnlimitedOcrBackend transformers on this GPU."
     }
 }
 
@@ -283,7 +283,7 @@ function Normalize-UnlimitedOcrBackend {
     if ($normalized -in @("transformers", "sglang")) {
         return $normalized
     }
-    throw "Unsupported Unlimited-OCR backend '$Value'. Use transformers or sglang."
+    throw "Unsupported Unlimited-OCR-2 backend '$Value'. Use transformers or sglang."
 }
 
 function Add-DeploymentModel {
@@ -303,7 +303,7 @@ function Resolve-ModelId {
     switch ($normalized) {
         { $_ -in @("1", "vl", "paddleocr-vl", "paddleocr-vl-1.6", "paddleocrvl") } { return "paddleocr-vl-1.6" }
         { $_ -in @("2", "ppocr", "ppocrv6", "pp-ocrv6", "ocr") } { return "pp-ocrv6" }
-        { $_ -in @("3", "unlimited", "unlimited-ocr", "uow") } { return "unlimited-ocr" }
+        { $_ -in @("3", "unlimited", "unlimited-ocr", "unlimited-ocr-2", "uocr2", "uow") } { return "unlimited-ocr" }
         { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } { return "ovisocr2" }
         { $_ -in @("5", "hpd", "hpd-parsing", "hpdparsing") } { return "hpd-parsing" }
         { $_ -in @("6", "navi", "navidc", "navidc-ocr") } { return "navidc-ocr" }
@@ -316,7 +316,7 @@ function Get-ModelDisplayName {
     switch ($ModelId) {
         "paddleocr-vl-1.6" { return "PaddleOCR-VL 1.6" }
         "pp-ocrv6" { return "PP-OCRv6" }
-        "unlimited-ocr" { return "Unlimited-OCR" }
+        "unlimited-ocr" { return "Unlimited-OCR-2" }
         "ovisocr2" { return "OvisOCR2" }
         "hpd-parsing" { return "HPD-Parsing" }
         "navidc-ocr" { return "NaviDC-OCR" }
@@ -358,7 +358,7 @@ function Read-FriendlyDeploymentSelection {
     Write-Host ""
     Write-Host "  1) PaddleOCR-VL 1.6   Full document parsing (recommended default)"
     Write-Host "  2) PP-OCRv6           Fast text OCR"
-    Write-Host "  3) Unlimited-OCR      Long-document parsing (experimental, opt-in)"
+    Write-Host "  3) Unlimited-OCR-2      Long-document parsing with SR-SWA"
     Write-Host "  4) OvisOCR2           Document parsing with vLLM"
     Write-Host "  5) HPD-Parsing        High-throughput hierarchical document parsing"
     Write-Host "  6) NaviDC-OCR         Complex documents, tables, and formulas"
@@ -425,7 +425,7 @@ function Resolve-DeploymentSelection {
                 Add-DeploymentModel -Models $selected -ModelId "pp-ocrv6"
                 continue
             }
-            { $_ -in @("3", "unlimited", "unlimited-ocr", "uow", "unlimited-ocr-transformers") } {
+            { $_ -in @("3", "unlimited", "unlimited-ocr", "unlimited-ocr-2", "uocr2", "uow", "unlimited-ocr-transformers") } {
                 Add-DeploymentModel -Models $selected -ModelId "unlimited-ocr"
                 if (-not $backendExplicit) {
                     $backend = "transformers"
@@ -526,7 +526,7 @@ function Read-UnlimitedOcrBackendSelection {
     param([object]$Gpu)
 
     $recommended = if (Test-IsBlackwellGpu $Gpu.Name) { "SGLang" } else { "Transformers" }
-    Write-Section "Choose the Unlimited-OCR backend"
+    Write-Section "Choose the Unlimited-OCR-2 backend"
     Write-Host "  1) Auto          $recommended is recommended for this GPU"
     Write-Host "  2) Transformers  Simpler runtime"
     Write-Host "  3) SGLang        CUDA optimized, requires sm75 or newer"
@@ -593,12 +593,12 @@ function Apply-GpuSpecificBackendDefaults {
 
     if (-not $script:UnlimitedOcrBackendExplicit -and $script:UnlimitedOcrBackend -eq "transformers") {
         $script:UnlimitedOcrBackend = "sglang"
-        Write-Warn "RTX 50 / Blackwell GPU detected. Using Unlimited-OCR SGLang by default because the current Transformers CUDA 12.6 wheel does not execute on sm120 GPUs."
+        Write-Ok "RTX 50 / Blackwell GPU detected. Using the official Unlimited-OCR-2 SGLang serving backend."
         return
     }
 
     if ($script:UnlimitedOcrBackend -eq "transformers") {
-        Write-Warn "RTX 50 / Blackwell GPU detected. Unlimited-OCR Transformers was explicitly selected, but the current CUDA 12.6 PyTorch wheel may load and then fail during inference on sm120 GPUs. Use -UnlimitedOcrBackend sglang if that happens."
+        Write-Ok "Unlimited-OCR-2 Transformers selected with CUDA 13 support for RTX 50 / Blackwell."
     }
 }
 
@@ -713,10 +713,11 @@ function New-RuntimeEnvFile {
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -Value $script:ActiveModel
     $script:RuntimeModelCatalogIds = @($script:ModelCatalogIds)
     if ($script:DeployModelIds -contains "unlimited-ocr") {
-        $script:RuntimeModelCatalogIds += "unlimited-ocr"
+        $script:RuntimeModelCatalogIds = @($script:RuntimeModelCatalogIds + "unlimited-ocr" | Select-Object -Unique)
     }
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_MODEL_CATALOG" -Value ($script:RuntimeModelCatalogIds -join ",")
-    $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_MODEL_NAME" -Value "baidu/Unlimited-OCR"
+    $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_MODEL_NAME" -Value "baidu/Unlimited-OCR-2"
+    $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_MODEL_REVISION" -Value "9cf077c4b206e0e2a31879df937b0b0bcba3661c"
     $lines = Set-EnvLine -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -Value $script:UnlimitedOcrBackend
     $lines = Ensure-EnvLine -Lines $lines -Key "UNLIMITED_OCR_PRELOAD" -Value "1"
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_ENABLE_UNLIMITED_OCR" -Value $(if ($script:DeployModelIds -contains "unlimited-ocr") { "1" } else { "0" })
@@ -770,7 +771,7 @@ function Set-UnlimitedOcrRuntimeSetting {
 
     $settings["unlimitedOcrBackend"] = $script:UnlimitedOcrBackend
     $settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsPath -Encoding UTF8
-    Write-Ok "Persisted Unlimited-OCR backend: $script:UnlimitedOcrBackend"
+    Write-Ok "Persisted Unlimited-OCR-2 backend: $script:UnlimitedOcrBackend"
 }
 
 function Get-ComposeArgs {
@@ -1064,7 +1065,7 @@ try {
     }
     Apply-GpuSpecificBackendDefaults -Gpu $gpu
     if ($script:EnableUnlimitedOcr) {
-        Write-Ok "Unlimited-OCR backend: $script:UnlimitedOcrBackend"
+        Write-Ok "Unlimited-OCR-2 backend: $script:UnlimitedOcrBackend"
     }
 
     $gpuRequirement = Get-DeploymentGpuRequirement -ModelIds $script:DeployModelIds
@@ -1157,16 +1158,17 @@ try {
 
     $gpuCheckService = Get-GpuCheckService
     $gpuCheckCommand = if ($gpuCheckService -eq "hpd-parsing-server") {
-        @("run", "--rm", "--no-deps", "--entrypoint", "nvidia-smi", $gpuCheckService)
+        @("run", "--pull", "never", "--rm", "--no-deps", "--entrypoint", "nvidia-smi", $gpuCheckService)
     }
     else {
-        @("run", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")
+        @("run", "--pull", "never", "--rm", "--no-deps", $gpuCheckService, "nvidia-smi")
     }
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $gpuCheckCommand) -Description "Checking Docker GPU access"
     $createArguments = @("up", "-d", "--no-start", "--force-recreate")
-    if ($SkipBuild) {
-        $createArguments += "--no-build"
-    }
+    # Images were built/pulled above (or explicitly supplied with -SkipBuild).
+    # Override pull_policy: build so probes/container creation do not rebuild them.
+    $createArguments += "--no-build"
+    $createArguments += @("--pull", "never")
     $createArguments += Get-DeploymentServiceList
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs $createArguments) -Description "Creating selected PaddleOCR Local containers"
     Invoke-Checked -File "docker" -Arguments (Get-ComposeArgs @("start", "pandocr-controller", "pandocr-office-converter", "pandocr-web")) -Description "Starting WebUI and isolated support services"
@@ -1182,7 +1184,7 @@ try {
         Write-Host "OCR API health: http://localhost:8082/health"
     }
     if ($script:EnableUnlimitedOcr) {
-        Write-Host "Unlimited-OCR API health: http://localhost:8083/health"
+        Write-Host "Unlimited-OCR-2 API health: http://localhost:8083/health"
     }
     if ($script:EnableOvisOcr2) {
         Write-Host "OvisOCR2 API health: http://localhost:8084/health"

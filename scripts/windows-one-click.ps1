@@ -1107,7 +1107,9 @@ try {
     Get-RequiredCommand -Name "docker" -InstallHint "Please install Docker Desktop and start it."
     Get-RequiredCommand -Name "nvidia-smi" -InstallHint "Please install/update the NVIDIA driver. AMD/Intel/CPU-only PCs should use the existing PP-OCRv6 CPU entry; this CUDA model cannot be automatically deployed there."
 
-    Invoke-Checked -File "docker" -Arguments @("info", "--format", "{{.ServerVersion}}") -Description "Checking Docker Desktop"
+    . (Join-Path $PSScriptRoot "docker-desktop-runtime.ps1")
+    Write-Section "Checking Docker Desktop"
+    Ensure-DockerDesktopReady -DryRun:$DryRun
     Invoke-Checked -File "docker" -Arguments @("compose", "version") -Description "Checking Docker Compose"
 
     if (-not [string]::IsNullOrWhiteSpace($script:RequestedModel) -and -not [string]::IsNullOrWhiteSpace($script:RequestedModels)) {

@@ -14,6 +14,13 @@ Windows 可直接使用一键脚本的预检模式：
 .\windows-one-click.bat -DryRun
 ```
 
+正常启动时，Windows 一键脚本会自动启动已安装的 Docker Desktop 并等待引擎就绪。
+若本次启动日志明确出现 OTel `userAnalyticsOtlpHttp.sock` 残留错误，会结束当前会话内
+已核实安装路径的 Docker Desktop 进程，通过 Docker 的 WSL 发行版只移除该 socket，
+然后重试一次。该流程不会清理镜像、容器、卷、模型缓存或项目数据；不执行恢复出厂设置。
+Docker 已正常运行时不重启；远程 context、其他错误、普通同名文件及重复故障均不自动清理。
+`-DryRun` 不启动或修复 Docker。该恢复逻辑由原有入口和 Unlimited-OCR-2 独立入口共享。
+
 ## 选择部署方式
 
 Unlimited-OCR-2 提供独立的 Windows/NVIDIA 命令，自动检查硬件并选择后端、上下文与每批页数：

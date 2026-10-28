@@ -72,6 +72,9 @@ Windows with NVIDIA:
 .\windows-one-click.bat
 ```
 
+The launcher starts Docker Desktop when needed and retries the known OTel stale-socket
+failure once, preserving model caches and project data. Dry runs never start or repair Docker.
+
 macOS Apple Silicon:
 
 ```bash

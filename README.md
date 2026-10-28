@@ -70,6 +70,9 @@ RTX 5070 Ti 16GB 使用单并发 CUDA Graph 配置与每批 5 页的多页解析
 .\windows-one-click.bat
 ```
 
+脚本会自动启动 Docker Desktop；遇到已知的 OTel socket 残留故障会定点恢复一次，
+保留模型缓存和项目数据。[恢复边界与预检说明](QUICKSTART.md)
+
 ### 无 NVIDIA 显卡（CPU）
 
 ```sh

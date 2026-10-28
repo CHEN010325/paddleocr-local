@@ -20,6 +20,7 @@ Windows 可直接使用一键脚本的预检模式：
 然后重试一次。该流程不会清理镜像、容器、卷、模型缓存或项目数据；不执行恢复出厂设置。
 Docker 已正常运行时不重启；远程 context、其他错误、普通同名文件及重复故障均不自动清理。
 `-DryRun` 不启动或修复 Docker。该恢复逻辑由原有入口和 Unlimited-OCR-2 独立入口共享。
+真实重启、socket 恢复及数据保全的实测见[验收记录](docs/windows-docker-recovery-validation.md)。
 
 ## 选择部署方式
 

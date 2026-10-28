@@ -123,6 +123,17 @@ $allowed | ConvertTo-Json -Compress
     assert result is False
 
 
+def test_context_inspection_avoids_embedded_quotes_in_windows_powershell(tmp_path):
+    result = run_ps(tmp_path, r"""
+$env:DOCKER_CONTEXT='desktop-linux'; $env:DOCKER_HOST=''
+$script:template=''
+function docker { $script:template=$args[-1]; $global:LASTEXITCODE=0; return 'npipe:////./pipe/dockerDesktopLinuxEngine' }
+Assert-LocalDockerDesktopContext
+$script:template | ConvertTo-Json -Compress
+""")
+    assert result == '{{.Endpoints.docker.Host}}'
+
+
 def test_engine_recovered_during_detection_is_not_stopped(tmp_path):
     result = run_ps(tmp_path, r"""
 function Test-DockerEngineReady { return $true }
@@ -178,12 +189,15 @@ $since=Get-DockerDesktopStartupSince
     assert result is True
 
 
-@pytest.mark.parametrize('exits,expected', [(True, [True, 0, 1]), (False, [False, 1, 1])])
-def test_docker_probe_has_a_timeout_and_cleans_up_only_its_child(tmp_path, exits, expected):
+@pytest.mark.parametrize('exits,version,expected', [(True, '28.0.4', [True, 0, 1]), (False, '', [False, 1, 1]), (True, '', [False, 0, 1])])
+def test_docker_probe_has_a_timeout_and_cleans_up_only_its_child(tmp_path, exits, version, expected):
     result = run_ps(tmp_path, r"""
 $script:kills=0; $script:disposes=0
 function New-DockerInfoProbe {
     $probe=[pscustomobject]@{ExitCode=0}
+    $reader=[pscustomobject]@{}
+    $reader | Add-Member -MemberType ScriptMethod -Name ReadToEnd -Value { return 'VERSION' }
+    $probe | Add-Member -NotePropertyName StandardOutput -NotePropertyValue $reader
     $probe | Add-Member -MemberType ScriptMethod -Name Start -Value { return $true }
     $probe | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($Milliseconds) if($Milliseconds -ne 5000) { throw 'unbounded probe' }; return EXITS }
     $probe | Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:kills++ }
@@ -192,7 +206,7 @@ function New-DockerInfoProbe {
 }
 $ready=Test-DockerEngineReady
 ConvertTo-Json -InputObject @($ready,$script:kills,$script:disposes) -Compress
-""".replace('EXITS', '$true' if exits else '$false'))
+""".replace('EXITS', '$true' if exits else '$false').replace('VERSION',version))
     assert result == expected
 
 

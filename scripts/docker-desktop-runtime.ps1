@@ -19,7 +19,10 @@ function Test-DockerEngineReady {
             try { $probe.Kill() } catch { Write-Verbose 'Readiness probe already exited.' }
             return $false
         }
-        return $probe.ExitCode -eq 0
+        # Docker CLI 28 can exit 0 with only a newline when Desktop's pipe is absent.
+        # A real server version is required; an exit code alone is not readiness.
+        $version = $probe.StandardOutput.ReadToEnd().Trim()
+        return $probe.ExitCode -eq 0 -and $version -match '^\d+\.\d+(?:\.\d+)?(?:[-+]\S+)?$'
     }
     finally { $probe.Dispose() }
 }
@@ -33,7 +36,8 @@ function Assert-LocalDockerDesktopContext {
             $context = & docker context show 2>$null
             if ($LASTEXITCODE -ne 0) { throw 'Cannot determine Docker context; no local recovery attempted.' }
         }
-        $endpoint = & docker context inspect $context --format '{{(index .Endpoints "docker").Host}}' 2>$null
+        # Avoid embedded quotes: Windows PowerShell 5.1 strips them in native argv.
+        $endpoint = & docker context inspect $context --format '{{.Endpoints.docker.Host}}' 2>$null
         if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Docker context; no local recovery attempted.' }
     }
     if ("$endpoint" -notmatch '^npipe:/{2,}\.(/|\\)pipe(/|\\)(docker_engine|dockerDesktopLinuxEngine)$') {

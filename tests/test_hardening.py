@@ -194,7 +194,7 @@ def test_ovis_pdf_pages_are_processed_incrementally():
     pdf = document.tobytes()
     document.close()
 
-    parser = SimpleNamespace(parse=lambda pages: ["page text"])
+    parser = SimpleNamespace(parse=lambda pages: ['[{"bbox":[0,0,100,100],"category":"text","content":"page text"}]'])
     with patch.object(ovis, "read_input", AsyncMock(return_value=(pdf, 0))), patch.object(
         ovis, "get_parser", AsyncMock(return_value=parser)
     ):

@@ -2039,7 +2039,7 @@ function isUnlimitedOCRTask(task) {
         || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === 'unlimited-ocr'));
 }
 
-function isOvisOCR2Task(task) {
+function isOvisOCR3Task(task) {
     return task?.modelId === OVIS_OCR_MODEL_ID
         || Boolean(task?.ocrResults?.some((pageResult) => pageResult?.parser === OVIS_OCR_MODEL_ID));
 }
@@ -2052,7 +2052,7 @@ function isHPDParsingTask(task) {
 function shouldRenderOfficialLayout(task) {
     // These models return complete document Markdown, while their layout blocks
     // are partial metadata and must not replace the full Markdown result.
-    return !isUnlimitedOCRTask(task) && !isOvisOCR2Task(task) && !isHPDParsingTask(task);
+    return !isUnlimitedOCRTask(task) && !isOvisOCR3Task(task) && !isHPDParsingTask(task);
 }
 
 function renderPPOCRVisualResult(task, markdownKey, scrollState = null) {
@@ -2972,7 +2972,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                 refreshTaskUi(task);
 
                 let result;
-                const showOvisProgress = isOvisOCR2Task(task);
+                const showOvisProgress = isOvisOCR3Task(task);
                 if (showOvisProgress) batch._progressStartedAt = Date.now();
                 const progressTimer = showOvisProgress
                     ? window.setInterval(() => {
@@ -5381,9 +5381,9 @@ function resultPaneTitle(task) {
 function emptyResultText(task) {
     if (task.status === 'processing') {
         const batch = task.batches?.find((item) => item.status === 'processing');
-        if (batch?._progressStartedAt && isOvisOCR2Task(task)) {
+        if (batch?._progressStartedAt && isOvisOCR3Task(task)) {
             return t(
-                'OvisOCR2 正在解析{label}，已用时 {seconds} 秒。苹果端逐页处理，完成后会自动显示结果。',
+                'OvisOCR3 正在解析{label}，已用时 {seconds} 秒。首次推理可能需要编译，完成后会自动显示结果。',
                 {
                     label: batch.label || '',
                     seconds: taskProgressSeconds(task)

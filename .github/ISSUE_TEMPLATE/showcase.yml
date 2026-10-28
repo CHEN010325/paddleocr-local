@@ -25,7 +25,7 @@ body:
     id: model
     attributes:
       label: Model
-      placeholder: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR2, HPD-Parsing, or NaviDC-OCR
+      placeholder: PaddleOCR-VL 1.6, PP-OCRv6, OvisOCR3, HPD-Parsing, or NaviDC-OCR
     validations:
       required: true
   - type: textarea

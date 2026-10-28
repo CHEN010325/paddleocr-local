@@ -27,10 +27,20 @@ RTX 5070 Ti 16GB 使用单并发 CUDA Graph 配置与每批 5 页的多页解析
 其他模型继续使用原来的 `windows-one-click.bat`，保留统一界面和按需切换。
 详见 [部署、使用及资源限制](docs/unlimited-ocr.md)。
 
+## OvisOCR3 独立一键部署
+
+OvisOCR2 已升级为 [OvisOCR3](https://huggingface.co/ATH-MaaS/OvisOCR3)，保持原有文档工作台。Windows NVIDIA / Docker 用户运行：
+
+```powershell
+.\ovisocr3-one-click.bat
+```
+
+默认使用 vLLM，支持带版面框的结构化解析、表格、公式与图片裁剪；保留 Transformers 后端和 macOS MLX 入口。旧任务与模型缓存保留。详见 [部署说明](OVISOCR3_DEPLOY.md)。
+
 ## 为什么用它
 
 - **完全本地**：文档、解析结果和历史任务保存在自己的机器上。
-- **六模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、Unlimited-OCR-2、OvisOCR2、HPD-Parsing、NaviDC-OCR。按需部署，只运行当前选择的模型；Unlimited-OCR-2 支持 Transformers / SGLang 双后端。
+- **六模型统一入口**：PaddleOCR-VL 1.6、PP-OCRv6、Unlimited-OCR-2、OvisOCR3、HPD-Parsing、NaviDC-OCR。按需部署，只运行当前选择的模型；Unlimited-OCR-2 支持 Transformers / SGLang 双后端。
 - **照顾单卡机器**：只启动当前模型，切换时自动释放其他模型占用的显存。
 - **跨平台部署**：Windows / Linux NVIDIA Docker，macOS Apple Silicon 原生与 MLX 路径。
 - **不只是文本框**：逐页进度、原文对照、表格与公式渲染、任务恢复、可编辑与可搜索导出。
@@ -41,10 +51,10 @@ RTX 5070 Ti 16GB 使用单并发 CUDA Graph 配置与每批 5 页的多页解析
 | 你的需求 | 推荐入口 |
 | --- | --- |
 | 私密文档不想上传云端 | 本地 WebUI，任务和结果保存在本机 |
-| 单卡显存有限 | PP-OCRv6 / OvisOCR2，并按需切换模型 |
+| 单卡显存有限 | PP-OCRv6 / OvisOCR3，并按需切换模型 |
 | 论文、表格、公式解析 | PaddleOCR-VL 1.6 或 HPD-Parsing |
 | 批量自动化 | CLI、目录批处理或 Watch Folder |
-| Apple Silicon | macOS 原生路径或 OvisOCR2 MLX |
+| Apple Silicon | macOS 原生路径或 OvisOCR3 MLX |
 
 ## 支持的模型
 
@@ -53,7 +63,7 @@ RTX 5070 Ti 16GB 使用单并发 CUDA Graph 配置与每批 5 页的多页解析
 | PaddleOCR-VL 1.6 | 复杂版面、表格、公式 | NVIDIA 12 GB+ | PaddleOCR 文档解析主线 |
 | Unlimited-OCR-2 | 多页连续文档、版面与表格 | 推荐 NVIDIA 16 GB | 官方 Transformers / SGLang 双后端，独立一键部署 |
 | PP-OCRv6 | 普通文字识别、低显存场景 | CPU / NVIDIA 4 GB+ | 提供独立无 GPU 部署；见 [CPU 入口](docs/cpu.md) |
-| OvisOCR2 | 文档理解、Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | macOS 默认使用 MLX |
+| OvisOCR3 | 文档理解、Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | macOS 默认使用 MLX |
 | HPD-Parsing | 高质量文档解析 | NVIDIA 8 GB+ | 官方定制 vLLM 运行时 |
 | NaviDC-OCR | 复杂文档、版面、表格与公式 | NVIDIA 8 GB+ | 官方 NaviOCRClient vLLM 异步两阶段流程（可选 Transformers 后端） |
 
@@ -84,7 +94,7 @@ docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 120
 
 ### macOS Apple Silicon
 
-支持 Apple M1、M2、M3、M4，OvisOCR2 默认使用 MLX：
+支持 Apple M1、M2、M3、M4，OvisOCR3 默认使用 MLX：
 
 ```bash
 make doctor
@@ -119,9 +129,9 @@ cp env.docker env.txt
 
 ## 你应该选择哪个模型
 
-- **没有 NVIDIA 显卡**：Apple Silicon 可选 OvisOCR2 MLX；Windows/Linux 可使用 [PP-OCRv6 CPU 入口](docs/cpu.md)。
+- **没有 NVIDIA 显卡**：Apple Silicon 可选 OvisOCR3 MLX；Windows/Linux 可使用 [PP-OCRv6 CPU 入口](docs/cpu.md)。
 - **显存只有 8 GB**：优先采用 WebUI 显存预检给出的推荐模型；通常会推荐 PP-OCRv6，避免重模型在低显存模式下勉强启动。
-- **复杂论文和公式**：优先尝试 PaddleOCR-VL、OvisOCR2、HPD-Parsing。
+- **复杂论文和公式**：优先尝试 PaddleOCR-VL、OvisOCR3、HPD-Parsing。
 
 ## 项目质量
 

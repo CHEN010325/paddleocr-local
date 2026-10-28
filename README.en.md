@@ -35,7 +35,7 @@ and open http://127.0.0.1:8000. See [CPU deployment and validation scope](docs/c
 Footnotes and sidebar text are retained by default; explicit ignore switches are available.
 
 - **Local-first**: documents, results, and task history stay on your machine.
-- **Six models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, Unlimited-OCR-2, OvisOCR2, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR-2 replaces the first generation and supports both Transformers and SGLang. Only the selected model runs.
+- **Six models, one UI**: PaddleOCR-VL 1.6, PP-OCRv6, Unlimited-OCR-2, OvisOCR3, HPD-Parsing, and NaviDC-OCR. Unlimited-OCR-2 replaces the first generation and supports both Transformers and SGLang. Only the selected model runs.
 - **Single-GPU friendly**: only the active model runs; switching releases the others' VRAM.
 - **Cross-platform**: Windows/Linux NVIDIA Docker plus native and MLX paths for Apple Silicon.
 - **Built for documents**: page progress, recovery, source/result comparison, tables, formulas, and editable/searchable exports.
@@ -46,10 +46,10 @@ Footnotes and sidebar text are retained by default; explicit ignore switches are
 | Need | Start here |
 | --- | --- |
 | Keep private documents offline | Local WebUI and on-machine task history |
-| Work with limited VRAM | PP-OCRv6 / OvisOCR2 with on-demand switching |
+| Work with limited VRAM | PP-OCRv6 / OvisOCR3 with on-demand switching |
 | Parse papers, tables, and formulas | PaddleOCR-VL 1.6 or HPD-Parsing |
 | Automate batches | CLI, folder batching, or Watch Folder |
-| Use Apple Silicon | Native macOS path or OvisOCR2 MLX |
+| Use Apple Silicon | Native macOS path or OvisOCR3 MLX |
 
 ## Models
 
@@ -57,7 +57,7 @@ Footnotes and sidebar text are retained by default; explicit ignore switches are
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 | Complex layouts, tables, formulas | NVIDIA 12 GB+ | Main PaddleOCR document pipeline |
 | PP-OCRv6 | Text OCR and lower-memory systems | CPU / NVIDIA 4 GB+ | Independent CPU deployment; see [CPU setup](docs/cpu.md) |
-| OvisOCR2 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
+| OvisOCR3 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
 | HPD-Parsing | High-quality document parsing | NVIDIA 8 GB+ | Official customized vLLM runtime |
 | NaviDC-OCR | Complex documents, layout, tables and formulas | NVIDIA 8 GB+ | Official NaviOCRClient vLLM async two-step pipeline (Transformers backend optional) |
 

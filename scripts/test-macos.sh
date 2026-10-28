@@ -99,11 +99,11 @@ PY
 fi
 
 if truthy "$PANDOCR_ENABLE_OVISOCR2"; then
-  echo "Testing OvisOCR2 adapter health..."
+  echo "Testing OvisOCR3 adapter health..."
   curl -fsS "http://${OVISOCR2_HOST}:${OVISOCR2_API_PORT}/health"
   echo
 
-  echo "Checking WebUI model catalog includes OvisOCR2..."
+  echo "Checking WebUI model catalog includes OvisOCR3..."
   python - "$PANDOCR_HOST" "$PANDOCR_PORT" <<'PY'
 import json
 import sys
@@ -114,8 +114,8 @@ with urllib.request.urlopen(f"http://{host}:{port}/api/models", timeout=5) as re
     payload = json.load(response)
 ids = {item.get("id") for item in payload.get("data", [])}
 if "ovisocr2" not in ids:
-    raise SystemExit("OvisOCR2 is missing from /api/models")
-print("OvisOCR2 model catalog OK")
+    raise SystemExit("OvisOCR3 is missing from /api/models")
+print("OvisOCR3 model catalog OK")
 PY
 fi
 

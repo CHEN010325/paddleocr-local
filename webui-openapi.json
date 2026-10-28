@@ -1085,11 +1085,11 @@
         }
       }
     },
-    "/api/ovisocr2": {
+    "/api/ovisocr3": {
       "post": {
         "summary": "Proxy Ovisocr2",
-        "description": "Proxy request to the optional OvisOCR2 vLLM adapter service.",
-        "operationId": "proxy_ovisocr2_api_ovisocr2_post",
+        "description": "Proxy request to the optional OvisOCR3 vLLM adapter service.",
+        "operationId": "proxy_ovisocr2_api_ovisocr3_post",
         "responses": {
           "200": {
             "description": "Successful Response",

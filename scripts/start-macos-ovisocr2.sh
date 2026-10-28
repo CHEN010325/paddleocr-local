@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 
 # Keep this compatibility entry point on the same fail-closed launcher used by
 # every other macOS model. User-provided selection flags are intentionally
-# overridden so this script can never start OvisOCR2 beside another model.
+# overridden so this script can never start OvisOCR3 beside another model.
 export PANDOCR_ENABLE_PADDLEOCR_VL=0
 export PANDOCR_ENABLE_PPOCRV6=0
 export PANDOCR_ENABLE_UNLIMITED_OCR=0

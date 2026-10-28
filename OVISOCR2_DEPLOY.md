@@ -1,133 +1,58 @@
-# OvisOCR2 integration
+# OvisOCR3 deployment
 
-This project exposes `ATH-MaaS/OvisOCR2` as an optional document-parsing model in the existing model selector.
-It runs in an isolated vLLM 0.22.1 container and does not add GPU dependencies to `pandocr-web`.
-The image uses the official CUDA 12.9 vLLM wheel because vLLM's default 0.22.1 image requires CUDA 13.0.
+OvisOCR3 replaces OvisOCR2 in the existing model slot. All new deployments use
+`ATH-MaaS/OvisOCR3`, pinned to `4833d5d2afa6e769ee933f024504d67ace80a24c`.
+Source and prompts: https://huggingface.co/ATH-MaaS/OvisOCR3
 
-## Requirements
+## One-command launch
 
-- NVIDIA GPU with about 8 GB or more free VRAM (16 GB recommended for long pages)
-- A recent NVIDIA driver and Docker Desktop/Engine with NVIDIA Container Toolkit
-- Internet access for the first image pull and Hugging Face model download
-
-The runtime is tuned for this project's single-page, serial OCR workflow:
-
-- model: `ATH-MaaS/OvisOCR2`
-- vLLM: `0.22.1`
-- fixed KV cache: `512 MiB`
-- maximum context length: `32768`
-- maximum concurrent sequences: `1`
-- max output tokens: `8192`
-- GDN prefill backend: `triton`
-- deterministic PyTorch sampler (`VLLM_USE_FLASHINFER_SAMPLER=0`)
-- image pixel range: `448 x 448` to `2880 x 2880`
-
-## Deploy
-
-For RTX 50 / Blackwell, use `env.txt`. For RTX 30/40, use `env.docker`.
-
-Windows one-click deployment:
+Windows with NVIDIA and Docker Desktop:
 
 ```powershell
-.\windows-one-click.bat -Model ovisocr2
+.\ovisocr3-one-click.bat
 ```
 
-To prepare all five models while making OvisOCR2 the first active model:
+For existing local images use `-SkipBuild -SkipPull`. The shared launcher retains
+Docker socket recovery, GPU checks, and exclusive model switching.
+The standard `windows-one-click.bat -Model ovisocr3` selection also works.
+Linux uses the existing managed deployment with the `ovisocr2` Compose service/profile.
 
-```powershell
-.\windows-one-click.bat -Models all-five -ActiveModel ovisocr2
-```
-
-Manual Compose deployment:
-
-```powershell
-$env:PANDOCR_ACTIVE_MODEL_ON_START = "ovisocr2"
-$env:PANDOCR_MODEL_CATALOG = "ovisocr2"
-$baseEnv = "env.txt"
-$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 build ovisocr2-api pandocr-web
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web ovisocr2-api
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 start pandocr-controller pandocr-office-converter pandocr-web
-```
-
-The model container is created in a stopped standby state. The controller starts OvisOCR2 only after the
-WebUI and its isolated support services are running. On every later switch it fully stops the old model
-and releases its GPU memory before starting the selected model, so two logical models never reside in GPU
-memory at the same time.
-Open `http://localhost:8000` and wait for **OvisOCR2** to become ready.
-The helper stores the controller credential only in Git-ignored `tmp/pandocr-runtime.env`. Run it in
-every new PowerShell session and keep the runtime file as the second `--env-file`; it reuses the same
-credential across recreations and rejects empty, placeholder, or conflicting process values.
-
-To rebuild and recreate this deployment later, keep the same explicit profile and service list:
-
-```powershell
-$env:PANDOCR_ACTIVE_MODEL_ON_START = "ovisocr2"
-$env:PANDOCR_MODEL_CATALOG = "ovisocr2"
-$baseEnv = "env.txt"
-$runtimeEnv = & .\scripts\prepare-runtime-env.ps1 -BaseEnvFile $baseEnv
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 build ovisocr2-api pandocr-web
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 up -d --no-start --force-recreate pandocr-controller pandocr-office-converter pandocr-web ovisocr2-api
-docker compose --env-file $baseEnv --env-file $runtimeEnv --profile ovisocr2 start pandocr-controller pandocr-office-converter pandocr-web
-```
-
-Do not use a bare `docker compose up`: every model is behind a profile, and the explicit standby-create
-sequence is what preserves the project-wide one-logical-model invariant.
-
-Check readiness:
-
-```powershell
-curl.exe http://localhost:8084/health
-```
-
-### macOS Apple Silicon (MLX by default)
-
-vLLM's CUDA/Triton runtime does not run natively on Apple Silicon. This repository therefore provides
-an isolated MLX-VLM backend for native Metal inference. A Transformers/PyTorch MPS implementation is
-kept as a compatibility fallback:
+macOS Apple Silicon:
 
 ```bash
-./macos-ovisocr2-one-click.command
+./macos-ovisocr3-one-click.command
 ```
 
-Open `http://127.0.0.1:8000`. The model weights are cached in
-`model_cache_ovisocr2_macos/`, and the local adapter listens on `http://127.0.0.1:8084`.
-For a manual two-step installation, run `bash scripts/setup-macos-ovisocr2.sh` followed by
-`bash scripts/start-macos-ovisocr2.sh`.
-The compatibility start script delegates to the shared fail-closed macOS launcher with only OvisOCR2
-enabled. It stops and verifies any previously selected model before starting OvisOCR2; it no longer
-starts an adapter or WebUI process directly.
-Stop both processes with:
+The Mac path defaults to MLX-VLM and retains Transformers/MPS fallback. This upgrade
+has no new Mac hardware acceptance result; installation/routing checks do not replace
+real device tests. Prior OvisOCR2 timings must not be presented as OvisOCR3 results.
 
-```bash
-bash scripts/stop-macos.sh
-```
+## Compatibility and data
 
-The default Mac settings use MLX-VLM, 180 DPI PDF rendering, a 2048-token output limit, and a
-1-megapixel vision-input limit. On an M4 Pro, the repository's real dense-table test page completed in
-about 21 seconds with MLX versus about 72 seconds with Transformers/MPS. Set
-`OVISOCR2_BACKEND=transformers` before starting to use the fallback implementation. Its defaults use
-`float16`, eager attention, a 128-token interval for repeated-document stopping checks, and PyTorch
-MPS CPU fallback for operations without an MPS kernel.
+The internal model ID, service, API compatibility route, and `OVISOCR2_*` configuration
+keys remain accepted so existing task data and automation keep working. The displayed
+model and all default weights are OvisOCR3. `ovisocr3` is accepted as a new selection/request
+alias; `/api/ovisocr3` is the current public route. Explicit external engine IDs remain unchanged.
+Known second-generation repo/revision defaults are upgraded on load, without rewriting old tasks.
+`OVISOCR3_MODEL_NAME` / `OVISOCR3_MODEL_REVISION` take precedence over legacy settings.
 
-The first start downloads the model to `model_cache_ovisocr2/` and stores vLLM/Torch compile artifacts in
-`model_cache_ovisocr2_vllm/`. Both caches persist across container recreation.
+The isolated image is `pandocr-ovisocr3:latest`. Default caches use `model_cache_ovisocr3/`,
+`model_cache_ovisocr3_vllm/`, or `model_cache_ovisocr3_macos/`.
+Existing OvisOCR2 weights and tasks are preserved. The optional private runtime environment
+`tmp/pandocr-runtime.env` is still prepared through `prepare-runtime-env`; keep it private.
 
-## Configuration
+## Output and resources
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PANDOCR_ENABLE_OVISOCR2` | `1` in provided env files | Adds OvisOCR2 to the WebUI model catalog |
-| `OVISOCR2_MODEL_NAME` | `ATH-MaaS/OvisOCR2` | Hugging Face model id or mounted local path |
-| `OVISOCR2_BACKEND` | `mlx` on macOS, `vllm` in Docker | Inference implementation (`mlx`, `transformers`, or `vllm`) |
-| `OVISOCR2_KV_CACHE_MEMORY_MB` | `512` | Fixed KV cache allocation for one 32K sequence |
-| `OVISOCR2_STARTUP_MEMORY_FRACTION` | `0.50` | vLLM startup free-memory threshold only; fixed KV cache sizing remains 512 MiB |
-| `OVISOCR2_MAX_MODEL_LEN` | `32768` | Maximum input and output context length |
-| `OVISOCR2_MAX_NUM_SEQS` | `1` | Maximum concurrent vLLM sequences |
-| `OVISOCR2_MAX_TOKENS` | `8192` | Maximum generated Markdown tokens |
-| `OVISOCR2_PDF_DPI` | `200` | PDF rasterization DPI inside the adapter |
-| `OVISOCR2_MAX_PAGES_PER_REQUEST` | `50` | Safety limit for one adapter request |
-| `OVISOCR2_API_PORT` | `8084` | Host-only adapter port |
-| `OVISOCR2_GDN_PREFILL_BACKEND` | `triton` | vLLM GDN prefill backend |
+The default is official structured document parsing: JSON bbox/category/content records
+are converted to the workbench's Markdown, normalized 0..1000 layout blocks, and image crops.
+Use `OVISOCR3_OUTPUT_FORMAT=markdown` for the official Markdown prompt and the existing
+Markdown cleanup behavior. Invalid JSON, missing pages, and truncated output fail explicitly.
+HTML is rendered through the workbench's existing sanitizer.
 
-OvisOCR2 image tags are converted to cropped `ocr_images/ovisocr2_*.jpg` assets so the existing Markdown preview and ZIP export can render visual regions.
+The NVIDIA backend uses official vLLM 0.22.1 CUDA 12.9 wheels, a 512 MiB KV budget,
+32768 context, one concurrent sequence, and 16384 output tokens. These defaults are
+bounded deployment settings, not a claim about the model's maximum context length.
+Mac vision defaults remain conservative; output budget is also 16384.
+
+This workbench exposes document parsing. The model's additional OCR/KIE/figure-caption/
+cross-page table task prompts are not separate UI features in this replacement.

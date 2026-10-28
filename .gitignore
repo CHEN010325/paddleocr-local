@@ -47,14 +47,14 @@ model_cache_ocr/
 model_cache_ppocrv6/
 model_cache_ppocrv6_ocr/
 model_cache_unlimited_ocr/
-model_cache_ovisocr2/
-model_cache_ovisocr2_vllm/
+model_cache_ovisocr3/
+model_cache_ovisocr3_vllm/
 model_cache_hpd_parsing/
 model_cache_navidc_ocr/
-model_cache_ovisocr2_macos/
+model_cache_ovisocr3_macos/
 model_cache_unlimited_ocr_macos/
 model_cache_hpd_parsing_macos/
-.venv-ovisocr2-macos/
+.venv-ovisocr3-macos/
 .venv-hpd-parsing-macos/
 data/runtime-settings.json
 data/controller-ocr-leases.json
@@ -94,3 +94,8 @@ engines.local.json
 
 
 ollama_storage/
+
+model_cache_ovisocr3*/
+model_cache_ovisocr2*/
+.venv-ovisocr2-macos/
+.venv-ovisocr3-macos/

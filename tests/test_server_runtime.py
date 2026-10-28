@@ -68,6 +68,9 @@ class ServerDockerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         migration = patch.object(self.server, "unlimited_ocr_generation_upgrade_needed", new=AsyncMock(return_value=False))
         migration.start()
         self.addCleanup(migration.stop)
+        ovis_migration = patch.object(self.server, 'ovisocr_generation_upgrade_needed', new=AsyncMock(return_value=False))
+        ovis_migration.start()
+        self.addCleanup(ovis_migration.stop)
         self.server.model_runtime_lock = asyncio.Lock()
         self.server.model_runtime_task = None
         self.server.unlimited_ocr_backend_task = None

@@ -34,6 +34,7 @@ $script:EnableNavidcOcr = $false
 $script:UnlimitedOcrBackend = "transformers"
 $script:UnlimitedOcrBackendExplicit = $false
 $script:UnlimitedOcrHardwareProfile = $null
+$script:OvisApiPort = '8084'
 $script:DeployModelIds = @("paddleocr-vl-1.6")
 $script:ModelCatalogIds = @("paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr")
 $script:RuntimeModelCatalogIds = @($script:ModelCatalogIds)
@@ -334,6 +335,19 @@ function Test-EnabledValue {
     return ($normalized -in @("1", "true", "yes", "on"))
 }
 
+function Resolve-OvisApiPort {
+    param([string[]]$Lines)
+    $legacy = if ($env:OVISOCR2_API_PORT) { $env:OVISOCR2_API_PORT } else { Get-EnvLineValue $Lines 'OVISOCR2_API_PORT' '8084' }
+    if ([string]::IsNullOrWhiteSpace($legacy)) { $legacy = '8084' }
+    $selected = if ($env:OVISOCR3_API_PORT) { $env:OVISOCR3_API_PORT } else { Get-EnvLineValue $Lines 'OVISOCR3_API_PORT' $legacy }
+    if ([string]::IsNullOrWhiteSpace($selected)) { $selected = $legacy }
+    $number = 0
+    if (-not [int]::TryParse($selected, [ref]$number) -or $number -lt 1 -or $number -gt 65535) {
+        throw 'OvisOCR3 API port must be between 1 and 65535.'
+    }
+    return [string]$number
+}
+
 function Normalize-UnlimitedOcrBackend {
     param([string]$Value)
     $normalized = $Value.Trim().ToLowerInvariant()
@@ -364,7 +378,7 @@ function Resolve-ModelId {
         { $_ -in @("1", "vl", "paddleocr-vl", "paddleocr-vl-1.6", "paddleocrvl") } { return "paddleocr-vl-1.6" }
         { $_ -in @("2", "ppocr", "ppocrv6", "pp-ocrv6", "ocr") } { return "pp-ocrv6" }
         { $_ -in @("3", "unlimited", "unlimited-ocr", "unlimited-ocr-2", "uocr2", "uow") } { return "unlimited-ocr" }
-        { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } { return "ovisocr2" }
+        { $_ -in @("4", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2", "ovisocr3", "ovis-ocr3") } { return "ovisocr2" }
         { $_ -in @("5", "hpd", "hpd-parsing", "hpdparsing") } { return "hpd-parsing" }
         { $_ -in @("6", "navi", "navidc", "navidc-ocr") } { return "navidc-ocr" }
         default { throw "Unknown model '$Value'. Use paddleocr-vl-1.6, pp-ocrv6, unlimited-ocr, ovisocr2, hpd-parsing, or navidc-ocr." }
@@ -377,7 +391,7 @@ function Get-ModelDisplayName {
         "paddleocr-vl-1.6" { return "PaddleOCR-VL 1.6" }
         "pp-ocrv6" { return "PP-OCRv6" }
         "unlimited-ocr" { return "Unlimited-OCR-2" }
-        "ovisocr2" { return "OvisOCR2" }
+        "ovisocr2" { return "OvisOCR3" }
         "hpd-parsing" { return "HPD-Parsing" }
         "navidc-ocr" { return "NaviDC-OCR" }
         default { return $ModelId }
@@ -422,7 +436,7 @@ function Read-FriendlyDeploymentSelection {
     Write-Host "  1) PaddleOCR-VL 1.6   Full document parsing (recommended default)"
     Write-Host "  2) PP-OCRv6           Fast text OCR"
     Write-Host "  3) Unlimited-OCR-2      Long-document parsing with SR-SWA"
-    Write-Host "  4) OvisOCR2           Document parsing with vLLM"
+    Write-Host "  4) OvisOCR3           Document parsing with vLLM"
     Write-Host "  5) HPD-Parsing        High-throughput hierarchical document parsing"
     Write-Host "  6) NaviDC-OCR         Complex documents, tables, and formulas"
     Write-Host ""
@@ -514,7 +528,7 @@ function Resolve-DeploymentSelection {
                 }
                 continue
             }
-            { $_ -in @("7", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2") } {
+            { $_ -in @("7", "ovis", "ovisocr", "ovisocr2", "ovis-ocr2", "ovisocr3", "ovis-ocr3") } {
                 Add-DeploymentModel -Models $selected -ModelId "ovisocr2"
                 continue
             }
@@ -814,6 +828,7 @@ function New-RuntimeEnvFile {
     $script:ActiveModel = Get-EnvLineValue -Lines $lines -Key "PANDOCR_ACTIVE_MODEL_ON_START" -DefaultValue $script:ActiveModel
     $script:EnableUnlimitedOcr = $script:DeployModelIds -contains "unlimited-ocr"
     $script:EnableOvisOcr2 = $script:DeployModelIds -contains "ovisocr2"
+    if ($script:EnableOvisOcr2) { $script:OvisApiPort = Resolve-OvisApiPort -Lines $lines }
     $script:EnableHpdParsing = $script:DeployModelIds -contains "hpd-parsing"
     $script:EnableNavidcOcr = $script:DeployModelIds -contains "navidc-ocr"
     $script:UnlimitedOcrBackend = (Get-EnvLineValue -Lines $lines -Key "UNLIMITED_OCR_BACKEND" -DefaultValue "transformers").Trim().ToLowerInvariant()
@@ -1013,7 +1028,7 @@ function Wait-ForServices {
         $apiOk = Test-HttpOk "http://localhost:8081/health"
         $ocrOk = Test-HttpOk "http://localhost:8082/health"
         $uowOk = if ($script:EnableUnlimitedOcr) { Test-HttpOk "http://localhost:8083/health" } else { $false }
-        $ovisOk = if ($script:EnableOvisOcr2) { Test-HttpOk "http://localhost:8084/health" } else { $false }
+        $ovisOk = if ($script:EnableOvisOcr2) { Test-HttpOk "http://localhost:$($script:OvisApiPort)/health" } else { $false }
         $hpdOk = if ($script:EnableHpdParsing) { Test-HttpOk "http://localhost:8085/health" } else { $false }
         $navidcOk = if ($script:EnableNavidcOcr) { Test-HttpOk "http://localhost:8086/health" } else { $false }
         $webOk = Test-HttpOk "http://localhost:8000/"
@@ -1309,7 +1324,7 @@ try {
         Write-Host "Unlimited-OCR-2 API health: http://localhost:8083/health"
     }
     if ($script:EnableOvisOcr2) {
-        Write-Host "OvisOCR2 API health: http://localhost:8084/health"
+        Write-Host "OvisOCR3 API health: http://localhost:$($script:OvisApiPort)/health"
     }
     if ($script:EnableHpdParsing) {
         Write-Host "HPD-Parsing API health: http://localhost:8085/health"

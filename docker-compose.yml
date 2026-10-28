@@ -19,8 +19,8 @@ x-ovisocr2-image: &ovisocr2-image
   pull_policy: build
   build:
     context: .
-    dockerfile: Dockerfile.ovisocr2
-  image: pandocr-ovisocr2:latest
+    dockerfile: Dockerfile.ovisocr3
+  image: pandocr-ovisocr3:latest
 
 x-hpd-parsing-adapter-image: &hpd-parsing-adapter-image
   pull_policy: build
@@ -97,9 +97,14 @@ services:
       - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
       - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
       - UNLIMITED_OCR_MAX_RENDER_PIXELS=${UNLIMITED_OCR_MAX_RENDER_PIXELS:-60000000}
-      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
-      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
-      - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
+      - OVISOCR2_MODEL_NAME=${OVISOCR3_MODEL_NAME:-${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR3}}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-${OVISOCR2_MODEL_REVISION:-4833d5d2afa6e769ee933f024504d67ace80a24c}}
+      - OVISOCR3_MODEL_NAME=${OVISOCR3_MODEL_NAME:-}
+      - OVISOCR3_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-}
+      - OVISOCR3_OUTPUT_FORMAT=${OVISOCR3_OUTPUT_FORMAT:-structured}
+      - OVISOCR3_BACKEND=${OVISOCR3_BACKEND:-vllm}
+      - OVISOCR3_ATTENTION_IMPLEMENTATION=${OVISOCR3_ATTENTION_IMPLEMENTATION:-auto}
+      - OVISOCR2_API_PORT=${OVISOCR3_API_PORT:-${OVISOCR2_API_PORT:-8084}}
       - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
       - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu@sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2}
       - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
@@ -116,6 +121,8 @@ services:
     volumes:
       - ./static:/app/static:ro
       - ./server.py:/app/server.py:ro
+      - ./ovisocr3_config.py:/app/ovisocr3_config.py:ro
+      - ./ovisocr3_prompts:/app/ovisocr3_prompts:ro
       - ./exporters.py:/app/exporters.py:ro
       - ./controller.py:/app/controller.py:ro
       - ./unlimited_ocr_adapter.py:/app/unlimited_ocr_adapter.py:ro
@@ -123,7 +130,7 @@ services:
       - ./Dockerfile.unlimited-ocr:/app/Dockerfile.unlimited-ocr:ro
       - ./Dockerfile.unlimited-ocr-sglang:/app/Dockerfile.unlimited-ocr-sglang:ro
       - ./ovisocr2_adapter.py:/app/ovisocr2_adapter.py:ro
-      - ./Dockerfile.ovisocr2:/app/Dockerfile.ovisocr2:ro
+      - ./Dockerfile.ovisocr3:/app/Dockerfile.ovisocr3:ro
       - ./hpd_parsing_adapter.py:/app/hpd_parsing_adapter.py:ro
       - ./Dockerfile.hpd-parsing-adapter:/app/Dockerfile.hpd-parsing-adapter:ro
       - ./navidc_ocr_adapter.py:/app/navidc_ocr_adapter.py:ro
@@ -408,21 +415,26 @@ services:
     profiles: ["ovisocr2"]
     container_name: ovisocr2-api
     ports:
-      - "127.0.0.1:${OVISOCR2_API_PORT:-8084}:8080"
+      - "127.0.0.1:${OVISOCR3_API_PORT:-${OVISOCR2_API_PORT:-8084}}:8080"
     environment:
       - HF_HOME=/root/.cache/huggingface
-      - CUDA_VISIBLE_DEVICES=${PANDOCR_GPU_DEVICE_ID:-0}
+      - CUDA_VISIBLE_DEVICES=0
       - VLLM_USE_FLASHINFER_SAMPLER=0
-      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
-      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
-      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
-      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
-      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR2_MAX_MODEL_LEN:-32768}
-      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR2_MAX_NUM_SEQS:-1}
-      - OVISOCR2_MAX_TOKENS=${OVISOCR2_MAX_TOKENS:-8192}
-      - OVISOCR2_PDF_DPI=${OVISOCR2_PDF_DPI:-200}
-      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
-      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
+      - OVISOCR2_MODEL_NAME=${OVISOCR3_MODEL_NAME:-${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR3}}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-${OVISOCR2_MODEL_REVISION:-4833d5d2afa6e769ee933f024504d67ace80a24c}}
+      - OVISOCR3_MODEL_NAME=${OVISOCR3_MODEL_NAME:-}
+      - OVISOCR3_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-}
+      - OVISOCR3_OUTPUT_FORMAT=${OVISOCR3_OUTPUT_FORMAT:-structured}
+      - OVISOCR3_BACKEND=${OVISOCR3_BACKEND:-vllm}
+      - OVISOCR3_ATTENTION_IMPLEMENTATION=${OVISOCR3_ATTENTION_IMPLEMENTATION:-auto}
+      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR3_KV_CACHE_MEMORY_MB:-${OVISOCR2_KV_CACHE_MEMORY_MB:-512}}
+      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR3_STARTUP_MEMORY_FRACTION:-${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}}
+      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR3_MAX_MODEL_LEN:-${OVISOCR2_MAX_MODEL_LEN:-32768}}
+      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR3_MAX_NUM_SEQS:-${OVISOCR2_MAX_NUM_SEQS:-1}}
+      - OVISOCR2_MAX_TOKENS=${OVISOCR3_MAX_TOKENS:-${OVISOCR2_MAX_TOKENS:-16384}}
+      - OVISOCR2_PDF_DPI=${OVISOCR3_PDF_DPI:-${OVISOCR2_PDF_DPI:-200}}
+      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR3_MAX_PAGES_PER_REQUEST:-${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}}
+      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR3_GDN_PREFILL_BACKEND:-${OVISOCR2_GDN_PREFILL_BACKEND:-triton}}
     deploy:
       resources:
         reservations:
@@ -434,8 +446,8 @@ services:
     restart: unless-stopped
     shm_size: "16gb"
     volumes:
-      - ./model_cache_ovisocr2:/root/.cache/huggingface
-      - ./model_cache_ovisocr2_vllm:/root/.cache/vllm
+      - ./model_cache_ovisocr3:/root/.cache/huggingface
+      - ./model_cache_ovisocr3_vllm:/root/.cache/vllm
     command: uvicorn ovisocr2_adapter:app --host 0.0.0.0 --port 8080
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
@@ -606,17 +618,22 @@ services:
       - PPOCR_V6_MODEL_NAME=${PPOCR_V6_MODEL_NAME:-PP-OCRv6_medium}
       - UNLIMITED_OCR_MODEL_NAME=${UNLIMITED_OCR_MODEL_NAME:-baidu/Unlimited-OCR-2}
       - UNLIMITED_OCR_MODEL_REVISION=${UNLIMITED_OCR_MODEL_REVISION:-9cf077c4b206e0e2a31879df937b0b0bcba3661c}
-      - OVISOCR2_MODEL_NAME=${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}
-      - OVISOCR2_MODEL_REVISION=${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}
-      - OVISOCR2_API_PORT=${OVISOCR2_API_PORT:-8084}
-      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR2_KV_CACHE_MEMORY_MB:-512}
-      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}
-      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR2_MAX_MODEL_LEN:-32768}
-      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR2_MAX_NUM_SEQS:-1}
-      - OVISOCR2_MAX_TOKENS=${OVISOCR2_MAX_TOKENS:-8192}
-      - OVISOCR2_PDF_DPI=${OVISOCR2_PDF_DPI:-200}
-      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}
-      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR2_GDN_PREFILL_BACKEND:-triton}
+      - OVISOCR2_MODEL_NAME=${OVISOCR3_MODEL_NAME:-${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR3}}
+      - OVISOCR2_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-${OVISOCR2_MODEL_REVISION:-4833d5d2afa6e769ee933f024504d67ace80a24c}}
+      - OVISOCR3_MODEL_NAME=${OVISOCR3_MODEL_NAME:-}
+      - OVISOCR3_MODEL_REVISION=${OVISOCR3_MODEL_REVISION:-}
+      - OVISOCR3_OUTPUT_FORMAT=${OVISOCR3_OUTPUT_FORMAT:-structured}
+      - OVISOCR3_BACKEND=${OVISOCR3_BACKEND:-vllm}
+      - OVISOCR3_ATTENTION_IMPLEMENTATION=${OVISOCR3_ATTENTION_IMPLEMENTATION:-auto}
+      - OVISOCR2_API_PORT=${OVISOCR3_API_PORT:-${OVISOCR2_API_PORT:-8084}}
+      - OVISOCR2_KV_CACHE_MEMORY_MB=${OVISOCR3_KV_CACHE_MEMORY_MB:-${OVISOCR2_KV_CACHE_MEMORY_MB:-512}}
+      - OVISOCR2_STARTUP_MEMORY_FRACTION=${OVISOCR3_STARTUP_MEMORY_FRACTION:-${OVISOCR2_STARTUP_MEMORY_FRACTION:-0.50}}
+      - OVISOCR2_MAX_MODEL_LEN=${OVISOCR3_MAX_MODEL_LEN:-${OVISOCR2_MAX_MODEL_LEN:-32768}}
+      - OVISOCR2_MAX_NUM_SEQS=${OVISOCR3_MAX_NUM_SEQS:-${OVISOCR2_MAX_NUM_SEQS:-1}}
+      - OVISOCR2_MAX_TOKENS=${OVISOCR3_MAX_TOKENS:-${OVISOCR2_MAX_TOKENS:-16384}}
+      - OVISOCR2_PDF_DPI=${OVISOCR3_PDF_DPI:-${OVISOCR2_PDF_DPI:-200}}
+      - OVISOCR2_MAX_PAGES_PER_REQUEST=${OVISOCR3_MAX_PAGES_PER_REQUEST:-${OVISOCR2_MAX_PAGES_PER_REQUEST:-50}}
+      - OVISOCR2_GDN_PREFILL_BACKEND=${OVISOCR3_GDN_PREFILL_BACKEND:-${OVISOCR2_GDN_PREFILL_BACKEND:-triton}}
       - HPD_PARSING_MODEL_NAME=${HPD_PARSING_MODEL_NAME:-PaddlePaddle/HPD-Parsing}
       - HPD_PARSING_IMAGE=${HPD_PARSING_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/hpd-parsing-vllm:latest-nvidia-gpu@sha256:87496aa5dd702a7df6c70bb00c29d5bf8d1a0f0505d66b613fafa6f71cd72de2}
       - HPD_PARSING_API_PORT=${HPD_PARSING_API_PORT:-8085}
@@ -651,6 +668,8 @@ services:
     volumes:
       - ./static:/app/static:ro
       - ./server.py:/app/server.py:ro
+      - ./ovisocr3_config.py:/app/ovisocr3_config.py:ro
+      - ./ovisocr3_prompts:/app/ovisocr3_prompts:ro
       - ./exporters.py:/app/exporters.py:ro
       - ./data:/app/data
     read_only: true

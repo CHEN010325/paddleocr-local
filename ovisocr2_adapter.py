@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import re
@@ -12,37 +13,33 @@ from typing import Any
 import fitz
 from fastapi import FastAPI, HTTPException, Request
 from PIL import Image
+from ovisocr3_config import resolve_model_settings, ovis_env
 
 
-logging.basicConfig(level=os.getenv("OVISOCR2_LOG_LEVEL", "INFO"))
+logging.basicConfig(level=ovis_env("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("ovisocr2-adapter")
 
-MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
-MODEL_REVISION = os.getenv("OVISOCR2_MODEL_REVISION", "65c619d374b55d4152e85150fc1b003700bc1f0c")
-BACKEND = os.getenv("OVISOCR2_BACKEND", "vllm").strip().lower()
-TRANSFORMERS_DEVICE = os.getenv("OVISOCR2_TRANSFORMERS_DEVICE", "auto").strip().lower()
-TRANSFORMERS_DTYPE = os.getenv("OVISOCR2_TRANSFORMERS_DTYPE", "auto").strip().lower()
-ATTENTION_IMPLEMENTATION = os.getenv("OVISOCR2_ATTENTION_IMPLEMENTATION", "eager").strip()
-RESTART_CHECK_INTERVAL = max(32, int(os.getenv("OVISOCR2_RESTART_CHECK_INTERVAL", "128")))
-KV_CACHE_MEMORY_MB = int(os.getenv("OVISOCR2_KV_CACHE_MEMORY_MB", "512"))
-STARTUP_MEMORY_FRACTION = float(os.getenv("OVISOCR2_STARTUP_MEMORY_FRACTION", "0.50"))
-MAX_MODEL_LEN = int(os.getenv("OVISOCR2_MAX_MODEL_LEN", "32768"))
-MAX_NUM_SEQS = int(os.getenv("OVISOCR2_MAX_NUM_SEQS", "1"))
-MAX_TOKENS = int(os.getenv("OVISOCR2_MAX_TOKENS", "8192"))
-PDF_DPI = int(os.getenv("OVISOCR2_PDF_DPI", "200"))
-MAX_PAGES = int(os.getenv("OVISOCR2_MAX_PAGES_PER_REQUEST", "50"))
-MIN_PIXELS = int(os.getenv("OVISOCR2_MIN_PIXELS", str(448 * 448)))
-MAX_PIXELS = int(os.getenv("OVISOCR2_MAX_PIXELS", str(2880 * 2880)))
-GDN_PREFILL_BACKEND = os.getenv("OVISOCR2_GDN_PREFILL_BACKEND", "triton")
+MODEL_NAME, MODEL_REVISION = resolve_model_settings()
+OUTPUT_FORMAT = ovis_env('OUTPUT_FORMAT', 'structured').strip().lower()
+if OUTPUT_FORMAT not in {'structured', 'markdown'}:
+    raise ValueError('OvisOCR3 output format must be structured or markdown')
+BACKEND = ovis_env("BACKEND", "vllm").strip().lower()
+TRANSFORMERS_DEVICE = ovis_env("TRANSFORMERS_DEVICE", "auto").strip().lower()
+TRANSFORMERS_DTYPE = ovis_env("TRANSFORMERS_DTYPE", "auto").strip().lower()
+ATTENTION_IMPLEMENTATION = ovis_env("ATTENTION_IMPLEMENTATION", "auto").strip()
+RESTART_CHECK_INTERVAL = max(32, int(ovis_env("RESTART_CHECK_INTERVAL", "128")))
+KV_CACHE_MEMORY_MB = int(ovis_env("KV_CACHE_MEMORY_MB", "512"))
+STARTUP_MEMORY_FRACTION = float(ovis_env("STARTUP_MEMORY_FRACTION", "0.50"))
+MAX_MODEL_LEN = int(ovis_env("MAX_MODEL_LEN", "32768"))
+MAX_NUM_SEQS = int(ovis_env("MAX_NUM_SEQS", "1"))
+MAX_TOKENS = int(ovis_env("MAX_TOKENS", "16384"))
+PDF_DPI = int(ovis_env("PDF_DPI", "200"))
+MAX_PAGES = int(ovis_env("MAX_PAGES_PER_REQUEST", "50"))
+MIN_PIXELS = int(ovis_env("MIN_PIXELS", str(448 * 448)))
+MAX_PIXELS = int(ovis_env("MAX_PIXELS", str(2880 * 2880)))
+GDN_PREFILL_BACKEND = ovis_env("GDN_PREFILL_BACKEND", "triton")
 
-PROMPT = (
-    "\nExtract all readable content from the image in natural human reading order and output the result "
-    "as a single Markdown document. For charts or images, represent them using an HTML image tag: "
-    '<img src="images/bbox_{left}_{top}_{right}_{bottom}.jpg" />, where left, top, right, bottom are '
-    "bounding box coordinates scaled to [0, 1000). Format formulas as LaTeX. Format tables as HTML: "
-    "<table>...</table>. Transcribe all other text as standard Markdown. Preserve the original text "
-    "without translation or paraphrasing."
-)
+PROMPT = (Path(__file__).with_name('ovisocr3_prompts') / ('document_' + OUTPUT_FORMAT + '.txt')).read_text(encoding='utf8').strip()
 BBOX_IMAGE_RE = re.compile(
     r'<img\s+src=["\']images/bbox_(\d+)_(\d+)_(\d+)_(\d+)\.jpg["\']\s*/?>',
     re.IGNORECASE,
@@ -54,7 +51,7 @@ PARSER_LOCK = asyncio.Lock()
 INFERENCE_LOCK = asyncio.Lock()
 
 
-class VllmOvisOCR2Parser:
+class VllmOvisOCR3Parser:
     def __init__(self, model_name_or_path: str):
         from vllm import LLM, SamplingParams
 
@@ -134,6 +131,10 @@ class VllmOvisOCR2Parser:
             for image in images
         ]
         outputs = self.model.generate(inputs, self.sampling_params)
+        if len(outputs) != len(images) or any(getattr(o.outputs[0], 'finish_reason', None) == 'length' for o in outputs):
+            raise HTTPException(status_code=502, detail='OvisOCR3 returned missing or truncated pages')
+        if OUTPUT_FORMAT == 'structured':
+            return [o.outputs[0].text.strip() for o in outputs]
         return [
             self.clean_truncated_repeats(
                 self.clean_restarted_document(output.outputs[0].text.strip())
@@ -142,11 +143,11 @@ class VllmOvisOCR2Parser:
         ]
 
 
-class TransformersOvisOCR2Parser:
+class TransformersOvisOCR3Parser:
     """PyTorch backend for Apple Silicon and other machines without vLLM/CUDA."""
 
-    clean_truncated_repeats = staticmethod(VllmOvisOCR2Parser.clean_truncated_repeats)
-    clean_restarted_document = staticmethod(VllmOvisOCR2Parser.clean_restarted_document)
+    clean_truncated_repeats = staticmethod(VllmOvisOCR3Parser.clean_truncated_repeats)
+    clean_restarted_document = staticmethod(VllmOvisOCR3Parser.clean_restarted_document)
 
     def __init__(self, model_name_or_path: str):
         import torch
@@ -170,7 +171,7 @@ class TransformersOvisOCR2Parser:
             dtype = getattr(torch, TRANSFORMERS_DTYPE)
 
         logger.info(
-            "Loading OvisOCR2 with Transformers on %s using %s",
+            "Loading OvisOCR3 with Transformers on %s using %s",
             device,
             str(dtype).removeprefix("torch."),
         )
@@ -180,7 +181,7 @@ class TransformersOvisOCR2Parser:
             model_name_or_path,
             revision=MODEL_REVISION,
             dtype=dtype,
-            attn_implementation=ATTENTION_IMPLEMENTATION,
+            attn_implementation=('sdpa' if device == 'cuda' else 'eager') if ATTENTION_IMPLEMENTATION == 'auto' else ATTENTION_IMPLEMENTATION,
         ).to(self.device)
         self.model.eval()
 
@@ -247,6 +248,8 @@ class TransformersOvisOCR2Parser:
 
             class DocumentRestartStoppingCriteria(StoppingCriteria):
                 def __call__(self, input_ids, scores, **kwargs):
+                    if OUTPUT_FORMAT != 'markdown':
+                        return False
                     generated_length = input_ids.shape[-1] - input_length
                     if (
                         generated_length < RESTART_CHECK_INTERVAL
@@ -265,7 +268,7 @@ class TransformersOvisOCR2Parser:
                     **inputs,
                     max_new_tokens=MAX_TOKENS,
                     do_sample=False,
-                    no_repeat_ngram_size=64,
+                    no_repeat_ngram_size=64 if OUTPUT_FORMAT == 'markdown' else 0,
                     stopping_criteria=StoppingCriteriaList([DocumentRestartStoppingCriteria()]),
                     use_cache=True,
                 )
@@ -274,8 +277,11 @@ class TransformersOvisOCR2Parser:
                 skip_special_tokens=True,
             ).strip()
             text = re.sub(r"\n*<think>\s*</think>\n*", "\n\n", text).strip()
-            text = self.clean_restarted_document(text)
-            markdowns.append(self.clean_truncated_repeats(text))
+            if output_ids.shape[-1] - input_length >= MAX_TOKENS:
+                raise HTTPException(status_code=502, detail='OvisOCR3 generation reached the output limit')
+            if OUTPUT_FORMAT == 'markdown':
+                text = self.clean_truncated_repeats(self.clean_restarted_document(text))
+            markdowns.append(text)
             logger.info(
                 "Finished Transformers OCR for image %s/%s in %.1fs (%s generated tokens)",
                 image_index + 1,
@@ -286,18 +292,18 @@ class TransformersOvisOCR2Parser:
         return markdowns
 
 
-class MlxOvisOCR2Parser:
+class MlxOvisOCR3Parser:
     """Native Apple Silicon backend powered by MLX-VLM."""
 
-    clean_truncated_repeats = staticmethod(VllmOvisOCR2Parser.clean_truncated_repeats)
-    clean_restarted_document = staticmethod(VllmOvisOCR2Parser.clean_restarted_document)
+    clean_truncated_repeats = staticmethod(VllmOvisOCR3Parser.clean_truncated_repeats)
+    clean_restarted_document = staticmethod(VllmOvisOCR3Parser.clean_restarted_document)
 
     def __init__(self, model_name_or_path: str):
         from huggingface_hub import snapshot_download
         from mlx_vlm import load
         from mlx_vlm.prompt_utils import apply_chat_template
 
-        logger.info("Loading OvisOCR2 with MLX-VLM")
+        logger.info("Loading OvisOCR3 with MLX-VLM")
         resolved_model = model_name_or_path
         if not Path(model_name_or_path).exists():
             resolved_model = snapshot_download(repo_id=model_name_or_path, revision=MODEL_REVISION)
@@ -339,8 +345,11 @@ class MlxOvisOCR2Parser:
                 verbose=False,
             )
             text = re.sub(r"\n*<think>\s*</think>\n*", "\n\n", result.text).strip()
-            text = self.clean_restarted_document(text)
-            markdowns.append(self.clean_truncated_repeats(text))
+            if result.finish_reason == 'length':
+                raise HTTPException(status_code=502, detail='OvisOCR3 generation reached the output limit')
+            if OUTPUT_FORMAT == 'markdown':
+                text = self.clean_truncated_repeats(self.clean_restarted_document(text))
+            markdowns.append(text)
             logger.info(
                 "Finished MLX OCR for image %s/%s in %.1fs "
                 "(%s generated tokens, %.1f tokens/s, %.2f GB peak memory, reason=%s)",
@@ -357,12 +366,12 @@ class MlxOvisOCR2Parser:
 
 def create_parser():
     if BACKEND == "vllm":
-        return VllmOvisOCR2Parser(MODEL_NAME)
+        return VllmOvisOCR3Parser(MODEL_NAME)
     if BACKEND == "transformers":
-        return TransformersOvisOCR2Parser(MODEL_NAME)
+        return TransformersOvisOCR3Parser(MODEL_NAME)
     if BACKEND == "mlx":
-        return MlxOvisOCR2Parser(MODEL_NAME)
-    raise ValueError(f"Unsupported OvisOCR2 backend: {BACKEND}")
+        return MlxOvisOCR3Parser(MODEL_NAME)
+    raise ValueError(f"Unsupported OvisOCR3 backend: {BACKEND}")
 
 
 async def get_parser():
@@ -378,7 +387,7 @@ async def get_parser():
             return PARSER
         except Exception as error:
             PARSER_ERROR = str(error) or error.__class__.__name__
-            logger.exception("Failed to load OvisOCR2")
+            logger.exception("Failed to load OvisOCR3")
             raise
 
 
@@ -445,30 +454,76 @@ def crop_visual_regions(markdown: str, page: Image.Image, page_index: int) -> tu
         y1, y2 = max(0, min(height, y1)), max(0, min(height, y2))
         if x2 <= x1 or y2 <= y1:
             return ""
-        path = f"ocr_images/ovisocr2_p{page_index + 1}_image_{len(images) + 1}.jpg"
+        path = f"ocr_images/ovisocr3_p{page_index + 1}_image_{len(images) + 1}.jpg"
         output = io.BytesIO()
         page.crop((x1, y1, x2, y2)).save(output, format="JPEG", quality=92)
         images[path] = base64.b64encode(output.getvalue()).decode("ascii")
-        blocks.append({"block_label": "image", "block_bbox": [left, top, right, bottom]})
+        blocks.append({"block_label": "image", "block_bbox": [left, top, right, bottom], "block_content": f"![image]({path})"})
         return f"![image]({path})"
 
     return BBOX_IMAGE_RE.sub(replace, markdown), images, blocks
+
+
+CATEGORIES = {'abstract','algorithm','aside_text','chart','content','display_formula','doc_title',
+              'figure_title','footer','footer_image','footnote','formula_number','header','header_image',
+              'image','inline_formula','number','paragraph_title','reference_content','seal','table',
+              'text','vertical_text','vision_footnote'}
+
+
+def structured_page(text: str) -> tuple[str, list[dict]]:
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail='OvisOCR3 returned invalid structured JSON') from error
+    if not isinstance(value, list):
+        raise HTTPException(status_code=502, detail='OvisOCR3 structured output must be an array')
+    blocks, pieces = [], []
+    for node in value:
+        if not isinstance(node, dict):
+            raise HTTPException(status_code=502, detail='Invalid OvisOCR3 document element')
+        box, label, content = node.get('bbox'), node.get('category'), node.get('content')
+        if (not isinstance(box, list) or len(box) != 4
+            or any(type(x) is not int or not 0 <= x < 1000 for x in box)
+            or box[0] >= box[2] or box[1] >= box[3]
+            or not isinstance(label, str) or label not in CATEGORIES or not isinstance(content, str)):
+            raise HTTPException(status_code=502, detail='Invalid OvisOCR3 category, content or bounding box')
+        if label == 'display_formula': content = '$$\n' + content.strip('$ \n') + '\n$$'
+        elif label == 'inline_formula': content = '$' + content.strip('$ \n') + '$'
+        elif label in {'doc_title','paragraph_title'} and not content.lstrip().startswith('#'):
+            content = ('# ' if label == 'doc_title' else '## ') + content
+        blocks.append({'block_label':label,'block_bbox':box,'block_content':content})
+        pieces.append(content)
+    return '\n\n'.join(pieces), blocks
 
 
 def build_response(
     markdowns: list[str], pages: list[Image.Image], file_type: int, *, page_offset: int = 0
 ) -> dict[str, Any]:
     all_images: dict[str, str] = {}
+    if len(markdowns) != len(pages):
+        raise HTTPException(status_code=502, detail='OvisOCR3 page result count does not match input')
     results = []
     rendered_pages = []
     for index, (markdown, page) in enumerate(zip(markdowns, pages)):
         page_index = page_offset + index
+        structured_blocks = None
+        if OUTPUT_FORMAT == 'structured':
+            markdown, structured_blocks = structured_page(markdown)
         rendered, images, blocks = crop_visual_regions(markdown, page, page_index)
+        if structured_blocks is not None:
+            crop_markdown = {tuple(b['block_bbox']): b['block_content'] for b in blocks}
+            for block in structured_blocks:
+                block['block_content'] = BBOX_IMAGE_RE.sub(
+                    lambda m: crop_markdown.get(tuple(int(v) for v in m.groups()), ''),
+                    block['block_content'],
+                )
+            blocks = structured_blocks
         rendered_pages.append(rendered)
         all_images.update(images)
         results.append(
             {
-                "parser": "ovisocr2",
+                "parser": "ovisocr3",
+                "metadata": {"model": MODEL_NAME, "modelRevision": MODEL_REVISION, "backend": BACKEND, "outputFormat": OUTPUT_FORMAT},
                 "pageIndex": page_index,
                 "width": 1000,
                 "height": 1000,
@@ -491,13 +546,13 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="OvisOCR2 Adapter", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="OvisOCR3 Adapter", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
     if PARSER is None:
-        raise HTTPException(status_code=503, detail=PARSER_ERROR or "OvisOCR2 is loading")
+        raise HTTPException(status_code=503, detail=PARSER_ERROR or "OvisOCR3 is loading")
     return {"status": "ok", "model": MODEL_NAME, "backend": BACKEND, "modelLoaded": True}
 
 

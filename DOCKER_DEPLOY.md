@@ -11,7 +11,7 @@
 | `paddleocr-ocr-api` | `pp-ocrv6` | PaddleX OCR API，默认使用 PP-OCRv6 | `8082:8080` |
 | `unlimited-ocr-api` | `unlimited-ocr` | Unlimited-OCR-2 适配服务 | `8083:8080` |
 | `unlimited-ocr-sglang` | `unlimited-ocr` | Unlimited-OCR-2 SGLang 推理（按 backend 启用） | `10000:10000` |
-| `ovisocr2-api` | `ovisocr2` | OvisOCR2 独立 vLLM 推理 | `8084:8080` |
+| `ovisocr2-api` | `ovisocr2` | OvisOCR3 独立 vLLM 推理 | `8084:8080` |
 | `hpd-parsing-server` | `hpd-parsing` | HPD-Parsing 官方定制 vLLM 推理 | 无 |
 | `hpd-parsing-api` | `hpd-parsing` | HPD-Parsing 图片/PDF 与 Markdown 适配服务 | `8085:8080` |
 | `navidc-ocr-api` | `navidc-ocr` | NaviDC-OCR vLLM 异步文档解析服务（可选 Transformers 后端） | `8086:8080` |
@@ -63,14 +63,14 @@ PANDOCR_API_TOKEN=
 PANDOCR_ENABLE_API_DOCS=0
 UNLIMITED_OCR_MODEL_REVISION=9cf077c4b206e0e2a31879df937b0b0bcba3661c
 UNLIMITED_OCR_MAX_RENDER_PIXELS=60000000
-OVISOCR2_MODEL_REVISION=65c619d374b55d4152e85150fc1b003700bc1f0c
+OVISOCR2_MODEL_REVISION=4833d5d2afa6e769ee933f024504d67ace80a24c
 ```
 
 模型切换在停止旧容器后会连续两次确认其 `Running=false`，并对所选 GPU 做连续稳定的空闲显存采样；默认要求 3 个样本、间隔 500 ms、窗口波动不超过 128 MiB，释放门禁最多等待 60 秒且永远不会超过 `PANDOCR_MODEL_SWITCH_TIMEOUT`。任一探针不可用、数据缺失、空闲显存不足或不稳定都会失败关闭，不会启动目标模型。六模型空闲显存下限分别为 PaddleOCR-VL 6656 MiB、PP-OCRv6 4096 MiB，其余四模型 6656 MiB。
 
 Unlimited-OCR-2 两条后端镜像使用 digest 固定的 CUDA 13.0.2 基础镜像，与 PyTorch 2.13 及第二代官方 SGLang wheel 的 cu13 组件匹配，并覆盖 RTX 50 / Blackwell（SM120）。不要将工具链单独回退到 CUDA 12.6；升级时应一起核验 wheel、PyTorch 与 CUDA 版本。部署说明见 [Unlimited-OCR-2](docs/unlimited-ocr.md)。
 
-`PANDOCR_MAX_UPLOAD_MB` 限制解码后的原文件；JSON 中的 base64 会额外膨胀，`PANDOCR_MAX_HTTP_BODY_MB=0` 表示自动计算安全的请求体上限。Unlimited-OCR-2 会在渲染 PDF 前按 `UNLIMITED_OCR_MAX_RENDER_PIXELS` 拒绝像素预算过大的文件，OvisOCR2 则逐页渲染和推理。远程模型 revision 与上游 Paddle/CUDA/Python 镜像均锁定到已核验提交或 digest；升级时应同时更新标签和哈希。
+`PANDOCR_MAX_UPLOAD_MB` 限制解码后的原文件；JSON 中的 base64 会额外膨胀，`PANDOCR_MAX_HTTP_BODY_MB=0` 表示自动计算安全的请求体上限。Unlimited-OCR-2 会在渲染 PDF 前按 `UNLIMITED_OCR_MAX_RENDER_PIXELS` 拒绝像素预算过大的文件，OvisOCR3 则逐页渲染和推理。远程模型 revision 与上游 Paddle/CUDA/Python 镜像均锁定到已核验提交或 digest；升级时应同时更新标签和哈希。
 
 RTX 30/40 系列等非 Blackwell NVIDIA GPU 使用 `env.docker`，或把两个镜像标签改为：
 
@@ -88,7 +88,7 @@ Windows + NVIDIA 用户推荐直接运行一键部署脚本：
 .\windows-one-click.bat
 ```
 
-脚本会自动选择环境文件，只创建选中的模型容器和 WebUI，然后等待所选模型健康。默认产品线包含 PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR2、HPD-Parsing 和 NaviDC-OCR；可使用 `-Model` 直接指定：
+脚本会自动选择环境文件，只创建选中的模型容器和 WebUI，然后等待所选模型健康。默认产品线包含 PaddleOCR-VL 1.6、PP-OCRv6、OvisOCR3、HPD-Parsing 和 NaviDC-OCR；可使用 `-Model` 直接指定：
 
 ```powershell
 .\windows-one-click.bat -Model ovisocr2
@@ -144,14 +144,14 @@ curl http://localhost:8081/health
 
 默认情况下只有 `PaddleOCR-VL 1.6` 会启动，`PP-OCRv6` 的健康检查不通是正常的。切到 `PP-OCRv6` 时，控制器先完整停止 VL 的 API/VLM 容器并释放显存，之后才启动 PP-OCRv6；最终 `8082/health` 可用，而 `8081/health` 不可用。解析正在运行时模型切换会返回 `409`，避免长任务中途被停容器打断。
 
-其他默认模型启动后的健康检查端口分别是 OvisOCR2 `8084`、HPD-Parsing `8085` 和 NaviDC-OCR `8086`。
+其他默认模型启动后的健康检查端口分别是 OvisOCR3 `8084`、HPD-Parsing `8085` 和 NaviDC-OCR `8086`。
 
 如果要通过反向代理、局域网或公网暴露 WebUI，请设置 `PANDOCR_API_TOKEN`。`PANDOCR_ENFORCE_ORIGIN_CHECK=1` 会拒绝未加入来源白名单的跨站 API 写请求，但它不能替代 token；前端会在 API 返回 401 时提示输入 token。`PANDOCR_ENABLE_API_DOCS=1` 时才启用 `/docs` 和 `/redoc`。
 
 `/api/models` 应返回：
 
 ```json
-{"default":"paddleocr-vl-1.6","data":[{"id":"paddleocr-vl-1.6","name":"PaddleOCR-VL-1.6-0.9B"},{"id":"pp-ocrv6","name":"PP-OCRv6_medium"},{"id":"ovisocr2","name":"ATH-MaaS/OvisOCR2"},{"id":"hpd-parsing","name":"PaddlePaddle/HPD-Parsing"},{"id":"navidc-ocr","name":"StarDoc-AI/NaviDC-OCR"}],"originProtection":true,"maxConcurrentOcr":1}
+{"default":"paddleocr-vl-1.6","data":[{"id":"paddleocr-vl-1.6","name":"PaddleOCR-VL-1.6-0.9B"},{"id":"pp-ocrv6","name":"PP-OCRv6_medium"},{"id":"ovisocr2","name":"ATH-MaaS/OvisOCR3"},{"id":"hpd-parsing","name":"PaddlePaddle/HPD-Parsing"},{"id":"navidc-ocr","name":"StarDoc-AI/NaviDC-OCR"}],"originProtection":true,"maxConcurrentOcr":1}
 ```
 
 ## 升级或重启 Web 服务

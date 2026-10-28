@@ -231,6 +231,9 @@ class OvisOcr2AdapterTests(unittest.TestCase):
         cls.client.close()
 
     def setUp(self):
+        mode = patch.object(self.adapter, 'OUTPUT_FORMAT', 'markdown')
+        mode.start()
+        self.addCleanup(mode.stop)
         self.adapter.PARSER = None
         self.adapter.PARSER_ERROR = None
 
@@ -238,7 +241,7 @@ class OvisOcr2AdapterTests(unittest.TestCase):
         unit = "repeat-block-"
         prefix = "prefix-" * 120
         repeated = prefix + (unit * 10)
-        cleaned = self.adapter.VllmOvisOCR2Parser.clean_truncated_repeats(
+        cleaned = self.adapter.VllmOvisOCR3Parser.clean_truncated_repeats(
             repeated,
             min_text_len=100,
             max_period=20,
@@ -249,11 +252,11 @@ class OvisOcr2AdapterTests(unittest.TestCase):
 
         restarted = "Document title\nFirst paragraph\nSecond paragraph\nDocument title\nduplicate"
         self.assertEqual(
-            self.adapter.VllmOvisOCR2Parser.clean_restarted_document(restarted),
+            self.adapter.VllmOvisOCR3Parser.clean_restarted_document(restarted),
             "Document title\nFirst paragraph\nSecond paragraph",
         )
         self.assertEqual(
-            self.adapter.VllmOvisOCR2Parser.clean_restarted_document("short\nbody\nshort"),
+            self.adapter.VllmOvisOCR3Parser.clean_restarted_document("short\nbody\nshort"),
             "short\nbody\nshort",
         )
 

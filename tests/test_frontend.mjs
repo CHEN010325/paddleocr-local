@@ -161,7 +161,7 @@ test('runtime readiness requires the selected model to be uniquely running and r
     evaluate(`
       availableModels=[
         {id:'pp-ocrv6',label:'PP-OCRv6'},
-        {id:'ovisocr2',label:'OvisOCR2'}
+        {id:'ovisocr2',label:'OvisOCR3'}
       ];
       selectedModelId='pp-ocrv6';
       modelRuntime={

@@ -31,7 +31,7 @@ body:
     id: model
     attributes:
       label: 模型与后端
-      placeholder: OvisOCR2 / MLX
+      placeholder: OvisOCR3 / MLX
     validations:
       required: true
   - type: textarea

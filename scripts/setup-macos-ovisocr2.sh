@@ -9,15 +9,15 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/macos-python.sh"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "OvisOCR2 MLX/Transformers setup requires macOS Apple Silicon."
+  echo "OvisOCR3 MLX/Transformers setup requires macOS Apple Silicon."
   exit 1
 fi
 
-VENV_DIR="${OVISOCR2_MACOS_VENV:-.venv-ovisocr2-macos}"
+VENV_DIR="${OVISOCR2_MACOS_VENV:-.venv-ovisocr3-macos}"
 select_supported_macos_python "$VENV_DIR/bin/python"
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  echo "Creating OvisOCR2 virtual environment: $VENV_DIR"
+  echo "Creating OvisOCR3 virtual environment: $VENV_DIR"
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
@@ -36,4 +36,4 @@ print("transformers", transformers.__version__)
 print("mlx-vlm", mlx_vlm.__version__)
 PY
 
-echo "OvisOCR2 macOS environment is ready."
+echo "OvisOCR3 macOS environment is ready."

@@ -183,7 +183,7 @@ function createBrowser(fetchOverride = null, withI18n = true) {
                 data: [
                     { id: 'paddleocr-vl-1.6', label: 'PaddleOCR', endpoint: '/api/paddleocr-vl-1.6' },
                     { id: 'unlimited-ocr', label: 'Unlimited OCR', endpoint: '/api/unlimited-ocr' },
-                    { id: 'ovisocr2', label: 'OvisOCR2', endpoint: '/api/ovisocr2' }
+                    { id: 'ovisocr2', label: 'OvisOCR3', endpoint: '/api/ovisocr2' }
                 ]
             });
         }

@@ -50,7 +50,7 @@ cp env.docker env.txt
 | --- | --- |
 | 普通文字、低显存 | PP-OCRv6 |
 | 论文、复杂版面、表格和公式 | PaddleOCR-VL 1.6 |
-| Apple Silicon 或文档理解 | OvisOCR2 |
+| Apple Silicon 或文档理解 | OvisOCR3 |
 | 高质量文档解析 | HPD-Parsing |
 | 复杂文档、版面、表格和公式 | NaviDC-OCR |
 

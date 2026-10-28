@@ -345,11 +345,11 @@ class ServerTaskApiTests(unittest.TestCase):
             self.assertIn("Dockerfile", tar.getnames())
             self.assertIn("ovisocr2_adapter.py", tar.getnames())
 
-        self.assertEqual(self.server.docker_image_name_for("ovisocr2-api"), "pandocr-ovisocr2:latest")
+        self.assertEqual(self.server.docker_image_name_for("ovisocr2-api"), "pandocr-ovisocr3:latest")
         self.assertEqual(self.server.services_for_model_deploy("ovisocr2"), ["ovisocr2-api"])
         web_dockerfile = (self.server.PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY ovisocr2_adapter.py .", web_dockerfile)
-        self.assertIn("COPY Dockerfile.ovisocr2 ./", web_dockerfile)
+        self.assertIn("COPY Dockerfile.ovisocr3 ./", web_dockerfile)
         ovis_dockerfile = (self.server.PROJECT_ROOT / "Dockerfile.ovisocr2").read_text(encoding="utf-8")
         self.assertIn("python3 -m venv /opt/venv", ovis_dockerfile)
         self.assertNotIn("python3 -m pip install", ovis_dockerfile)
@@ -560,8 +560,8 @@ class ServerTaskApiTests(unittest.TestCase):
             0,
         )
 
-        self.assertIn("![image](ocr_images/ovisocr2_p1_image_1.jpg)", markdown)
-        self.assertEqual(list(images), ["ocr_images/ovisocr2_p1_image_1.jpg"])
+        self.assertIn("![image](ocr_images/ovisocr3_p1_image_1.jpg)", markdown)
+        self.assertEqual(list(images), ["ocr_images/ovisocr3_p1_image_1.jpg"])
         self.assertEqual(blocks[0]["block_bbox"], [100, 200, 500, 600])
 
     def test_ovisocr2_mlx_backend_dispatches_to_native_parser(self):
@@ -569,7 +569,7 @@ class ServerTaskApiTests(unittest.TestCase):
         sentinel = object()
         with (
             patch.object(adapter, "BACKEND", "mlx"),
-            patch.object(adapter, "MlxOvisOCR2Parser", return_value=sentinel) as parser,
+            patch.object(adapter, "MlxOvisOCR3Parser", return_value=sentinel) as parser,
         ):
             self.assertIs(adapter.create_parser(), sentinel)
         parser.assert_called_once_with(adapter.MODEL_NAME)

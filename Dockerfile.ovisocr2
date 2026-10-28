@@ -25,6 +25,7 @@ RUN python3 -m venv /opt/venv && \
       --extra-index-url https://download.pytorch.org/whl/cu129 \
       --index-strategy unsafe-best-match && \
     uv pip install --python /opt/venv/bin/python \
+      transformers==5.14.1 \
       fastapi==0.136.1 \
       uvicorn==0.46.0 \
       python-multipart==0.0.32 \
@@ -33,6 +34,8 @@ RUN python3 -m venv /opt/venv && \
 
 WORKDIR /app
 COPY ovisocr2_adapter.py /app/ovisocr2_adapter.py
+COPY ovisocr3_config.py /app/ovisocr3_config.py
+COPY ovisocr3_prompts /app/ovisocr3_prompts
 
 ENTRYPOINT []
 CMD ["uvicorn", "ovisocr2_adapter:app", "--host", "0.0.0.0", "--port", "8080"]

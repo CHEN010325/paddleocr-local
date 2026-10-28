@@ -45,7 +45,7 @@ resolve_model_id() {
     1|vl|paddleocr-vl|paddleocr-vl-1.6|paddleocrvl) echo "paddleocr-vl-1.6" ;;
     2|ppocr|ppocrv6|pp-ocrv6|ocr) echo "pp-ocrv6" ;;
     3|unlimited|unlimited-ocr|uow) echo "unlimited-ocr" ;;
-    4|ovis|ovisocr|ovisocr2|ovis-ocr2) echo "ovisocr2" ;;
+    4|ovis|ovisocr|ovisocr2|ovis-ocr2|ovisocr3|ovis-ocr3) echo "ovisocr2" ;;
     5|hpd|hpd-parsing|hpdocr) echo "hpd-parsing" ;;
     *)
       echo "Unsupported model: $1" >&2
@@ -61,7 +61,7 @@ if [[ -z "$REQUESTED_MODEL" ]]; then
     printf "  1) PaddleOCR-VL 1.6  Document parsing (MLX)\n"
     printf "  2) PP-OCRv6          Text recognition\n"
     printf "  3) Unlimited-OCR-2     Long-document parsing (Transformers/MPS)\n"
-    printf "  4) OvisOCR2          Document parsing (MLX, Transformers fallback)\n"
+    printf "  4) OvisOCR3          Document parsing (MLX, Transformers fallback)\n"
     printf "  5) HPD-Parsing       Document parsing (Transformers/MPS)\n\n"
     read -r -p "Select a model [1]: " REQUESTED_MODEL
   fi
@@ -108,18 +108,23 @@ UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS="${UNLIMITED_OCR_STREAM_HEARTBEAT_SECONDS
 UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY:-1}"
 UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_IMAGE_SIZE:-640}"
 UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS="${UNLIMITED_OCR_TRANSFORMERS_MPS_OOM_RETRY_MAX_TOKENS:-4096}"
-OVISOCR2_MACOS_VENV="${OVISOCR2_MACOS_VENV:-.venv-ovisocr2-macos}"
+OVISOCR2_MACOS_VENV="${OVISOCR2_MACOS_VENV:-.venv-ovisocr3-macos}"
 OVISOCR2_HOST="${OVISOCR2_HOST:-127.0.0.1}"
 OVISOCR2_API_PORT="${OVISOCR2_API_PORT:-8084}"
-OVISOCR2_MODEL_NAME="${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR2}"
-OVISOCR2_MODEL_REVISION="${OVISOCR2_MODEL_REVISION:-65c619d374b55d4152e85150fc1b003700bc1f0c}"
+OVISOCR2_MODEL_NAME="${OVISOCR2_MODEL_NAME:-ATH-MaaS/OvisOCR3}"
+OVISOCR2_MODEL_REVISION="${OVISOCR2_MODEL_REVISION:-4833d5d2afa6e769ee933f024504d67ace80a24c}"
+# Upgrade known second-generation defaults without rewriting existing settings files.
+case "$OVISOCR2_MODEL_NAME" in ATH-MaaS/OvisOCR2|AIDC-AI/OvisOCR2)
+  OVISOCR2_MODEL_NAME=ATH-MaaS/OvisOCR3
+  OVISOCR2_MODEL_REVISION=4833d5d2afa6e769ee933f024504d67ace80a24c ;;
+esac
 OVISOCR2_BACKEND="${OVISOCR2_BACKEND:-mlx}"
-OVISOCR2_HF_HOME="${OVISOCR2_HF_HOME:-$ROOT_DIR/model_cache_ovisocr2_macos}"
+OVISOCR2_HF_HOME="${OVISOCR2_HF_HOME:-$ROOT_DIR/model_cache_ovisocr3_macos}"
 OVISOCR2_TRANSFORMERS_DEVICE="${OVISOCR2_TRANSFORMERS_DEVICE:-mps}"
 OVISOCR2_TRANSFORMERS_DTYPE="${OVISOCR2_TRANSFORMERS_DTYPE:-float16}"
 OVISOCR2_ATTENTION_IMPLEMENTATION="${OVISOCR2_ATTENTION_IMPLEMENTATION:-eager}"
 OVISOCR2_PDF_DPI="${OVISOCR2_PDF_DPI:-180}"
-OVISOCR2_MAX_TOKENS="${OVISOCR2_MAX_TOKENS:-2048}"
+OVISOCR2_MAX_TOKENS="${OVISOCR2_MAX_TOKENS:-16384}"
 OVISOCR2_MAX_PIXELS="${OVISOCR2_MAX_PIXELS:-1048576}"
 OVISOCR2_RESTART_CHECK_INTERVAL="${OVISOCR2_RESTART_CHECK_INTERVAL:-128}"
 HPD_PARSING_MACOS_VENV="${HPD_PARSING_MACOS_VENV:-.venv-hpd-parsing-macos}"
@@ -328,10 +333,10 @@ run_ovisocr2_setup_if_needed() {
   fi
 
   if truthy "$PANDOCR_ONE_CLICK_FORCE_SETUP" || ! ovisocr2_env_ready; then
-    step "Installing macOS OvisOCR2 dependencies"
+    step "Installing macOS OvisOCR3 dependencies"
     PYTHON_BIN="$setup_python" OVISOCR2_MACOS_VENV="$OVISOCR2_MACOS_VENV" bash scripts/setup-macos-ovisocr2.sh
   else
-    step "macOS OvisOCR2 dependencies are already installed"
+    step "macOS OvisOCR3 dependencies are already installed"
   fi
 }
 
@@ -575,7 +580,7 @@ step "PaddleOCR Local macOS one-click deployment"
 echo "Backend: $PANDOCR_MACOS_BACKEND"
 echo "Selected model: $ACTIVE_MODEL"
 if [[ "$ACTIVE_MODEL" == "ovisocr2" ]]; then
-  echo "OvisOCR2 backend: $OVISOCR2_BACKEND"
+  echo "OvisOCR3 backend: $OVISOCR2_BACKEND"
 fi
 echo "WebUI: $WEB_URL"
 

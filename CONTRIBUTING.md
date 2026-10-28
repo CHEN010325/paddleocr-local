@@ -70,7 +70,7 @@ npm run coverage:frontend
 使用简短、可读的提交信息，例如：
 
 ```text
-Add OvisOCR2 hardware diagnostics
+Add OvisOCR3 hardware diagnostics
 Fix PDF retry state recovery
 Document RTX 3060 compatibility
 ```

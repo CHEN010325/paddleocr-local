@@ -18,10 +18,12 @@ COPY exporters.py .
 COPY controller.py .
 COPY unlimited_ocr_adapter.py .
 COPY ovisocr2_adapter.py .
+COPY ovisocr3_config.py .
+COPY ovisocr3_prompts ./ovisocr3_prompts/
 COPY hpd_parsing_adapter.py .
 COPY navidc_ocr_adapter.py .
 COPY Dockerfile.ocr Dockerfile.unlimited-ocr Dockerfile.unlimited-ocr-sglang ./
-COPY Dockerfile.ovisocr2 ./
+COPY Dockerfile.ovisocr3 ./
 COPY Dockerfile.hpd-parsing-adapter ./
 COPY Dockerfile.navidc-ocr ./
 COPY start-hpd-parsing.sh ./

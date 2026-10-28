@@ -1,4 +1,5 @@
 import os
+from ovisocr3_config import resolve_model_settings, ovis_env
 import asyncio
 import base64
 import httpx
@@ -26,7 +27,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from ocr_engines import load_engine_settings, engine_status, recognize
 
 logger = logging.getLogger("pandocr")
@@ -126,20 +127,21 @@ UNLIMITED_OCR_SINGLE_IMAGE_MODE = os.getenv("UNLIMITED_OCR_SINGLE_IMAGE_MODE", "
 UNLIMITED_OCR_MULTI_IMAGE_MODE = os.getenv("UNLIMITED_OCR_MULTI_IMAGE_MODE", "base")
 UNLIMITED_OCR_MAX_TOKENS = os.getenv("UNLIMITED_OCR_MAX_TOKENS", "28672")
 UNLIMITED_OCR_SGLANG_MAX_TOKENS = os.getenv("UNLIMITED_OCR_SGLANG_MAX_TOKENS", "28672")
-OVISOCR2_SERVICE_URL = os.getenv("OVISOCR2_SERVICE_URL", "http://localhost:8084/ocr")
-OVISOCR2_MODEL_NAME = os.getenv("OVISOCR2_MODEL_NAME", "ATH-MaaS/OvisOCR2")
-OVISOCR2_MODEL_REVISION = os.getenv(
-    "OVISOCR2_MODEL_REVISION", "65c619d374b55d4152e85150fc1b003700bc1f0c"
-)
-OVISOCR2_API_PORT = os.getenv("OVISOCR2_API_PORT", "8084")
-OVISOCR2_KV_CACHE_MEMORY_MB = os.getenv("OVISOCR2_KV_CACHE_MEMORY_MB", "512")
-OVISOCR2_STARTUP_MEMORY_FRACTION = os.getenv("OVISOCR2_STARTUP_MEMORY_FRACTION", "0.50")
-OVISOCR2_MAX_MODEL_LEN = os.getenv("OVISOCR2_MAX_MODEL_LEN", "32768")
-OVISOCR2_MAX_NUM_SEQS = os.getenv("OVISOCR2_MAX_NUM_SEQS", "1")
-OVISOCR2_MAX_TOKENS = os.getenv("OVISOCR2_MAX_TOKENS", "8192")
-OVISOCR2_PDF_DPI = os.getenv("OVISOCR2_PDF_DPI", "200")
-OVISOCR2_MAX_PAGES_PER_REQUEST = os.getenv("OVISOCR2_MAX_PAGES_PER_REQUEST", "50")
-OVISOCR2_GDN_PREFILL_BACKEND = os.getenv("OVISOCR2_GDN_PREFILL_BACKEND", "triton")
+OVISOCR2_SERVICE_URL = ovis_env("SERVICE_URL", "http://localhost:8084/ocr")
+OVISOCR2_MODEL_NAME, OVISOCR2_MODEL_REVISION = resolve_model_settings()
+OVISOCR2_MODEL_REVISION = OVISOCR2_MODEL_REVISION or ''
+OVISOCR3_OUTPUT_FORMAT = ovis_env('OUTPUT_FORMAT', 'structured')
+OVISOCR3_BACKEND = ovis_env('BACKEND', 'vllm')
+OVISOCR3_ATTENTION_IMPLEMENTATION = ovis_env('ATTENTION_IMPLEMENTATION', 'auto')
+OVISOCR2_API_PORT = ovis_env("API_PORT", "8084")
+OVISOCR2_KV_CACHE_MEMORY_MB = ovis_env("KV_CACHE_MEMORY_MB", "512")
+OVISOCR2_STARTUP_MEMORY_FRACTION = ovis_env("STARTUP_MEMORY_FRACTION", "0.50")
+OVISOCR2_MAX_MODEL_LEN = ovis_env("MAX_MODEL_LEN", "32768")
+OVISOCR2_MAX_NUM_SEQS = ovis_env("MAX_NUM_SEQS", "1")
+OVISOCR2_MAX_TOKENS = ovis_env("MAX_TOKENS", "16384")
+OVISOCR2_PDF_DPI = ovis_env("PDF_DPI", "200")
+OVISOCR2_MAX_PAGES_PER_REQUEST = ovis_env("MAX_PAGES_PER_REQUEST", "50")
+OVISOCR2_GDN_PREFILL_BACKEND = ovis_env("GDN_PREFILL_BACKEND", "triton")
 HPD_PARSING_SERVICE_URL = os.getenv("HPD_PARSING_SERVICE_URL", "http://localhost:8085/ocr")
 HPD_PARSING_MODEL_NAME = os.getenv("HPD_PARSING_MODEL_NAME", "PaddlePaddle/HPD-Parsing")
 HPD_PARSING_IMAGE = os.getenv(
@@ -273,7 +275,8 @@ def initial_unlimited_ocr_backend() -> str:
 def parse_model_catalog() -> list[str]:
     supported = {"paddleocr-vl-1.6", "pp-ocrv6", "unlimited-ocr", "ovisocr2", "hpd-parsing", "navidc-ocr"}
     if MODEL_CATALOG_ENV:
-        ids = [model_id for model_id in parse_csv_env("PANDOCR_MODEL_CATALOG", "") if model_id in supported]
+        ids = [model_id.replace('ovisocr3','ovisocr2') for model_id in parse_csv_env("PANDOCR_MODEL_CATALOG", "")]
+        ids = [model_id for model_id in ids if model_id in supported]
     else:
         ids = ["paddleocr-vl-1.6", "pp-ocrv6"]
         if ENABLE_UNLIMITED_OCR:
@@ -479,11 +482,18 @@ controller_ocr_lease_store_error: str | None = None
 gpu_preflight_cache: dict = {"updated_at": 0.0, "data": None}
 
 
-class ModelSwitchRequest(BaseModel):
+class CompatibleModelRequest(BaseModel):
+    @field_validator('modelId', mode='before', check_fields=False)
+    @classmethod
+    def normalize_ovis_model_id(cls, value):
+        return 'ovisocr2' if value == 'ovisocr3' and not ENGINE_SETTINGS else value
+
+
+class ModelSwitchRequest(CompatibleModelRequest):
     modelId: str
 
 
-class ModelDeployRequest(BaseModel):
+class ModelDeployRequest(CompatibleModelRequest):
     modelId: str
     backend: str | None = None
 
@@ -492,7 +502,7 @@ class UnlimitedOcrBackendRequest(BaseModel):
     backend: str
 
 
-class OCRLeaseRequest(BaseModel):
+class OCRLeaseRequest(CompatibleModelRequest):
     modelId: str
 
 
@@ -525,9 +535,9 @@ def model_catalog() -> list[dict]:
         "ovisocr2": {
             "id": "ovisocr2",
             "name": OVISOCR2_MODEL_NAME,
-            "label": "OvisOCR2",
+            "label": "OvisOCR3",
             "kind": "document_parsing",
-            "endpoint": "/api/ovisocr2",
+            "endpoint": "/api/ovisocr3",
         },
         "hpd-parsing": {
             "id": "hpd-parsing",
@@ -983,7 +993,7 @@ def docker_image_name_for(service_name: str) -> str:
     if service_name == "unlimited-ocr-sglang":
         return "pandocr-unlimited-ocr2-sglang:latest"
     if service_name == "ovisocr2-api":
-        return "pandocr-ovisocr2:latest"
+        return "pandocr-ovisocr3:latest"
     if service_name == "hpd-parsing-server":
         return HPD_PARSING_IMAGE
     if service_name == "hpd-parsing-api":
@@ -1030,7 +1040,7 @@ def dockerfile_path_for(service_name: str) -> Path:
         "paddleocr-ocr-api": "Dockerfile.ocr",
         "unlimited-ocr-api": "Dockerfile.unlimited-ocr",
         "unlimited-ocr-sglang": "Dockerfile.unlimited-ocr-sglang",
-        "ovisocr2-api": "Dockerfile.ovisocr2",
+        "ovisocr2-api": "Dockerfile.ovisocr3",
         "hpd-parsing-api": "Dockerfile.hpd-parsing-adapter",
         "navidc-ocr-api": "Dockerfile.navidc-ocr",
     }
@@ -1073,6 +1083,12 @@ def make_docker_build_context(service_name: str) -> bytes:
             adapter_info = tarfile.TarInfo(adapter_name)
             adapter_info.size = len(adapter_data)
             tar.addfile(adapter_info, io.BytesIO(adapter_data))
+        if service_name == 'ovisocr2-api':
+            for name in ['ovisocr3_config.py'] + [str(p.relative_to(PROJECT_ROOT)).replace('\\','/') for p in sorted((PROJECT_ROOT/'ovisocr3_prompts').glob('*.txt'))]:
+                data = (PROJECT_ROOT / name).read_bytes()
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
 
     return buffer.getvalue()
 
@@ -1190,11 +1206,11 @@ def host_config(
 async def docker_create_container(name: str, payload: dict) -> None:
     existing = await inspect_container(name)
     if existing["exists"]:
-        if (name not in {"unlimited-ocr-api", "unlimited-ocr-sglang"}
+        if (name not in {"unlimited-ocr-api", "unlimited-ocr-sglang", "ovisocr2-api"}
                 or not existing.get("image") or existing["image"] == payload.get("Image")):
             return
         # The logical service IDs stay compatible with saved tasks, but an
-        # OCR-1 container must never serve OCR-2 through its old dependencies.
+        # Earlier generations must never serve a new model through old dependencies.
         if existing.get("running"):
             await docker_container_action(name, "stop")
         await assert_containers_stopped_twice([(name, name)], context="OCR-2 container upgrade")
@@ -1387,10 +1403,13 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             "Cmd": ["uvicorn", "ovisocr2_adapter:app", "--host", "0.0.0.0", "--port", "8080"],
             "Env": [
                 "HF_HOME=/root/.cache/huggingface",
-                f"CUDA_VISIBLE_DEVICES={PANDOCR_GPU_DEVICE_ID}",
+                "CUDA_VISIBLE_DEVICES=0",
                 "VLLM_USE_FLASHINFER_SAMPLER=0",
                 f"OVISOCR2_MODEL_NAME={OVISOCR2_MODEL_NAME}",
                 f"OVISOCR2_MODEL_REVISION={OVISOCR2_MODEL_REVISION}",
+                f"OVISOCR3_OUTPUT_FORMAT={OVISOCR3_OUTPUT_FORMAT}",
+                f"OVISOCR3_BACKEND={OVISOCR3_BACKEND}",
+                f"OVISOCR3_ATTENTION_IMPLEMENTATION={OVISOCR3_ATTENTION_IMPLEMENTATION}",
                 f"OVISOCR2_KV_CACHE_MEMORY_MB={OVISOCR2_KV_CACHE_MEMORY_MB}",
                 f"OVISOCR2_STARTUP_MEMORY_FRACTION={OVISOCR2_STARTUP_MEMORY_FRACTION}",
                 f"OVISOCR2_MAX_MODEL_LEN={OVISOCR2_MAX_MODEL_LEN}",
@@ -1405,8 +1424,8 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
             "HostConfig": host_config(
                 network_name=network_name,
                 binds=[
-                    bind_path(host_root, "model_cache_ovisocr2", "/root/.cache/huggingface"),
-                    bind_path(host_root, "model_cache_ovisocr2_vllm", "/root/.cache/vllm"),
+                    bind_path(host_root, "model_cache_ovisocr3", "/root/.cache/huggingface"),
+                    bind_path(host_root, "model_cache_ovisocr3_vllm", "/root/.cache/vllm"),
                 ],
                 port_bindings={"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": OVISOCR2_API_PORT}]},
                 shm_size=17_179_869_184,
@@ -1542,6 +1561,11 @@ async def unlimited_ocr_generation_upgrade_needed() -> bool:
     return False
 
 
+async def ovisocr_generation_upgrade_needed() -> bool:
+    existing = await inspect_container('ovisocr2-api')
+    return bool(existing.get('exists') and existing.get('image') and existing['image'] != docker_image_name_for('ovisocr2-api'))
+
+
 async def fetch_http_health(url: str) -> tuple[bool, dict]:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -1564,6 +1588,8 @@ async def check_http_health(url: str) -> bool:
 
 
 def model_health_ready_state(model_id: str, health_ok: bool, health_data: dict) -> tuple[bool, str]:
+    if model_id == 'ovisocr2' and health_data.get('model') in ('ATH-MaaS/OvisOCR2','AIDC-AI/OvisOCR2'):
+        return False, 'generation-mismatch'
     if not health_ok:
         return False, "unknown"
     if model_id == "unlimited-ocr":
@@ -2336,6 +2362,8 @@ async def activate_model_runtime(model_id: str) -> bool:
             non_target_exclusivity_confirmed = True
             if model_id == "unlimited-ocr" and await unlimited_ocr_generation_upgrade_needed():
                 await ensure_model_runtime_created(model_id, unlimited_ocr_runtime_backend)
+            if model_id == 'ovisocr2' and await ovisocr_generation_upgrade_needed():
+                await ensure_model_runtime_created(model_id)
 
             # An idempotent request for the already unique, ready target must
             # not compare free VRAM against a model that is intentionally still
@@ -3380,7 +3408,7 @@ async def convert_to_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class OCRRequest(BaseModel):
+class OCRRequest(CompatibleModelRequest):
     image: Optional[str] = None
     modelId: Optional[str] = None
     fileType: Optional[int] = None
@@ -4114,17 +4142,17 @@ async def run_unlimited_ocr_request(ocr_request: OCRRequest, raw_input: RawOCRIn
 
 async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) -> dict:
     if not ENABLE_OVISOCR2:
-        raise HTTPException(status_code=404, detail="OvisOCR2 is not enabled")
+        raise HTTPException(status_code=404, detail="OvisOCR3 is not enabled")
 
     controller_lease_id = await acquire_ocr_slot(
         "ovisocr2",
-        "OvisOCR2 service is not ready. Switch to this model and wait for it to become ready.",
+        "OvisOCR3 service is not ready. Switch to this model and wait for it to become ready.",
     )
     try:
         base64_data, file_type = prepare_service_input(ocr_request, raw_input)
         payload = build_ovisocr2_payload(ocr_request, base64_data, file_type)
 
-        logger.info("Sending request to OvisOCR2 adapter at %s", OVISOCR2_SERVICE_URL)
+        logger.info("Sending request to OvisOCR3 adapter at %s", OVISOCR2_SERVICE_URL)
         timeout = PADDLE_REQUEST_TIMEOUT if PADDLE_REQUEST_TIMEOUT > 0 else None
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -4133,11 +4161,11 @@ async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) 
                 headers={"Content-Type": "application/json"},
             )
             if resp.status_code != 200:
-                logger.warning("OvisOCR2 Service Error (HTTP %s): %s", resp.status_code, resp.text)
-                raise HTTPException(status_code=resp.status_code, detail=f"Upstream OvisOCR2 error: {resp.text}")
+                logger.warning("OvisOCR3 Service Error (HTTP %s): %s", resp.status_code, resp.text)
+                raise HTTPException(status_code=resp.status_code, detail=f"Upstream OvisOCR3 error: {resp.text}")
             data = resp.json()
             if not isinstance(data, dict) or "layoutParsingResults" not in data:
-                raise HTTPException(status_code=500, detail="Unexpected response format from OvisOCR2")
+                raise HTTPException(status_code=500, detail="Unexpected response format from OvisOCR3")
             return data
     finally:
         await release_ocr_slot(controller_lease_id)
@@ -4326,18 +4354,19 @@ async def proxy_unlimited_ocr(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/ovisocr2")
+@app.post("/api/ovisocr3")
+@app.post("/api/ovisocr2", include_in_schema=False)
 async def proxy_ovisocr2(request: Request):
-    """Proxy request to the optional OvisOCR2 vLLM adapter service."""
+    """Proxy request to the optional OvisOCR3 vLLM adapter service."""
     try:
         ocr_request, raw_image = await parse_ocr_input(request)
         base64_size = validate_proxy_input_size(raw_image)
-        logger.info("Received OvisOCR2 request. Base64 input size: %s bytes", base64_size)
+        logger.info("Received OvisOCR3 request. Base64 input size: %s bytes", base64_size)
         return await run_ovisocr2_request(ocr_request, raw_image)
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("OvisOCR2 Proxy Error")
+        logger.exception("OvisOCR3 Proxy Error")
         raise HTTPException(status_code=500, detail=str(error))
 
 

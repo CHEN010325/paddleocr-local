@@ -22,6 +22,10 @@ Docker 已正常运行时不重启；远程 context、其他错误、普通同�
 `-DryRun` 不启动或修复 Docker。该恢复逻辑由原有入口和 Unlimited-OCR-2 独立入口共享。
 真实重启、socket 恢复及数据保全的实测见[验收记录](docs/windows-docker-recovery-validation.md)。
 
+## OvisOCR3
+
+Windows 运行 `.\ovisocr3-one-click.bat`，macOS 运行 `./macos-ovisocr3-one-click.command`。第三代替换原 OvisOCR2 默认模型，旧入口继续兼容。详见 [部署说明](OVISOCR3_DEPLOY.md)。
+
 ## 选择部署方式
 
 Unlimited-OCR-2 提供独立的 Windows/NVIDIA 命令，自动检查硬件并选择后端、上下文与每批页数：
@@ -102,7 +106,7 @@ NVIDIA 用户继续使用下面的 Docker 流程。
 .\windows-one-click.bat
 ```
 
-默认产品线和 WebUI 模型目录包含 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR-2`、`OvisOCR2`、`HPD-Parsing` 和 `NaviDC-OCR` 六个模型。脚本只拉取或构建选中模型的对应服务、WebUI 及两个隔离支持服务。Unlimited-OCR-2 已替换第一代并进入默认目录，支持 Transformers / SGLang 双后端；详见[部署说明](docs/unlimited-ocr.md)。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
+默认产品线和 WebUI 模型目录包含 `PaddleOCR-VL 1.6`、`PP-OCRv6`、`Unlimited-OCR-2`、`OvisOCR3`、`HPD-Parsing` 和 `NaviDC-OCR` 六个模型。脚本只拉取或构建选中模型的对应服务、WebUI 及两个隔离支持服务。Unlimited-OCR-2 已替换第一代并进入默认目录，支持 Transformers / SGLang 双后端；详见[部署说明](docs/unlimited-ocr.md)。随后由 `pandocr-controller` 只启动选择的模型，并通过 `/api/model-runtime` 等待它进入 ready。用户切换模型时，控制器先完整停止旧模型并确认显存释放，再启动新模型，保证任意时刻显存只驻留当前选择的一个逻辑模型。
 
 只做预检、不启动服务：
 
@@ -150,7 +154,7 @@ WebUI 会在模型启动前通过一个短生命周期的 `nvidia-smi` 容器读
 | --- | ---: | --- |
 | PaddleOCR-VL 1.6 | 11264 MiB（12 GB 级别） | `PANDOCR_VLLM_MIN_REQUIRED_MIB=6656`、`PANDOCR_VLLM_RESERVE_MIB=512`、并发 1 |
 | PP-OCRv6 | 4096 MiB | `PANDOCR_MAX_CONCURRENT_OCR=1` |
-| OvisOCR2 | 7680 MiB | `OVISOCR2_KV_CACHE_MEMORY_MB=256`、`OVISOCR2_MAX_TOKENS=4096` |
+| OvisOCR3 | 7680 MiB | `OVISOCR2_KV_CACHE_MEMORY_MB=256`、`OVISOCR2_MAX_TOKENS=4096` |
 | HPD-Parsing | 7680 MiB | `HPD_PARSING_GPU_MEMORY_TARGET_MIB=6144`、`HPD_PARSING_MAX_MODEL_LEN=8192`、`HPD_PARSING_MAX_TOKENS=4096` |
 | NaviDC-OCR | 7680 MiB | 默认 `NAVIDC_OCR_BACKEND=vllm-async-engine`；可设 `NAVIDC_OCR_MAX_TOKENS=2048`、`NAVIDC_OCR_MAX_RENDER_PIXELS=40000000` |
 
@@ -207,7 +211,7 @@ curl http://localhost:8081/health
 
 - PaddleOCR-VL: http://localhost:8081/health
 - PP-OCRv6: http://localhost:8082/health
-- OvisOCR2: http://localhost:8084/health
+- OvisOCR3: http://localhost:8084/health
 - HPD-Parsing: http://localhost:8085/health
 - NaviDC-OCR: http://localhost:8086/health
 

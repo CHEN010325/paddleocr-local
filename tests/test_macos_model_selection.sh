@@ -80,13 +80,13 @@ if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
   assert_selection ovis ovisocr2
 
   default_ovis_output="$(env -u OVISOCR2_BACKEND ./macos-one-click.command --model ovisocr2 --dry-run --no-open)"
-  [[ "$default_ovis_output" == *"OvisOCR2 backend: mlx"* ]]
+  [[ "$default_ovis_output" == *"OvisOCR3 backend: mlx"* ]]
 
   fallback_ovis_output="$(OVISOCR2_BACKEND=transformers ./macos-one-click.command --model ovisocr2 --dry-run --no-open)"
-  [[ "$fallback_ovis_output" == *"OvisOCR2 backend: transformers"* ]]
+  [[ "$fallback_ovis_output" == *"OvisOCR3 backend: transformers"* ]]
 
   if OVISOCR2_BACKEND=vllm ./macos-one-click.command --model ovisocr2 --dry-run --no-open >/dev/null 2>&1; then
-    echo "Unsupported macOS OvisOCR2 backend unexpectedly succeeded."
+    echo "Unsupported macOS OvisOCR3 backend unexpectedly succeeded."
     exit 1
   fi
 else

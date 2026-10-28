@@ -46,6 +46,11 @@ class Grid:
 
 
 class OvisRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        mode = patch.object(adapter, 'OUTPUT_FORMAT', 'markdown')
+        mode.start()
+        self.addCleanup(mode.stop)
+
     def tearDown(self):
         adapter.PARSER = None
         adapter.PARSER_ERROR = None
@@ -65,13 +70,13 @@ class OvisRuntimeTests(unittest.TestCase):
         sampling = MagicMock(return_value="params")
         module = SimpleNamespace(LLM=llm, SamplingParams=sampling)
         with patch.dict(sys.modules, {"vllm": module}):
-            parser = adapter.VllmOvisOCR2Parser("model")
+            parser = adapter.VllmOvisOCR3Parser("model")
         self.assertEqual(parser.parse([Image.new("RGB", (1, 1)), Image.new("RGB", (1, 1))]), ["parsed one", "parsed two"])
-        self.assertEqual(adapter.VllmOvisOCR2Parser.clean_truncated_repeats("short"), "short")
-        self.assertEqual(adapter.VllmOvisOCR2Parser.clean_truncated_repeats("abcdefghij", min_text_len=1, max_period=2, min_repeat_chars=99), "abcdefghij")
-        self.assertEqual(adapter.VllmOvisOCR2Parser.clean_restarted_document(" \n "), " \n ")
-        self.assertEqual(adapter.VllmOvisOCR2Parser.clean_restarted_document("tiny\none\ntwo\ntiny"), "tiny\none\ntwo\ntiny")
-        self.assertEqual(adapter.VllmOvisOCR2Parser.clean_restarted_document("Long first line\n\none\ntwo"), "Long first line\n\none\ntwo")
+        self.assertEqual(adapter.VllmOvisOCR3Parser.clean_truncated_repeats("short"), "short")
+        self.assertEqual(adapter.VllmOvisOCR3Parser.clean_truncated_repeats("abcdefghij", min_text_len=1, max_period=2, min_repeat_chars=99), "abcdefghij")
+        self.assertEqual(adapter.VllmOvisOCR3Parser.clean_restarted_document(" \n "), " \n ")
+        self.assertEqual(adapter.VllmOvisOCR3Parser.clean_restarted_document("tiny\none\ntwo\ntiny"), "tiny\none\ntwo\ntiny")
+        self.assertEqual(adapter.VllmOvisOCR3Parser.clean_restarted_document("Long first line\n\none\ntwo"), "Long first line\n\none\ntwo")
 
     def test_transformers_initialization_all_device_dtype_paths(self):
         class Model:
@@ -106,7 +111,7 @@ class OvisRuntimeTests(unittest.TestCase):
             with patch.dict(sys.modules, {"torch": torch, "transformers": transformers}), patch.object(
                 adapter, "TRANSFORMERS_DEVICE", requested_device
             ), patch.object(adapter, "TRANSFORMERS_DTYPE", dtype):
-                parser = adapter.TransformersOvisOCR2Parser("model")
+                parser = adapter.TransformersOvisOCR3Parser("model")
             self.assertEqual(parser.device, expected)
             self.assertTrue(model.evaluated)
 
@@ -136,7 +141,7 @@ class OvisRuntimeTests(unittest.TestCase):
                 self.true_result = criteria(Tensor(4 + adapter.RESTART_CHECK_INTERVAL), None)
                 return Tensor(9)
 
-        parser = object.__new__(adapter.TransformersOvisOCR2Parser)
+        parser = object.__new__(adapter.TransformersOvisOCR3Parser)
         parser.device = "cpu"
         parser.processor = processor
         parser.model = Model()
@@ -173,11 +178,11 @@ class OvisRuntimeTests(unittest.TestCase):
             sys.modules,
             {"mlx_vlm": mlx, "mlx_vlm.prompt_utils": prompt, "huggingface_hub": hub},
         ):
-            parser = adapter.MlxOvisOCR2Parser("model")
+            parser = adapter.MlxOvisOCR3Parser("model")
             self.assertEqual(parser.parse([Image.new("RGB", (4, 3))]), ["MLX result"])
 
     def test_create_parser_backend_dispatch(self):
-        for backend, name in (("vllm", "VllmOvisOCR2Parser"), ("transformers", "TransformersOvisOCR2Parser"), ("mlx", "MlxOvisOCR2Parser")):
+        for backend, name in (("vllm", "VllmOvisOCR3Parser"), ("transformers", "TransformersOvisOCR3Parser"), ("mlx", "MlxOvisOCR3Parser")):
             constructor = MagicMock(return_value=backend)
             with patch.object(adapter, "BACKEND", backend), patch.object(adapter, name, constructor):
                 self.assertEqual(adapter.create_parser(), backend)

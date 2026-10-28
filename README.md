@@ -35,7 +35,30 @@ OvisOCR2 已升级为 [OvisOCR3](https://huggingface.co/ATH-MaaS/OvisOCR3)，保
 .\ovisocr3-one-click.bat
 ```
 
-默认使用 vLLM，支持带版面框的结构化解析、表格、公式与图片裁剪；保留 Transformers 后端和 macOS MLX 入口。旧任务与模型缓存保留。详见 [部署说明](OVISOCR3_DEPLOY.md)。
+首次运行会检查 GPU、驱动和 Docker GPU 能力，构建环境、下载固定版本权重并打开 <http://localhost:8000/>。
+仅检查部署条件可运行 `.\ovisocr3-one-click.bat -DryRun`；已构建本地镜像时可加 `-SkipBuild -SkipPull`。
+共享启动器保留 Docker 已知 socket 故障自动恢复、单模型显存互斥和原有模型入口。旧任务与模型缓存保留。
+
+默认使用 vLLM，支持带版面框的结构化文档解析、表格、公式与图片裁剪，也可使用 Transformers 后端。
+当前工作台接入的是文档解析，其他 OCR、KIE、图像描述和跨页表格任务尚未提供独立界面。
+
+macOS Apple Silicon 独立入口（默认 MLX）：
+
+```bash
+./macos-ovisocr3-one-click.command
+```
+
+Windows / RTX 5070 Ti 16GB 已实测两种后端。以下是预热后的单次样本请求耗时，Office 转换不计入：
+
+| 样本 | vLLM | Transformers |
+| --- | ---: | ---: |
+| 单张图片 | 1.59 秒 | 19.19 秒 |
+| 双页 PDF | 4.03 秒 | 40.75 秒 |
+| 双页密集扫描 PDF | 11.33 秒 | 86.61 秒 |
+
+首次请求可能触发编译：验收中的首次 vLLM 请求耗时 56.52 秒，模型启动时间另计。
+这些是本机样本结果，不代表所有文档速度；macOS 尚未进行第三代模型的真机推理验证。
+详见 [部署说明](OVISOCR3_DEPLOY.md)和[实测记录与验证范围](docs/ovisocr3-validation.md)。
 
 ## 为什么用它
 

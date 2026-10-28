@@ -28,6 +28,46 @@ Use `-Backend transformers` for native inference. The 16GB defaults use one publ
 CUDA Graphs, and five-page batches. Existing launch commands for other models remain available.
 See [configuration and resource limits](docs/unlimited-ocr.md).
 
+## OvisOCR3 one-command deployment
+
+[OvisOCR3](https://huggingface.co/ATH-MaaS/OvisOCR3) replaces OvisOCR2 in the existing
+document workbench. With NVIDIA drivers and GPU-enabled Docker Desktop installed,
+run from the repository root:
+
+```powershell
+.\ovisocr3-one-click.bat
+```
+
+The first run checks GPU, driver, and Docker GPU support, builds the environment,
+downloads pinned weights, and opens <http://localhost:8000/>. Use `-DryRun` to check
+deployment prerequisites, or `-SkipBuild -SkipPull` when local images are already built.
+The shared launcher retains known Docker socket recovery, exclusive model switching,
+existing model entry points, saved tasks, and model caches.
+
+vLLM is the default NVIDIA backend; Transformers is also supported. Structured document
+parsing produces layout boxes, tables, formulas, and cropped image assets. Separate
+general-OCR, KIE, figure-captioning, and cross-page-table task interfaces are not included.
+
+Apple Silicon has a dedicated entry point, defaulting to MLX:
+
+```bash
+./macos-ovisocr3-one-click.command
+```
+
+Both NVIDIA backends were tested on Windows with an RTX 5070 Ti 16 GB. These are
+single sample requests after warmup; Office conversion is excluded from parse timings:
+
+| Input | vLLM | Transformers |
+| --- | ---: | ---: |
+| One image | 1.59 s | 19.19 s |
+| Two-page PDF | 4.03 s | 40.75 s |
+| Two-page dense scanned PDF | 11.33 s | 86.61 s |
+
+First inference may compile kernels: the first vLLM acceptance request took 56.52 s,
+excluding model startup. These local samples do not guarantee speed for other documents.
+The macOS scripts are checked, but OvisOCR3 inference has not been validated on Mac hardware.
+See [deployment instructions](OVISOCR3_DEPLOY.md) and [validation details](docs/ovisocr3-validation.md).
+
 ## Why it exists
 
 For a machine without NVIDIA, run `docker compose -f docker-compose.cpu.yml up -d --build --wait --wait-timeout 1200`
@@ -56,6 +96,7 @@ Footnotes and sidebar text are retained by default; explicit ignore switches are
 | Model | Best for | Suggested hardware | Notes |
 | --- | --- | --- | --- |
 | PaddleOCR-VL 1.6 | Complex layouts, tables, formulas | NVIDIA 12 GB+ | Main PaddleOCR document pipeline |
+| Unlimited-OCR-2 | Continuous multipage documents, layout and tables | NVIDIA 16 GB recommended | Transformers / SGLang backends, dedicated one-command deployment |
 | PP-OCRv6 | Text OCR and lower-memory systems | CPU / NVIDIA 4 GB+ | Independent CPU deployment; see [CPU setup](docs/cpu.md) |
 | OvisOCR3 | Document understanding, Apple Silicon | NVIDIA 8 GB+ / Apple Silicon | Uses MLX by default on macOS |
 | HPD-Parsing | High-quality document parsing | NVIDIA 8 GB+ | Official customized vLLM runtime |

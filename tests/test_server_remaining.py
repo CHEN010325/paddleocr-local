@@ -529,7 +529,8 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             self.server.build_ovisocr2_payload(self.server.OCRRequest(), "abc", 1),
-            {"file": "abc", "fileType": 1},
+            {"file": "abc", "fileType": 1, "task":"document_auto", "taskOptions":{},
+             "crossPageTables":True, "enhanceOnly":False, "pageResults":[]},
         )
         self.assertEqual(
             self.server.build_hpd_parsing_payload("abc", 1),

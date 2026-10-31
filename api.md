@@ -28,6 +28,15 @@ curl http://127.0.0.1:8000/api/model-runtime
 
 接口只调用已经启用并就绪的模型；部署和启动可通过 WebUI、CLI 或 `/api/model-runtime/deploy`、`/api/model-runtime/switch` 完成。仓库内的完整 OpenAPI 快照见 `webui-openapi.json`，运行服务后始终可从 `/api/openapi.json` 获取同一份契约。交互式 `/docs` 和 `/redoc` 默认关闭，仅在设置 `PANDOCR_ENABLE_API_DOCS=1` 后启用；`/api/models` 的 `apiDocsEnabled` 字段可用于确认当前开关状态。
 
+## OvisOCR3 自动文档解析
+
+`POST /api/parse` 选择 `modelId=ovisocr3`，或使用 `POST /api/ovisocr3`。
+不传 `task` 时自动识别页面结构、图表数据、图内文字和票据字段，并重建跨页表格。
+工作台不提供独立能力选择。长文档使用缓存逐页结果的文档级增强协议。
+
+`GET /api/ovisocr3/capabilities` 提供底层18个官方诊断工具；显式 `task` / `taskOptions`
+继续供开发接口使用。结果字段、分阶段协议及限制见[文档解析说明](OVISOCR3_CAPABILITIES.md)。
+
 ## PaddleOCR-VL 上游参数参考
 
 以下是服务化部署的 API 参考与多语言服务调用示例：

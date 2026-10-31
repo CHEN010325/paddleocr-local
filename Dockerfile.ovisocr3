@@ -32,9 +32,17 @@ RUN python3 -m venv /opt/venv && \
       Pillow==13.0.0 \
       pymupdf==1.27.2.2
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ovis-browsers
 WORKDIR /app
+COPY requirements-ovisocr3-render.txt /app/requirements-ovisocr3-render.txt
+RUN /opt/venv/bin/python -m pip install --no-cache-dir -r requirements-ovisocr3-render.txt && \
+    /opt/venv/bin/python -m playwright install --with-deps chromium && \
+    apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
 COPY ovisocr2_adapter.py /app/ovisocr2_adapter.py
 COPY ovisocr3_config.py /app/ovisocr3_config.py
+COPY ovisocr3_document.py /app/ovisocr3_document.py
+COPY ovisocr3_tasks.py ovisocr3_inference.py ovisocr3_crosspage.py ovisocr3_reference.py /app/
+COPY ovisocr3_assets /app/ovisocr3_assets
 COPY ovisocr3_prompts /app/ovisocr3_prompts
 
 ENTRYPOINT []

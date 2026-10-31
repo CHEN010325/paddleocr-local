@@ -1689,3 +1689,11 @@ svg {
         padding: 22px;
     }
 }
+/* Automatic document parsing status and source navigation. */
+.ovis-result-status[hidden] { display: none; }
+.ovis-hint { font-size: 11px; color: #667085; line-height: 1.6; }
+.ovis-document-mode .parsing-settings label:not(.setting-number) { display: none; }
+.ovis-result-status { padding: 8px 18px; border-bottom: 1px solid #e4e7ec; background: #f6f8fc; color: #475467; font-size: 12px; flex-shrink: 0; max-height: 150px; overflow-y: auto; }
+.ovis-result-status .secondary-button { margin: 4px 0 4px 10px; padding: 4px 8px; font-size: 11px; }
+.ovis-result-status p { margin: 5px 0; overflow-wrap: anywhere; }
+.ovis-spatial-result { display: block; text-align: left; max-width: 100%; overflow-wrap: anywhere; margin: 4px 0; border: 1px solid var(--line); border-radius: 4px; background: white; padding: 4px 8px; color: var(--brand); cursor: pointer; }

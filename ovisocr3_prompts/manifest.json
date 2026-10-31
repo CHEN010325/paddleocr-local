@@ -1,0 +1,29 @@
+{
+  "revision": "4833d5d2afa6e769ee933f024504d67ace80a24c",
+  "source": "https://huggingface.co/ATH-MaaS/OvisOCR3",
+  "license": "Apache-2.0",
+  "sha256": {
+    "ovisocr3_prompts/chart_parsing.txt": "bb933216bdad5a81a3eca59e770bdb7d4b936ab85f97a2af6de5dd0890371f38",
+    "ovisocr3_prompts/crosspage_table.txt": "b5f38187df651d83bb46b6756d1b9386d04120cb6b299cfd1e93f9e0dec564d1",
+    "ovisocr3_prompts/document_layout.txt": "89bcc73c7340ff9fd83673c1aee2354c2cc735c6eded0ce2aa4501f28b914361",
+    "ovisocr3_prompts/document_markdown.txt": "dbf31d5899a86047ce0cd4d0d12cdc5616df1bea5d9a600b823098442c32997c",
+    "ovisocr3_prompts/document_structured.txt": "1b6139ec72888e087c8af75f2e2dfb78b425e15ae1c1529940b96137613d1db1",
+    "ovisocr3_prompts/figure_captioning.txt": "944bb410dbe17aa1cbe65f6acb14585053473e8a988b120f98c95d97a7e844de",
+    "ovisocr3_prompts/formula_recognition.txt": "b07b4c70a7585ddc2b4db33a1fff19bcacb1faf57b6db8ae2ebdb1035eeeb5b4",
+    "ovisocr3_prompts/image_classification.txt": "b6136303c28ef0b486dc6c7e2c5aafa3cb7192a00ae5d3d4c4a71e546a828307",
+    "ovisocr3_prompts/kie_fields.txt": "14d6098b2c7a5d31a328676fd5706d1385228e3e6d4fc2f27cd0f4c8bb3ec6ad",
+    "ovisocr3_prompts/kie_open.txt": "76276d075a455aa795a58c128b6c1640d424accb1bd18d9d7b1ffd7edf760dad",
+    "ovisocr3_prompts/kie_schema.txt": "e4cef2aec8d0e0b4a91b1c2af46a7af5048279e70fe5b152d039cf9454c245e5",
+    "ovisocr3_prompts/plain_ocr.txt": "e037cf0013a757e19eae6d4d701f3b90848449fbebe44d1f8fa7d8ca4a5af9a7",
+    "ovisocr3_prompts/position_aware_vqa.txt": "33338234f4ce8ae14269302280f06a191c0526bc30eff9443c1e0acd5d8d3ac9",
+    "ovisocr3_prompts/reference_grounding.txt": "9e9304cbd800c997f612634811b43159bcb17bbec5bf93809c03cd716794662a",
+    "ovisocr3_prompts/region_ocr.txt": "0b7d7f40b2dffc744e7e93007bea8f8bc5039da65b92c37465a11159a7c88dfc",
+    "ovisocr3_prompts/text_translation.txt": "82d6fecdacebd20f864e43c4d5d024b4dba03801118a83b48c5943b1c8b38dd7",
+    "ovisocr3_prompts/visual_question_answering.txt": "910753f062284aeb81a4b02e7233ba838dc34b427e245801713381cd3e60c2d9",
+    "ovisocr3_prompts/word_spotting.txt": "7fb246da0a3b37529562e71e2fc685ac43fcf0266d22a443855fac70cc768a77",
+    "ovisocr3_reference.py": "e26f289b608e18b8efb701b98dd15ef752aa8108460711e6d50654de8935dfbf",
+    "ovisocr3_assets/mathjax.js": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
+  },
+  "upstreamReferenceSha256": "3c5d4ded915fee1e27c4b662b37f11f231f0b5fb9b8a12e60a3586a53272e2ad",
+  "referenceAdaptation": "Explicit UTF-8 text I/O on Windows; inference and reconstruction algorithm unchanged."
+}

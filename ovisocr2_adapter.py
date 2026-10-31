@@ -14,6 +14,10 @@ import fitz
 from fastapi import FastAPI, HTTPException, Request
 from PIL import Image
 from ovisocr3_config import resolve_model_settings, ovis_env
+from ovisocr3_tasks import (CATEGORIES, TASKS, DOCUMENT_TASKS, JSON_TASKS, PairRequest,
+                           task_prompt, validate_options, decode_result, caption_markdown,
+                           document_content, page_hash)
+from ovisocr3_inference import infer as dynamic_infer
 
 
 logging.basicConfig(level=ovis_env("LOG_LEVEL", "INFO"))
@@ -35,6 +39,7 @@ MAX_NUM_SEQS = int(ovis_env("MAX_NUM_SEQS", "1"))
 MAX_TOKENS = int(ovis_env("MAX_TOKENS", "16384"))
 PDF_DPI = int(ovis_env("PDF_DPI", "200"))
 MAX_PAGES = int(ovis_env("MAX_PAGES_PER_REQUEST", "50"))
+MAX_DOCUMENT_PAGES = int(ovis_env('MAX_DOCUMENT_PAGES', '400'))
 MIN_PIXELS = int(ovis_env("MIN_PIXELS", str(448 * 448)))
 MAX_PIXELS = int(ovis_env("MAX_PIXELS", str(2880 * 2880)))
 GDN_PREFILL_BACKEND = ovis_env("GDN_PREFILL_BACKEND", "triton")
@@ -65,6 +70,7 @@ class VllmOvisOCR3Parser:
             kv_cache_memory_bytes=KV_CACHE_MEMORY_MB * 1024 * 1024,
             max_model_len=MAX_MODEL_LEN,
             max_num_seqs=MAX_NUM_SEQS,
+            limit_mm_per_prompt={"image": 2},
             gdn_prefill_backend=GDN_PREFILL_BACKEND,
         )
         self.prompt = self.model.get_tokenizer().apply_chat_template(
@@ -164,9 +170,10 @@ class TransformersOvisOCR3Parser:
             device = TRANSFORMERS_DEVICE
 
         if TRANSFORMERS_DTYPE == "auto":
-            dtype = torch.float16 if device == "mps" else (
-                torch.bfloat16 if device == "cuda" else torch.float32
-            )
+            cuda_bf16 = (device == 'cuda'
+                         and getattr(torch.cuda, 'get_device_capability', lambda: (8, 0))()[0] >= 8
+                         and getattr(torch.cuda, 'is_bf16_supported', lambda: True)())
+            dtype = torch.bfloat16 if cuda_bf16 else (torch.float16 if device in {'cuda', 'mps'} else torch.float32)
         else:
             dtype = getattr(torch, TRANSFORMERS_DTYPE)
 
@@ -464,11 +471,6 @@ def crop_visual_regions(markdown: str, page: Image.Image, page_index: int) -> tu
     return BBOX_IMAGE_RE.sub(replace, markdown), images, blocks
 
 
-CATEGORIES = {'abstract','algorithm','aside_text','chart','content','display_formula','doc_title',
-              'figure_title','footer','footer_image','footnote','formula_number','header','header_image',
-              'image','inline_formula','number','paragraph_title','reference_content','seal','table',
-              'text','vertical_text','vision_footnote'}
-
 
 def structured_page(text: str) -> tuple[str, list[dict]]:
     try:
@@ -487,18 +489,17 @@ def structured_page(text: str) -> tuple[str, list[dict]]:
             or box[0] >= box[2] or box[1] >= box[3]
             or not isinstance(label, str) or label not in CATEGORIES or not isinstance(content, str)):
             raise HTTPException(status_code=502, detail='Invalid OvisOCR3 category, content or bounding box')
-        if label == 'display_formula': content = '$$\n' + content.strip('$ \n') + '\n$$'
-        elif label == 'inline_formula': content = '$' + content.strip('$ \n') + '$'
-        elif label in {'doc_title','paragraph_title'} and not content.lstrip().startswith('#'):
-            content = ('# ' if label == 'doc_title' else '## ') + content
+        content = document_content(label, content)
         blocks.append({'block_label':label,'block_bbox':box,'block_content':content})
         pieces.append(content)
     return '\n\n'.join(pieces), blocks
 
 
 def build_response(
-    markdowns: list[str], pages: list[Image.Image], file_type: int, *, page_offset: int = 0
+    markdowns: list[str], pages: list[Image.Image], file_type: int, *, page_offset: int = 0,
+    output_format: str | None = None
 ) -> dict[str, Any]:
+    output_format = output_format or OUTPUT_FORMAT
     all_images: dict[str, str] = {}
     if len(markdowns) != len(pages):
         raise HTTPException(status_code=502, detail='OvisOCR3 page result count does not match input')
@@ -507,7 +508,7 @@ def build_response(
     for index, (markdown, page) in enumerate(zip(markdowns, pages)):
         page_index = page_offset + index
         structured_blocks = None
-        if OUTPUT_FORMAT == 'structured':
+        if output_format == 'structured':
             markdown, structured_blocks = structured_page(markdown)
         rendered, images, blocks = crop_visual_regions(markdown, page, page_index)
         if structured_blocks is not None:
@@ -523,7 +524,7 @@ def build_response(
         results.append(
             {
                 "parser": "ovisocr3",
-                "metadata": {"model": MODEL_NAME, "modelRevision": MODEL_REVISION, "backend": BACKEND, "outputFormat": OUTPUT_FORMAT},
+                "metadata": {"model": MODEL_NAME, "modelRevision": MODEL_REVISION, "backend": BACKEND, "outputFormat": output_format},
                 "pageIndex": page_index,
                 "width": 1000,
                 "height": 1000,
@@ -556,9 +557,181 @@ async def health():
     return {"status": "ok", "model": MODEL_NAME, "backend": BACKEND, "modelLoaded": True}
 
 
+@app.get('/capabilities')
+async def capabilities():
+    return {'model': MODEL_NAME, 'tasks': list(TASKS.values()), 'maxPages': MAX_PAGES,
+            'maxDocumentPages': MAX_DOCUMENT_PAGES, 'crossPageTables': True, 'backends': ['vllm', 'transformers', 'mlx']}
+
+
+def infer_task(parser, images, prompt, *, max_tokens=None):
+    try:
+        return dynamic_infer(parser, BACKEND, images, prompt, max_tokens=MAX_TOKENS if max_tokens is None else min(MAX_TOKENS, max_tokens),
+                             min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS)
+    finally:
+        if BACKEND == 'transformers' and ovis_env('RELEASE_CUDA_CACHE', '0').lower() in {'1', 'true'}:
+            import torch
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except RuntimeError:
+                    logger.warning('Could not release inactive CUDA cache after inference', exc_info=True)
+
+
+def build_task_response(task, options, raws, pages, file_type):
+    outputs = [decode_result(task, raw, options) for raw in raws]
+    if task in {'document_structured', 'document_markdown', 'figure_captioning'}:
+        projected = raws
+        if task == 'figure_captioning':
+            projected = []
+            for value in outputs:
+                blocks = []
+                for block in value:
+                    content = caption_markdown(block['content'])
+                    if block['category'] in {'image', 'chart', 'header_image', 'footer_image'}:
+                        box = '_'.join(str(n) for n in block['bbox'])
+                        content = f'<img src="images/bbox_{box}.jpg" />\n\n' + content
+                    blocks.append(dict(block, content=content))
+                projected.append(json.dumps(blocks, ensure_ascii=False))
+        response = build_response(projected, pages, file_type,
+                                  output_format='markdown' if task == 'document_markdown' else 'structured')
+    else:
+        results, texts = [], []
+        for index, value in enumerate(outputs):
+            blocks = []
+            if task in {'document_layout', 'word_spotting', 'reference_grounding'}:
+                blocks = [{'block_bbox': item['bbox'], 'block_label': item.get('category', 'text'),
+                           'block_content': item.get('text', item.get('reference', ''))} for item in value]
+            elif task == 'position_aware_vqa':
+                box = [int(n) for n in re.findall(r'\d+', value['bbox'])]
+                blocks = [{'block_bbox': box, 'block_label': 'text', 'block_content': value['answer']}]
+            text = '```json\n' + json.dumps(value, ensure_ascii=False, indent=2) + '\n```' if task in JSON_TASKS else str(value)
+            texts.append(text)
+            results.append({'parser': 'ovisocr3', 'pageIndex': index, 'width': 1000, 'height': 1000,
+                            'parsing_res_list': blocks, 'markdown': {'text': text, 'images': {}}})
+        response = {'markdown': '\n\n---\n\n'.join(texts), 'images': {}, 'layoutParsingResults': results,
+                    'model': MODEL_NAME, 'fileType': file_type}
+    for index, result in enumerate(response['layoutParsingResults']):
+        result.update(task=task, taskResult=outputs[index], rawOutput=raws[index], sourceHash=page_hash(pages[index]),
+                      searchableText=task in {'document_structured', 'document_markdown', 'word_spotting'})
+    response.update(task=task, taskResults=outputs, rawOutputs=raws)
+    return response
+
+
+async def run_task_request(request, file_bytes, file_type):
+    content_type = request.headers.get('content-type', '')
+    payload = dict(await request.form()) if 'multipart/form-data' in content_type else await request.json()
+    task = payload.get('task') or ('document_' + OUTPUT_FORMAT)
+    options = payload.get('taskOptions', {})
+    if isinstance(options, str):
+        try:
+            options = json.loads(options)
+        except ValueError as exc:
+            raise HTTPException(422, 'taskOptions must be JSON') from exc
+    options = validate_options(task, options)
+    enhance_only = str(payload.get('enhanceOnly', 'false')).lower() in {'1', 'true'}
+    cross_page = task == 'crosspage_table' or str(payload.get('crossPageTables', 'true' if task == 'document_auto' else 'false')).lower() in {'1', 'true'}
+    stage1_task = 'figure_captioning' if task == 'document_auto' else ('document_structured' if task == 'crosspage_table' else task)
+    if (cross_page or enhance_only) and stage1_task not in DOCUMENT_TASKS:
+        raise HTTPException(422, 'Cross-page tables require a document parsing task')
+    if enhance_only:
+        from ovisocr3_crosspage import PDFPages, enhance_document
+        cached = payload.get('pageResults', [])
+        if isinstance(cached, str):
+            try:
+                cached = json.loads(cached)
+            except ValueError as exc:
+                raise HTTPException(422, 'pageResults must be JSON') from exc
+        if not file_bytes.startswith(b'%PDF-'):
+            raise HTTPException(422, 'Document enhancement requires the complete original PDF')
+        pages = PDFPages(file_bytes, cached, stage1_task, dpi=PDF_DPI, max_pages=MAX_DOCUMENT_PAGES)
+        parser = await get_parser()
+        async with INFERENCE_LOCK:
+            enhanced = await asyncio.to_thread(enhance_document, pages, [record['rawOutput'] for record in cached],
+                                              stage1_task, lambda images, prompt: infer_task(parser, images, prompt))
+        markdown = enhanced.pop('markdown')
+        if task == 'document_auto':
+            from ovisocr3_document import append_document_supplements
+            markdown = append_document_supplements(markdown, cached)
+        return {'task': task, 'model': MODEL_NAME, 'fileType': 0, 'layoutParsingResults': [],
+                'markdown': markdown, 'images': enhanced.pop('images'), 'enhancement': enhanced}
+    pages, resolved_type = prepare_images(file_bytes, file_type)
+    if not pages:
+        raise HTTPException(400, 'No source pages')
+    try:
+        prompt = task_prompt(stage1_task, options)
+        parser = await get_parser()
+        raws = []
+        document_extras = []
+        for page in pages:
+            async with INFERENCE_LOCK:
+                if task == 'document_auto':
+                    from ovisocr3_document import parse_document_page
+                    raw, extras, source_blocks = await asyncio.to_thread(
+                        parse_document_page, page, lambda images, prompt: infer_task(parser, images, prompt),
+                        refine=lambda images, prompt: infer_task(parser, images, prompt,
+                            max_tokens=max(256, int(ovis_env('DOCUMENT_TOOL_MAX_TOKENS', '2048')))))
+                    raws.append(raw)
+                    document_extras.append((extras, source_blocks))
+                else:
+                    raws.append(await asyncio.to_thread(infer_task, parser, [page], prompt))
+        response = build_task_response(stage1_task, options, raws, pages, resolved_type)
+        if task == 'document_auto':
+            for result, (extras, source_blocks) in zip(response['layoutParsingResults'], document_extras):
+                from ovisocr3_document import document_supplement
+                result.update(documentExtras=extras, sourceTextBlocks=source_blocks, searchableText=True)
+                supplement = document_supplement(extras)
+                if supplement:
+                    result['markdown']['text'] += '\n\n' + supplement
+        if cross_page and len(pages) > 1:
+            from ovisocr3_crosspage import enhance_document
+            parser = await get_parser()
+            async with INFERENCE_LOCK:
+                enhanced = await asyncio.to_thread(enhance_document, pages, raws, stage1_task,
+                                                  lambda images, prompt: infer_task(parser, images, prompt))
+            response['originalMarkdown'] = response['markdown']
+            response['markdown'] = enhanced.pop('markdown')
+            response['images'].update(enhanced.pop('images'))
+            response['enhancement'] = enhanced
+        if task == 'document_auto':
+            from ovisocr3_document import append_document_supplements
+            response['markdown'] = append_document_supplements(response['markdown'], response['layoutParsingResults'])
+            if 'originalMarkdown' in response:
+                response['originalMarkdown'] = append_document_supplements(response['originalMarkdown'], response['layoutParsingResults'])
+        response['task'] = task
+        return response
+    finally:
+        for page in pages:
+            page.close()
+
+
+@app.post('/crosspage')
+async def crosspage_pair(payload: PairRequest):
+    from ovisocr3_reference import page_markdown
+    if sum(map(len, payload.images)) > 70 * 1024 * 1024 or any(not md.strip() or len(md) > 400000 for md in payload.markdowns):
+        raise HTTPException(422, 'Pair input exceeds limits or has empty Markdown')
+    images = []
+    try:
+        for encoded in payload.images:
+            page, _ = prepare_images(decode_file_payload(encoded), 1)
+            images.extend(page)
+        context = '\n\n'.join(f'<INPUT_PAGE index="{n}">\n{page_markdown(md, n)}\n</INPUT_PAGE>'
+                              for n, md in enumerate(payload.markdowns, 1))
+        prompt = task_prompt('crosspage_table') + '\n\nInput Markdown:\n\n' + context
+        parser = await get_parser()
+        async with INFERENCE_LOCK:
+            raw = await asyncio.to_thread(infer_task, parser, images, prompt)
+        return {'task':'crosspage_table', 'taskResult':decode_result('crosspage_table', raw), 'rawOutput':raw}
+    finally:
+        for image in images:
+            image.close()
+
+
 @app.post("/ocr")
 async def ocr(request: Request):
     file_bytes, file_type = await read_input(request)
+    payload = dict(await request.form()) if 'multipart/form-data' in request.headers.get('content-type', '') else await request.json()
+    if any(key in payload for key in ('task', 'enhanceOnly', 'crossPageTables')):
+        return await run_task_request(request, file_bytes, file_type)
     resolved_type = file_type if file_type is not None else (0 if file_bytes.startswith(b"%PDF-") else 1)
     if resolved_type != 0:
         pages, resolved_type = prepare_images(file_bytes, resolved_type)

@@ -12,7 +12,8 @@ Windows with NVIDIA and Docker Desktop:
 .\ovisocr3-one-click.bat
 ```
 
-For existing local images use `-SkipBuild -SkipPull`. The shared launcher retains
+After upgrading to the full task API, rebuild the model image once. For an already
+updated local image use `-SkipBuild -SkipPull`. The shared launcher retains
 Docker socket recovery, GPU checks, and exclusive model switching.
 The standard `windows-one-click.bat -Model ovisocr3` selection also works.
 Linux uses the existing managed deployment with the `ovisocr2` Compose service/profile.
@@ -36,23 +37,32 @@ alias; `/api/ovisocr3` is the current public route. Explicit external engine IDs
 Known second-generation repo/revision defaults are upgraded on load, without rewriting old tasks.
 `OVISOCR3_MODEL_NAME` / `OVISOCR3_MODEL_REVISION` take precedence over legacy settings.
 
-The isolated image is `pandocr-ovisocr3:latest`. Default caches use `model_cache_ovisocr3/`,
+Modern NVIDIA hardware uses `pandocr-ovisocr3:latest`. Volta uses the distinct
+`pandocr-ovisocr3-transformers-cu126:latest` image, built with
+`Dockerfile.ovisocr3-transformers` (PyTorch 2.7.0 CUDA 12.6, Transformers 5.14.1, FP16/SDPA).
+The Windows launcher selects this compatible profile automatically; pixel budget is
+1,048,576 and idle CUDA caches are released between calls. Default caches use `model_cache_ovisocr3/`,
 `model_cache_ovisocr3_vllm/`, or `model_cache_ovisocr3_macos/`.
 Existing OvisOCR2 weights and tasks are preserved. The optional private runtime environment
 `tmp/pandocr-runtime.env` is still prepared through `prepare-runtime-env`; keep it private.
 
 ## Output and resources
 
-The default is official structured document parsing: JSON bbox/category/content records
-are converted to the workbench's Markdown, normalized 0..1000 layout blocks, and image crops.
-Use `OVISOCR3_OUTPUT_FORMAT=markdown` for the official Markdown prompt and the existing
-Markdown cleanup behavior. Invalid JSON, missing pages, and truncated output fail explicitly.
-HTML is rendered through the workbench's existing sanitizer.
+The workbench and default API use `document_auto`: page structure and figure descriptions,
+content-driven chart/label/field extraction, then document-wide cross-page tables.
+There are no task selectors in the workbench. Original source blocks and outputs remain
+available; searchable PDF text excludes generated descriptions. Invalid JSON and
+truncated primary output fail explicitly; optional refinement failures retain the base result.
 
-The NVIDIA backend uses official vLLM 0.22.1 CUDA 12.9 wheels, a 512 MiB KV budget,
+The modern NVIDIA vLLM backend uses official vLLM 0.22.1 CUDA 12.9 wheels, a 512 MiB KV budget,
 32768 context, one concurrent sequence, and 16384 output tokens. These defaults are
 bounded deployment settings, not a claim about the model's maximum context length.
 Mac vision defaults remain conservative; output budget is also 16384.
 
-This workbench exposes document parsing. The model's additional OCR/KIE/figure-caption/
-cross-page table task prompts are not separate UI features in this replacement.
+All 18 official tools remain available through diagnostic API parameters. The workbench
+selects useful tools internally for document parsing. See the
+[automatic workflow and API contracts](OVISOCR3_CAPABILITIES.md).
+Full-document enhancement streams original pages, crosses UI batch boundaries and
+preserves raw page outputs. Its default 400-page limit is separate from the default
+50-page stage-one request limit. Three-page reconstruction requires local Chromium;
+the updated Docker and Mac installers include the renderer dependencies and browser.

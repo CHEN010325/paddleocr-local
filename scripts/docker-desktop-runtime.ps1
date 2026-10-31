@@ -83,9 +83,13 @@ function Test-FreshDockerTelemetrySocketFailure {
     foreach ($line in (Get-DockerDesktopBackendLogTail)) {
         if ($line -notmatch '^\[([^\]]+)\]') { continue }
         $stamp = [DateTimeOffset]::MinValue
-        if (-not [DateTimeOffset]::TryParse($Matches[1], [ref]$stamp) -or $stamp -lt $Since) { continue }
-        if ($line -match 'running OTel manager' -and $line -match 'removing stale socket' -and
+        # Go logs nanoseconds; .NET Framework parses at most seven fractional digits.
+        $timestamp = [regex]::Replace($Matches[1], '(\.\d{7})\d+(?=Z|[+-]\d{2}:\d{2}$)', '$1')
+        if (-not [DateTimeOffset]::TryParse($timestamp, [ref]$stamp) -or $stamp -lt $Since) { continue }
+        if ($line -match 'OTel manager' -and $line -match 'removing stale socket' -and
             $line -match '(?<![A-Za-z0-9_.])userAnalyticsOtlpHttp\.sock(?:[\\"\s:]|$)') { return $true }
+        if ($line -match 'initializing Inference manager' -and $line -match 'remove ' -and
+            $line -match '(?<![A-Za-z0-9_.])dockerInference(?:[\\"\s:]|$)') { return $true }
     }
     return $false
 }
@@ -122,11 +126,12 @@ function Invoke-DockerSocketWsl {
 }
 
 function Remove-DockerTelemetrySocket {
+    param([ValidateSet('userAnalyticsOtlpHttp.sock','dockerInference')][string]$SocketName = 'userAnalyticsOtlpHttp.sock')
     # No caller-supplied path, shell interpolation, directory deletion or recursion.
     $localRoot = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
     if ($localRoot -notmatch '^([a-zA-Z]):[\\/]') { throw 'Unsupported LOCALAPPDATA path; no socket cleanup attempted.' }
     $drive = $Matches[1].ToLowerInvariant()
-    $target = Join-Path $localRoot 'Docker\run\userAnalyticsOtlpHttp.sock'
+    $target = Join-Path $localRoot ('Docker\run\' + $SocketName)
     $item = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
     if ($null -eq $item) { return }
     if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
@@ -148,9 +153,10 @@ function Remove-DockerTelemetrySocket {
 function Repair-DockerTelemetrySocket {
     if (Test-DockerEngineReady) { return }
     Assert-LocalDockerDesktopContext
-    Write-Host '[WARN] Current Docker startup failed on userAnalyticsOtlpHttp.sock; repairing this socket once.'
+    Write-Host '[WARN] Docker startup failed on a known stale communication socket; repairing the two bounded startup endpoints once.'
     Stop-LocalDockerDesktopProcesses
     Remove-DockerTelemetrySocket
+    Remove-DockerTelemetrySocket -SocketName 'dockerInference'
 }
 
 function Ensure-DockerDesktopReady {

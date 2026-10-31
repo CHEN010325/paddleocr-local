@@ -39,8 +39,8 @@ OvisOCR2 已升级为 [OvisOCR3](https://huggingface.co/ATH-MaaS/OvisOCR3)，保
 仅检查部署条件可运行 `.\ovisocr3-one-click.bat -DryRun`；已构建本地镜像时可加 `-SkipBuild -SkipPull`。
 共享启动器保留 Docker 已知 socket 故障自动恢复、单模型显存互斥和原有模型入口。旧任务与模型缓存保留。
 
-默认使用 vLLM，支持带版面框的结构化文档解析、表格、公式与图片裁剪，也可使用 Transformers 后端。
-当前工作台接入的是文档解析，其他 OCR、KIE、图像描述和跨页表格任务尚未提供独立界面。
+现代 NVIDIA 显卡默认使用 vLLM；TITAN V 等旧架构自动选择 CUDA 12.6 / Transformers FP16 兼容镜像。
+工作台统一为自动文档解析：上传文件后识别正文、版面、公式、表格与图像，按内容补充图表数据、图内文字和票据键值，并自动重建跨页表格。无需选择任务或填写能力参数。原始结果与来源坐标保留。详见[文档解析流程与验证范围](OVISOCR3_CAPABILITIES.md)。升级后需要重建模型镜像。
 
 macOS Apple Silicon 独立入口（默认 MLX）：
 

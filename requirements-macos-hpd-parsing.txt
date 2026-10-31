@@ -7,7 +7,7 @@ huggingface-hub>=0.36.0
 httpx==0.28.1
 Pillow==13.0.0
 pymupdf==1.27.2.2
-pypdf==6.21.3
+pypdf==6.21.4
 fastapi==0.140.0
 uvicorn==0.51.0
 python-multipart==0.0.32

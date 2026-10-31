@@ -218,7 +218,7 @@ ovisocr2_env_ready() {
 import importlib.util
 import sys
 
-required = ["accelerate", "fastapi", "fitz", "mlx_vlm", "multipart", "PIL", "torch", "transformers", "uvicorn"]
+required = ["accelerate", "fastapi", "fitz", "mlx_vlm", "multipart", "PIL", "torch", "transformers", "uvicorn", "playwright", "bs4", "markdown_it"]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 sys.exit(1 if missing or sys.version_info[:2] not in {(3, 12), (3, 13)} else 0)
 PY

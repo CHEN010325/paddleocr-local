@@ -198,7 +198,7 @@ def test_ovis_pdf_pages_are_processed_incrementally():
     with patch.object(ovis, "read_input", AsyncMock(return_value=(pdf, 0))), patch.object(
         ovis, "get_parser", AsyncMock(return_value=parser)
     ):
-        result = run(ovis.ocr(object()))
+        result = run(ovis.ocr(SimpleNamespace(headers={}, json=AsyncMock(return_value={}))))
     assert [item["pageIndex"] for item in result["layoutParsingResults"]] == [0, 1]
     assert result["markdown"] == "page text\n\n---\n\npage text"
 

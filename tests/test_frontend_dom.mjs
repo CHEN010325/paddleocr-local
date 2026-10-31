@@ -308,7 +308,131 @@ test('full DOM boot renders models, tasks, language, tabs, and controls', async 
     dom.window.close();
 });
 
+test('enhanced cross-page crops keep page provenance when bounding boxes match', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`window.crossCrops=prepareBatchResult({markdown:'<img src="page_1/images/bbox_1_2_300_400.jpg"/><img src="page_2/images/bbox_1_2_300_400.jpg"/>',images:{'page_1/images/bbox_1_2_300_400.jpg':'RED','page_2/images/bbox_1_2_300_400.jpg':'BLUE'}},'enhanced')`);
+    assert.equal(Object.keys(window.crossCrops.images).length,2);
+    assert.ok(window.crossCrops.markdown.includes('page_1_'));
+    assert.ok(window.crossCrops.markdown.includes('page_2_'));
+    dom.window.close();
+});
+
+test('Ovis document parsing has one automatic workflow without task-specific controls', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    assert.equal(window.document.getElementById('ovis-task'),null);
+    assert.equal(window.document.getElementById('ovis-task-panel'),null);
+    window.eval("selectedModelId='ovisocr2';updateActiveModelDisplay()");
+    assert.equal(window.document.getElementById('ovis-document-hint').hidden,false);
+    const snapshot=window.eval('currentOvisTaskOptions()');
+    assert.equal(snapshot.task,'document_auto');
+    assert.equal(snapshot.crossPageTables,true);
+    assert.deepEqual(Object.keys(snapshot.taskOptions),[]);
+    window.eval("selectedModelId='paddleocr-vl-1.6';updateActiveModelDisplay()");
+    assert.equal(window.document.getElementById('ovis-document-hint').hidden,true);
+    dom.window.close();
+});
+
+test('Ovis enhancement uses complete source across batch boundaries and preserves originals', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      window.enhanceTask={id:'doc',name:'doc.pdf',sourceKind:'pdf',pageCount:3,modelId:'ovisocr2',modelEndpoint:'/api/ovisocr3',
+        ovisOptions:{task:'document_structured',taskOptions:{},crossPageTables:true},markdown:'original',images:{},
+        batches:[{id:'a',status:'completed'},{id:'b',status:'completed'},{id:'c',status:'completed'}],
+        ocrResults:[0,1,2].map(i=>({sourcePage:i+1,task:'document_structured',sourceHash:'h'+i,rawOutput:'[]'}))};
+      getTaskSourceBytes=async()=>new Uint8Array([1,2]);
+      saveTask=async()=>{};refreshTaskUi=()=>{};
+      apiFetch=async(url,options)=>{window.enhanceFields=Object.fromEntries(options.body.entries());return new Response(JSON.stringify({markdown:'merged',images:{},enhancement:{status:'complete',crossPageTables:[{source_pages:[1,2,3]}]}}),{status:200})};
+    `);
+    await window.eval('enhanceOvisDocument(window.enhanceTask)');
+    assert.equal(JSON.parse(window.enhanceFields.pageResults).length,3);
+    assert.equal(window.enhanceFields.enhanceOnly,'true');
+    assert.equal(window.enhanceTask.markdown,'merged');
+    assert.equal(window.enhanceTask.ovisResult.originalMarkdown,'original');
+    assert.equal(window.enhanceTask.ocrResults.length,3);
+    assert.equal(window.eval('shouldRenderOfficialLayout(window.enhanceTask)'),false);
+    dom.window.close();
+});
 // End of DOM regression tests.
+test('Ovis failed enhancement resumes cached pages and persists original results and diagnostics', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      window.failedOvis={id:'failed-enhance',name:'doc.pdf',modelId:'ovisocr2',sourceKind:'pdf',pageCount:2,status:'error',
+        ovisOptions:{task:'crosspage_table',taskOptions:{},crossPageTables:true},markdown:'ORIGINAL',images:{},
+        batches:[{id:'a',status:'completed'},{id:'b',status:'completed'}],
+        ocrResults:[0,1].map(i=>({sourcePage:i+1,task:'document_structured',sourceHash:'h'+i,rawOutput:'[]'}))};
+      saveTask=async()=>{};refreshTaskUi=()=>{};getTaskSourceBytes=async()=>new Uint8Array([1]);
+      apiFetch=async()=>new Response('fixture failure',{status:502});
+    `);
+    await assert.rejects(window.eval('enhanceOvisDocument(window.failedOvis)'),/fixture failure/);
+    assert.equal(window.failedOvis.ovisEnhancementStatus,'partial');
+    assert.equal(window.failedOvis.ovisResult.originalMarkdown,'ORIGINAL');
+    assert.equal(window.failedOvis.ovisResult.enhancement.warnings.length,1);
+    assert.equal(window.eval('shouldResumeTask(window.failedOvis)'),true);
+    window.eval('renderOvisResultStatus(window.failedOvis)');
+    assert.match(window.document.getElementById('ovis-result-status').textContent,/部分完成/);
+    const snapshot=window.eval('taskForPersistence(window.failedOvis,{includeResults:false})');
+    assert.equal(snapshot.ovisResult,undefined);
+    assert.equal(snapshot.ovisEnhancementStatus,'partial');
+    window.eval(`apiFetch=async()=>new Response(JSON.stringify({markdown:'MERGED',images:{},enhancement:{status:'complete',crossPageTables:[]}}),{status:200})`);
+    await window.eval('enhanceOvisDocument(window.failedOvis)');
+    assert.equal(window.failedOvis.markdown,'MERGED');
+    assert.equal(window.failedOvis.ovisResult.originalMarkdown,'ORIGINAL');
+    assert.equal(window.failedOvis.ovisEnhancementStatus,'complete');
+    window.eval('renderOvisResultStatus(window.failedOvis)');
+    window.document.querySelector('#ovis-result-status button').click();
+    assert.equal(window.eval('visibleTaskMarkdown(window.failedOvis)'),'ORIGINAL');
+    dom.window.close();
+});
+
+test('retrying the first failed Ovis batch preserves frozen options and benchmark settings', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      selectedModelId='ovisocr2';
+      window.firstFailed={id:'first-failed',name:'image.png',sourceKind:'image',pageCount:1,status:'error',modelId:'ovisocr2',
+        ovisOptions:{task:'kie_fields',taskOptions:{fields:['total']},crossPageTables:false},
+        benchmark:{parsingSettings:{useChartRecognition:false}},images:{},ocrResults:[],
+        batches:[{id:'first',fileType:1,status:'error'}]};
+      els.chartRecognitionSwitch.checked=true;
+      ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+      callOCR=async(batch,task)=>{window.retriedOptions=JSON.parse(JSON.stringify(task.ovisOptions));return {markdown:'done',images:{},layoutParsingResults:[]}};
+      prepareFailedBatchesForRetry(window.firstFailed);
+    `);
+    await window.eval('processTask(window.firstFailed,{confirmCompleted:false})');
+    assert.deepEqual(Array.from(window.retriedOptions.taskOptions.fields),['total']);
+    assert.equal(window.firstFailed.benchmark.parsingSettings.useChartRecognition,false);
+    dom.window.close();
+});
+
+test('changing a failed task to Ovis starts with the newly selected task parameters', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      selectedModelId='ovisocr2';
+      window.changedModelTask={id:'changed-model',name:'image.png',sourceKind:'image',pageCount:1,status:'error',modelId:'paddleocr-vl-1.6',
+        benchmark:{parsingSettings:{useChartRecognition:false}},images:{},ocrResults:[],batches:[{id:'first',fileType:1,status:'error'}]};
+      ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+      callOCR=async(batch,task)=>{window.newModelOptions=task.ovisOptions;return {markdown:'done',images:{},layoutParsingResults:[]}};
+    `);
+    await window.eval('processTask(window.changedModelTask,{confirmCompleted:true})');
+    assert.equal(window.newModelOptions?.task,'document_auto');
+    assert.deepEqual(Object.keys(window.newModelOptions.taskOptions),[]);
+    dom.window.close();
+});
+
+test('automatic document results expose source positions without task parameters', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      showSourceHighlight=(block)=>{window.highlight=block};scrollSourceToLayoutBlock=()=>{};
+      renderOvisResultStatus({modelId:'ovisocr2',ovisOptions:{task:'document_auto'},ocrResults:[
+        {sourcePage:2,parsing_res_list:[{block_bbox:[1,2,300,400],block_label:'table',block_content:''}]}
+      ]});
+    `);
+    window.document.querySelector('#ovis-result-status .ovis-spatial-result').click();
+    assert.equal(window.highlight.page,2);
+    assert.deepEqual(Array.from(window.highlight.bbox),[1,2,300,400]);
+    assert.equal(window.eval("reconcileTaskStatus({status:'processing',ovisOptions:{crossPageTables:true},ovisEnhancementStatus:'processing'}).status"),'pending');
+    dom.window.close();
+});
+
 test('restored single-model workbench does not expose model comparison UI', async () => {
     const { dom, window } = createBrowser();
     await boot(window);
@@ -2912,3 +3036,88 @@ test('manual Markdown edits bypass PP-OCR and official-layout renderers', async 
     dom.window.close();
 });
 // End of DOM regression tests.
+
+
+test('reparsing an enhanced Ovis document with another model removes stale Ovis views and exports', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      selectedModelId='paddleocr-vl-1.6';
+      window.previousOvis={id:'switch-away',name:'image.png',sourceKind:'image',pageCount:1,status:'completed',modelId:'ovisocr2',
+        ovisOptions:{task:'document_auto',taskOptions:{},crossPageTables:true},ovisEnhancementStatus:'complete',
+        ovisResult:{originalMarkdown:'OLD OVIS BODY',view:'original',enhancement:{status:'complete'}},
+        markdown:'OLD ENHANCED BODY',images:{},ocrResults:[],batches:[{id:'only',fileType:1,status:'completed'}]};
+      ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+      callOCR=async()=>({markdown:'NEW PADDLE BODY',images:{},layoutParsingResults:[{parser:'paddle',pageIndex:0}]});
+    `);
+    await window.eval('processTask(window.previousOvis,{confirmCompleted:true})');
+    assert.equal(window.previousOvis.modelId,'paddleocr-vl-1.6');
+    assert.equal(window.eval('visibleTaskMarkdown(window.previousOvis)'),'NEW PADDLE BODY');
+    assert.equal(window.previousOvis.ovisResult,undefined);
+    assert.equal(window.previousOvis.ovisOptions,undefined);
+    assert.equal(window.previousOvis.ovisEnhancementStatus,undefined);
+    assert.equal(window.eval('Array.isArray(toOfficialJson(window.previousOvis))'),true);
+    dom.window.close();
+});
+
+
+test('oversized Ovis documents remain blocked on retry before any inference', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      selectedModelId='ovisocr2';window.oversizedCalls=0;
+      window.oversized={id:'oversized',name:'large.pdf',sourceKind:'pdf',pageCount:401,status:'pending',modelId:'ovisocr2',
+        markdown:'',images:{},ocrResults:[],batches:[{id:'only',fileType:0,status:'pending'}]};
+      ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+      shouldRebuildPdfBatchPlan=()=>false;
+      callOCR=async()=>{window.oversizedCalls++;return {markdown:'wrongly parsed',images:{},layoutParsingResults:[]}};
+    `);
+    await window.eval('processTask(window.oversized,{confirmCompleted:true})');
+    assert.equal(window.oversizedCalls,0);
+    assert.match(window.oversized.error,/400/);
+    await window.eval('processTask(window.oversized,{confirmCompleted:false})');
+    assert.equal(window.oversizedCalls,0);
+    assert.match(window.oversized.error,/400/);
+    dom.window.close();
+});
+
+
+test('legacy failed Ovis tasks without page results adopt full-document automatic parsing', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      selectedModelId='ovisocr2';window.autoEnhanced=false;
+      window.legacyFailed={id:'legacy-first',name:'old.pdf',sourceKind:'pdf',pageCount:2,status:'error',modelId:'ovisocr2',
+        benchmark:{parsingSettings:{}},markdown:'',images:{},ocrResults:[],batches:[{id:'only',fileType:0,pageCount:2,status:'error'}]};
+      ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+      callOCR=async()=>({markdown:'NEW BODY',images:{},layoutParsingResults:[]});
+      enhanceOvisDocument=async task=>{window.autoEnhanced=true;task.ovisResult={enhancement:{status:'complete'}}};
+    `);
+    await window.eval('processTask(window.legacyFailed,{confirmCompleted:false})');
+    assert.equal(window.legacyFailed.ovisOptions?.task,'document_auto');
+    assert.equal(window.legacyFailed.ovisOptions.crossPageTables,true);
+    assert.equal(window.autoEnhanced,true);
+    dom.window.close();
+});
+
+test('legacy Ovis partial retries preserve completed pages and their document format', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    for (const format of ['structured','markdown']) {
+        window.legacyFormat=format;
+        window.eval(`
+          selectedModelId='ovisocr2';window.legacyCalls=0;window.legacyEnhanced=false;
+          window.legacyPartial={id:'legacy-partial',name:'old.pdf',sourceKind:'pdf',pageCount:2,status:'error',modelId:'ovisocr2',
+            benchmark:{parsingSettings:{}},markdown:'OLD PAGE',images:{},
+            ocrResults:[{pageIndex:0,sourcePage:1,metadata:{outputFormat:window.legacyFormat},markdown:{text:'OLD PAGE'}}],
+            batches:[{id:'first',fileType:0,pageCount:1,status:'completed',markdown:'OLD PAGE'},
+                     {id:'second',fileType:0,pageCount:1,status:'error',markdown:''}]};
+          ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
+          callOCR=async()=>{window.legacyCalls++;return {markdown:'NEW PAGE',images:{},layoutParsingResults:[]}};
+          enhanceOvisDocument=async()=>{window.legacyEnhanced=true};
+        `);
+        await window.eval('processTask(window.legacyPartial,{confirmCompleted:false})');
+        assert.equal(window.legacyPartial.ovisOptions?.task,'document_'+format);
+        assert.equal(window.legacyPartial.ovisOptions.crossPageTables,false);
+        assert.equal(window.legacyCalls,1);
+        assert.equal(window.legacyEnhanced,false);
+        assert.match(window.legacyPartial.markdown,/OLD PAGE[\s\S]*NEW PAGE/);
+    }
+    dom.window.close();
+});

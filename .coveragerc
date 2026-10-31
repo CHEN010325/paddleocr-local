@@ -1,0 +1,4 @@
+[run]
+# The pinned upstream reconstruction/renderer is third-party code. Our wrapper,
+# task validation, inference adapters and server remain subject to the quality gate.
+omit = */ovisocr3_reference.py

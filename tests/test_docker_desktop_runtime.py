@@ -65,6 +65,20 @@ Test-FreshDockerTelemetrySocketFailure -Since $since | ConvertTo-Json -Compress
     assert result is expected
 
 
+@pytest.mark.parametrize('message',[
+    'running OTel manager: removing stale socket: remove userAnalyticsOtlpHttp.sock: inaccessible',
+    'starting services: initializing Inference manager: listening on unix://dockerInference: remove dockerInference: inaccessible',
+])
+def test_real_nanosecond_logs_and_inference_socket_are_recognized(tmp_path,message):
+    result=run_ps(tmp_path,r"""
+$since=[DateTimeOffset]::UtcNow.AddSeconds(-10)
+$stamp=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffffff')+'00Z'
+function Get-DockerDesktopBackendLogTail { return "[$stamp]MESSAGE" }
+Test-FreshDockerTelemetrySocketFailure -Since $since | ConvertTo-Json -Compress
+""".replace('MESSAGE',message))
+    assert result is True
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows socket path")
 def test_cleanup_uses_only_the_fixed_socket_and_wsl_argv(tmp_path):
     result = run_ps(tmp_path, r"""

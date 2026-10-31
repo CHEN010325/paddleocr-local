@@ -1203,6 +1203,9 @@ function updateActiveModelDisplay(task = null) {
     els.statusText.title = modelRuntimeFailureDetail(selectedModel.id);
     els.activeModelName.textContent = modelShortName(resultModel);
     renderGpuPreflightPanel();
+    const ovisPanel = document.getElementById('ovis-document-hint');
+    if (ovisPanel) ovisPanel.hidden = selectedModel.id !== OVIS_OCR_MODEL_ID || selectedModel.managed === false;
+    els.sidebar?.classList.toggle('ovis-document-mode', selectedModel.id === OVIS_OCR_MODEL_ID && selectedModel.managed !== false);
 }
 
 function applySelectedModelToTask(task) {
@@ -1252,6 +1255,9 @@ async function loadTasks() {
 
 function reconcileTaskStatus(task) {
     if (task?.status !== 'processing') return task;
+    if (task.ovisOptions?.crossPageTables && task.ovisEnhancementStatus && task.ovisEnhancementStatus !== 'complete') {
+        return {...task, status:'pending', error:'上次文档解析或跨页增强中断，可继续处理。'};
+    }
 
     const batches = Array.isArray(task.batches) ? task.batches : [];
     const allBatchesCompleted = batches.length > 0 && batches.every((batch) => batch.status === 'completed');
@@ -1875,6 +1881,7 @@ function showResultView(view) {
 }
 
 function renderResultPane(task, { deferJson = false, preserveScroll = true } = {}) {
+    renderOvisResultStatus(task);
     if (!task) {
         resetResultRenderCache();
         resetResultScrollPositions();
@@ -2923,6 +2930,10 @@ async function processTask(task, { confirmCompleted = true } = {}) {
     const targetModel = resumeExistingResults
         ? getTaskModel(task)
         : ((confirmCompleted || !task.modelId) ? getSelectedModel() : getTaskModel(task));
+    const preserveAttemptSnapshot = resumeExistingResults || Boolean(
+        targetModel.id === task.modelId && (task.ovisOptions || task.benchmark)
+        && ['pending', 'error'].includes(task.status)
+    );
     processingTaskId = task.id;
     updateActionState(getActiveTask());
     try {
@@ -2932,11 +2943,36 @@ async function processTask(task, { confirmCompleted = true } = {}) {
 
         isProcessing = true;
         const benchmarkStartedAt = Date.now();
+        const frozenParsingSettings = preserveAttemptSnapshot ? task.benchmark?.parsingSettings : null;
         task.benchmark = {
             ...(task.benchmark || {}),
             ...createBenchmarkSnapshot(task, targetModel, benchmarkStartedAt)
         };
+        if (frozenParsingSettings) task.benchmark.parsingSettings = frozenParsingSettings;
         try {
+            if (targetModel.id === OVIS_OCR_MODEL_ID && targetModel.managed !== false
+                && (!preserveAttemptSnapshot || !task.ovisOptions)) {
+                // Old partial tasks lack raw outputs/source hashes for whole-document enhancement.
+                // Resume their original page format; a full reparse adopts automatic parsing.
+                const legacyPartial = resumeExistingResults && !task.ovisOptions;
+                task.ovisOptions = legacyPartial ? {
+                    task: (task.ocrResults || []).some(page => page.metadata?.outputFormat === 'markdown')
+                        ? 'document_markdown' : 'document_structured',
+                    taskOptions: {}, crossPageTables: false
+                } : currentOvisTaskOptions();
+                task.ovisEnhancementStatus = task.ovisOptions.crossPageTables && Number(task.pageCount || 1) > 1 ? 'pending' : 'complete';
+                delete task.ovisResult;
+            }
+            if (targetModel.id !== OVIS_OCR_MODEL_ID || targetModel.managed === false) {
+                delete task.ovisOptions;
+                delete task.ovisEnhancementStatus;
+                delete task.ovisResult;
+            } else if (task.ovisOptions?.crossPageTables) {
+                const maxPages = Number(targetModel.capabilities?.maxDocumentPages || 400);
+                if (Number(task.pageCount || 1) > maxPages) {
+                    throw new Error(`跨页表格重建最多支持 ${maxPages} 页。请拆分文档后解析。`);
+                }
+            }
             if (shouldRebuildPdfBatchPlan(task)) {
                 rebuildPdfBatchPlan(task);
             }
@@ -2999,6 +3035,9 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                 await saveTask(task);
                 refreshTaskUi(task);
             }
+            if (needsOvisDocumentEnhancement(task)) {
+                await enhanceOvisDocument(task, abortController.signal);
+            }
             task.status = 'completed';
         } catch (error) {
             console.error(error);
@@ -3047,7 +3086,7 @@ function shouldResumeTask(task) {
     if (Array.isArray(task?.batches)) {
         const completedBatchCount = task.batches.filter((batch) => batch.status === 'completed').length;
         const hasPendingBatch = task.batches.some((batch) => batch.status !== 'completed');
-        return completedBatchCount > 0 && hasPendingBatch;
+        return completedBatchCount > 0 && (hasPendingBatch || needsOvisDocumentEnhancement(task));
     }
 
     const completedPages = Number(task?.completedPages || 0);
@@ -3139,6 +3178,7 @@ function stripStreamStatusMarkdown(markdown) {
 }
 
 function visibleTaskMarkdown(task) {
+    if (task?.ovisResult?.view === 'original') return task.ovisResult.originalMarkdown || '';
     return stripStreamStatusMarkdown(task?.markdown || '');
 }
 
@@ -3241,6 +3281,13 @@ async function callOCR(batch, task, signal = activeOcrAbortController?.signal) {
     formData.append('showFormulaNumber', String(Boolean(parsingSettings.showFormulaNumber)));
     formData.append('markdownIgnoreLabels', JSON.stringify(ignoreLabels));
     formData.append('modelId', model.id);
+    if (model.id === OVIS_OCR_MODEL_ID && task.ovisOptions) {
+        const ovis = task.ovisOptions;
+        formData.append('task', ovis.task === 'crosspage_table' ? 'document_structured' : ovis.task);
+        formData.append('taskOptions', JSON.stringify(ovis.taskOptions));
+        // Stage two is document-wide; never reconstruct separately inside PDF batches.
+        formData.append('crossPageTables', 'false');
+    }
 
     if (model.id === 'unlimited-ocr' && model.managed !== false) {
         formData.append('backend', selectedUnlimitedOcrBackend);
@@ -3473,6 +3520,7 @@ function taskForPersistence(task, { includeResults = true } = {}) {
         delete persisted.markdown;
         delete persisted.images;
         delete persisted.ocrResults;
+        delete persisted.ovisResult;
         persisted._preserveResult = true;
     }
     persisted.batches = Array.isArray(task.batches)
@@ -3563,7 +3611,8 @@ function updateActionState(task) {
     const hasMarkdown = Boolean(visibleTaskMarkdown(task));
     if (els.docxExportBtn) els.docxExportBtn.disabled = !hasMarkdown;
     if (els.searchPdfExportBtn) {
-        els.searchPdfExportBtn.disabled = !Boolean(hasMarkdown && (task?.sourceUrl || task?.sourceDataUrl));
+        els.searchPdfExportBtn.disabled = !Boolean(hasMarkdown && (task?.sourceUrl || task?.sourceDataUrl))
+            || Boolean(isOvisOCR3Task(task) && task?.ocrResults?.some((page) => page.searchableText === false));
     }
     if (els.htmlExportBtn) els.htmlExportBtn.disabled = !hasMarkdown;
     if (els.csvExportBtn) {
@@ -3603,7 +3652,8 @@ function updateActionState(task) {
 }
 
 function countFailedBatches(task) {
-    return Array.isArray(task?.batches)
+    const enhancementFailed = task?.ovisResult?.enhancement?.status === 'partial';
+    return enhancementFailed ? 1 : Array.isArray(task?.batches)
         ? task.batches.filter((batch) => batch?.status === 'error').length
         : 0;
 }
@@ -3627,6 +3677,7 @@ function prepareFailedBatchesForRetry(task) {
 async function retryFailedBatches() {
     const task = getActiveTask();
     if (!task || historyMutationsLocked()) return false;
+    if (task.ovisResult?.enhancement?.status === 'partial') return processTask(task, { confirmCompleted: false });
     const count = prepareFailedBatchesForRetry(task);
     if (count === 0) return false;
     rebuildTaskMarkdownFromBatches(task);
@@ -3705,6 +3756,11 @@ async function downloadActiveTask() {
     }
 
     const markdown = normalizeOCRMarkdown(visibleTaskMarkdown(task));
+    const ovisMode = task.ovisOptions?.task;
+    if (isOvisOCR3Task(task) && ['plain_ocr','region_ocr','text_translation','formula_recognition'].includes(ovisMode)) {
+        downloadBlob(new Blob([markdown], { type:'text/plain;charset=utf-8' }), safeDownloadName(task.name, ovisMode === 'formula_recognition' ? 'tex' : 'txt'));
+        return;
+    }
     const imageEntries = Object.entries(task.images || {});
     if (imageEntries.length === 0) {
         downloadBlob(new Blob([markdown], { type: 'text/markdown' }), safeDownloadName(task.name, 'md'));
@@ -5217,6 +5273,8 @@ function prepareBatchResult(result, batchId, existingImagePathMap = {}) {
 }
 
 function safeImagePath(batchId, path) {
+    const pageCrop = /^page_(\d+)\/images\/(bbox_\d+_\d+_\d+_\d+\.jpg)$/.exec(String(path || ''));
+    if (pageCrop) return `ocr_images/${batchId}_page_${pageCrop[1]}_${pageCrop[2]}`;
     const filename = String(path || '').split('/').pop() || 'image';
     return `ocr_images/${batchId}_${filename}`;
 }
@@ -5278,6 +5336,7 @@ function normalizeOCRJsonResults(result) {
 }
 
 function toOfficialJson(task) {
+    if (task.ovisResult) return { pages: task.ocrResults || [], ...task.ovisResult };
     if (Array.isArray(task.ocrResults) && task.ocrResults.length > 0) {
         return task.ocrResults;
     }
@@ -5482,6 +5541,10 @@ function getConfiguredPdfBatchSize() {
 }
 
 function getPdfBatchSizeForModel(modelId = selectedModelId) {
+    const model = availableModels.find((item) => item.id === modelId);
+    if (modelId === OVIS_OCR_MODEL_ID && model?.managed !== false) {
+        return Math.min(Number(model?.capabilities?.maxPages || 50), getConfiguredPdfBatchSize());
+    }
     if (modelId === UNLIMITED_OCR_MODEL_ID) {
         return Math.min(UNLIMITED_OCR_MAX_PDF_BATCH_SIZE, getConfiguredPdfBatchSize());
     }
@@ -5521,6 +5584,111 @@ function formatPageLabel(startPage, endPage = startPage) {
 
 function safeDownloadName(name, ext) {
     return `${name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')}.${ext}`;
+}
+
+function currentOvisTaskOptions() {
+    return {task: 'document_auto', taskOptions: {}, crossPageTables: true};
+}
+
+function needsOvisDocumentEnhancement(task) {
+    return isOvisOCR3Task(task) && task?.ovisOptions?.crossPageTables
+        && Number(task.pageCount || 1) > 1 && task.ovisResult?.enhancement?.status !== 'complete';
+}
+
+async function enhanceOvisDocument(task, signal = activeOcrAbortController?.signal) {
+    const options = task.ovisOptions;
+    const originalMarkdown = task.ovisResult?.originalMarkdown ?? task.markdown;
+    task.ovisResult = {...(task.ovisResult || {}), originalMarkdown,
+        enhancement: {status:'processing', warnings:[]}};
+    task.ovisEnhancementStatus = 'processing';
+    await saveTask(task);
+    refreshTaskUi(task);
+    try {
+        const pageResults = [...task.ocrResults].sort((a,b) => a.sourcePage-b.sourcePage).map((page) => ({
+            pageIndex: Number(page.sourcePage)-1, task: page.task, sourceHash: page.sourceHash, rawOutput: page.rawOutput,
+            documentExtras: page.documentExtras
+        }));
+        const form = new FormData();
+        const bytes = await getTaskSourceBytes(task);
+        form.append('file', new Blob([bytes], {type:'application/pdf'}), task.name || 'document.pdf');
+        form.append('fileType','0');
+        form.append('task',options.task === 'crosspage_table' ? 'document_structured' : options.task);
+        form.append('taskOptions',JSON.stringify(options.taskOptions));
+        form.append('enhanceOnly','true');
+        form.append('pageResults',JSON.stringify(pageResults));
+        const response = await apiFetch(modelApiUrl(getTaskModel(task)),{method:'POST',body:form,signal});
+        if (!response.ok) throw new Error(await responseErrorText(response));
+        const result = await response.json();
+        if (!result.enhancement || typeof result.markdown !== 'string') throw new Error('跨页重建服务未返回完整结果，请更新模型服务');
+        const prepared = prepareBatchResult(result,`${task.id}_enhanced`);
+        task.markdown = prepared.markdown;
+        Object.assign(task.images, prepared.images);
+        task.ovisResult.enhancement = result.enhancement;
+        task.ovisEnhancementStatus = result.enhancement.status;
+        task.updatedAt = Date.now();
+        await saveTask(task);
+        if (result.enhancement.status !== 'complete') throw new Error('跨页表格重建部分完成，原始逐页结果已保留，可单独重试增强阶段');
+    } catch (error) {
+        task.ovisResult.enhancement = {...task.ovisResult.enhancement, status:'partial',
+            warnings:[...(task.ovisResult.enhancement.warnings || []), {message:error.message}]};
+        task.ovisEnhancementStatus = 'partial';
+        await saveTask(task);
+        throw error;
+    }
+}
+
+function renderOvisResultStatus(task) {
+    const panel = document.getElementById('ovis-result-status');
+    if (!panel) return;
+    panel.hidden = !isOvisOCR3Task(task) || !(task?.ovisOptions || task?.ovisResult);
+    panel.replaceChildren();
+    if (panel.hidden) return;
+    const text = document.createElement('span');
+    const enhancement = task.ovisResult?.enhancement;
+    text.textContent = '文档解析';
+    if (enhancement) {
+        const states = {processing:'正在重建跨页表格',complete:'跨页表格处理完成',partial:'跨页增强部分完成，原始内容已保留'};
+        text.textContent += ` · ${states[enhancement.status] || enhancement.status}`;
+        if (enhancement.status === 'complete') text.textContent += ` · ${enhancement.crossPageTables?.length || 0} 个续表`;
+    }
+    panel.append(text);
+    const documentWarnings = (task.ocrResults || []).flatMap((page) => page.documentExtras?.warnings || []);
+    for (const warning of [...(enhancement?.warnings || []), ...documentWarnings]) {
+        const note=document.createElement('p');note.textContent=warning.message || warning.type || JSON.stringify(warning);panel.append(note);
+    }
+    const spatialPages = (task.ocrResults || []).filter((page) => page.parsing_res_list?.length);
+    if (spatialPages.length) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');summary.textContent = '查看识别位置';details.append(summary);
+        const select = document.createElement('select');select.setAttribute('aria-label','定位结果页');
+        spatialPages.forEach((page, index) => {
+            const option=document.createElement('option');option.value=String(index);
+            option.textContent=`第 ${page.sourcePage || page.pageIndex + 1} 页（${page.parsing_res_list.length} 处）`;select.append(option);
+        });
+        const regions = document.createElement('div');
+        const renderRegions = () => {
+            regions.replaceChildren();
+            const page=spatialPages[Number(select.value)];
+            page.parsing_res_list.forEach((region, index) => {
+                const button=document.createElement('button');button.type='button';button.className='ovis-spatial-result';
+                button.textContent=`${index + 1}. ${region.block_label || 'text'} · ${String(region.block_content || '').slice(0,70)}`;
+                button.addEventListener('click',()=>{
+                    const block={page:Number(page.sourcePage || page.pageIndex + 1),bbox:region.block_bbox,
+                        pageWidth:1000,pageHeight:1000,label:region.block_label};
+                    scrollSourceToLayoutBlock(block,'smooth');showSourceHighlight(block);
+                });regions.append(button);
+            });
+        };
+        select.addEventListener('change',renderRegions);details.append(select,regions);panel.append(details);renderRegions();
+    }
+    if (task.ovisResult?.originalMarkdown !== undefined) {
+        const toggle=document.createElement('button');toggle.className='secondary-button';toggle.type='button';
+        toggle.textContent=task.ovisResult.view === 'original' ? '查看增强结果' : '查看原始逐页结果';
+        toggle.addEventListener('click',()=>{
+            task.ovisResult.view=task.ovisResult.view === 'original' ? 'enhanced' : 'original';
+            task.updatedAt=Date.now();resetResultRenderCache(task.id);renderResultPane(task);
+        });panel.append(toggle);
+    }
 }
 
 function createId() {

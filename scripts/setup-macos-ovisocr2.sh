@@ -23,6 +23,8 @@ fi
 
 "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
 "$VENV_DIR/bin/python" -m pip install -r requirements-macos-ovisocr2.txt
+"$VENV_DIR/bin/python" -m pip install -r requirements-ovisocr3-render.txt
+"$VENV_DIR/bin/python" -m playwright install chromium
 
 "$VENV_DIR/bin/python" - <<'PY'
 import torch

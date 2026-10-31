@@ -1949,6 +1949,11 @@ def _page_number(result: dict, fallback: int) -> int:
 
 
 def _result_text_lines(result: dict) -> list[str]:
+    if isinstance(result.get('sourceTextBlocks'), list):
+        # Automatic document parsing also contains generated captions and KIE.
+        # Only actual source transcription belongs in the searchable source PDF.
+        return [clean for block in result['sourceTextBlocks'] if isinstance(block, dict)
+                for clean in [plain_markdown_text(str(block.get('block_content') or ''))] if clean]
     lines: list[str] = []
     ocr_lines = result.get("ocrLines")
     if isinstance(ocr_lines, list):
@@ -2002,6 +2007,8 @@ def _task_page_text(task: dict, page_count: int) -> list[list[str]]:
         pages[page - 1].extend(_result_text_lines(result))
     if any(pages):
         return pages
+    if any(isinstance(result, dict) and 'sourceTextBlocks' in result for result in task.get('ocrResults') or []):
+        return pages
     return _markdown_page_text(task, page_count)
 
 
@@ -2034,6 +2041,8 @@ def _invisible_overlay(page_size: tuple[float, float], lines: Iterable[str]) -> 
 
 
 def build_searchable_pdf(task: dict, source_path: Path) -> bytes:
+    if any(isinstance(page, dict) and page.get('searchableText') is False for page in task.get('ocrResults') or []):
+        raise ExportError('This task returns descriptions, layout, extraction or answers rather than source transcription; use JSON or document export')
     if not source_path.exists():
         raise ExportError("Task source file is missing")
     source_pdf = _source_as_pdf(source_path, str(task.get("mimeType") or ""))

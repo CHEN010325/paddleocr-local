@@ -1,4 +1,5 @@
 import os
+import mimetypes
 from ovisocr3_config import resolve_model_settings, ovis_env
 import asyncio
 import base64
@@ -27,7 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ValidationError
 from ocr_engines import load_engine_settings, engine_status, recognize
 
 logger = logging.getLogger("pandocr")
@@ -538,6 +539,8 @@ def model_catalog() -> list[dict]:
             "label": "OvisOCR3",
             "kind": "document_parsing",
             "endpoint": "/api/ovisocr3",
+            "capabilities": {"maxPages": int(OVISOCR2_MAX_PAGES_PER_REQUEST),
+                             "maxDocumentPages": int(ovis_env('MAX_DOCUMENT_PAGES', '400'))},
         },
         "hpd-parsing": {
             "id": "hpd-parsing",
@@ -993,7 +996,11 @@ def docker_image_name_for(service_name: str) -> str:
     if service_name == "unlimited-ocr-sglang":
         return "pandocr-unlimited-ocr2-sglang:latest"
     if service_name == "ovisocr2-api":
-        return "pandocr-ovisocr3:latest"
+        configured = os.getenv('OVISOCR3_IMAGE', '').strip()
+        if configured:
+            return configured
+        return ('pandocr-ovisocr3-transformers-cu126:latest' if ovis_env('DOCKERFILE', 'Dockerfile.ovisocr3') == 'Dockerfile.ovisocr3-transformers'
+                else 'pandocr-ovisocr3:latest')
     if service_name == "hpd-parsing-server":
         return HPD_PARSING_IMAGE
     if service_name == "hpd-parsing-api":
@@ -1040,7 +1047,9 @@ def dockerfile_path_for(service_name: str) -> Path:
         "paddleocr-ocr-api": "Dockerfile.ocr",
         "unlimited-ocr-api": "Dockerfile.unlimited-ocr",
         "unlimited-ocr-sglang": "Dockerfile.unlimited-ocr-sglang",
-        "ovisocr2-api": "Dockerfile.ovisocr3",
+        "ovisocr2-api": (ovis_env('DOCKERFILE', 'Dockerfile.ovisocr3')
+                          if ovis_env('DOCKERFILE', 'Dockerfile.ovisocr3') in {'Dockerfile.ovisocr3', 'Dockerfile.ovisocr3-transformers'}
+                          else 'Dockerfile.ovisocr3'),
         "hpd-parsing-api": "Dockerfile.hpd-parsing-adapter",
         "navidc-ocr-api": "Dockerfile.navidc-ocr",
     }
@@ -1084,7 +1093,11 @@ def make_docker_build_context(service_name: str) -> bytes:
             adapter_info.size = len(adapter_data)
             tar.addfile(adapter_info, io.BytesIO(adapter_data))
         if service_name == 'ovisocr2-api':
-            for name in ['ovisocr3_config.py'] + [str(p.relative_to(PROJECT_ROOT)).replace('\\','/') for p in sorted((PROJECT_ROOT/'ovisocr3_prompts').glob('*.txt'))]:
+            for name in ['ovisocr3_config.py', 'ovisocr3_tasks.py', 'ovisocr3_inference.py', 'ovisocr3_document.py',
+                         'ovisocr3_crosspage.py', 'ovisocr3_reference.py', 'requirements-ovisocr3-render.txt'] + [
+                             str(p.relative_to(PROJECT_ROOT)).replace('\\','/')
+                             for folder in ('ovisocr3_prompts', 'ovisocr3_assets')
+                             for p in sorted((PROJECT_ROOT/folder).glob('*')) if p.is_file()]:
                 data = (PROJECT_ROOT / name).read_bytes()
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
@@ -1409,6 +1422,11 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"OVISOCR2_MODEL_REVISION={OVISOCR2_MODEL_REVISION}",
                 f"OVISOCR3_OUTPUT_FORMAT={OVISOCR3_OUTPUT_FORMAT}",
                 f"OVISOCR3_BACKEND={OVISOCR3_BACKEND}",
+                f"OVISOCR3_TRANSFORMERS_DTYPE={ovis_env('TRANSFORMERS_DTYPE', 'auto')}",
+                f"OVISOCR3_TRANSFORMERS_DEVICE={ovis_env('TRANSFORMERS_DEVICE', 'auto')}",
+                f"OVISOCR3_MAX_PIXELS={ovis_env('MAX_PIXELS', '8294400')}",
+                f"OVISOCR3_RELEASE_CUDA_CACHE={ovis_env('RELEASE_CUDA_CACHE', '0')}",
+                f"OVISOCR3_DOCUMENT_TOOL_MAX_TOKENS={ovis_env('DOCUMENT_TOOL_MAX_TOKENS', '2048')}",
                 f"OVISOCR3_ATTENTION_IMPLEMENTATION={OVISOCR3_ATTENTION_IMPLEMENTATION}",
                 f"OVISOCR2_KV_CACHE_MEMORY_MB={OVISOCR2_KV_CACHE_MEMORY_MB}",
                 f"OVISOCR2_STARTUP_MEMORY_FRACTION={OVISOCR2_STARTUP_MEMORY_FRACTION}",
@@ -1417,6 +1435,7 @@ def container_payload_for(service_name: str, *, host_root: str, network_name: st
                 f"OVISOCR2_MAX_TOKENS={OVISOCR2_MAX_TOKENS}",
                 f"OVISOCR2_PDF_DPI={OVISOCR2_PDF_DPI}",
                 f"OVISOCR2_MAX_PAGES_PER_REQUEST={OVISOCR2_MAX_PAGES_PER_REQUEST}",
+                f"OVISOCR3_MAX_DOCUMENT_PAGES={ovis_env('MAX_DOCUMENT_PAGES', '400')}",
                 f"OVISOCR2_GDN_PREFILL_BACKEND={OVISOCR2_GDN_PREFILL_BACKEND}",
             ],
             "User": "root",
@@ -2567,6 +2586,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Windows registry MIME mappings may classify .mjs as plain text, preventing
+# both the app bootstrap and PDF.js from executing in standards-compliant browsers.
+mimetypes.add_type('application/javascript', '.mjs')
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -2811,7 +2833,7 @@ def split_task_for_storage(task: dict) -> tuple[dict, dict | None]:
     preserve_result = bool(stored.pop("_preserveResult", False))
 
     result_payload = {}
-    for key in ("markdown", "images", "ocrResults"):
+    for key in ("markdown", "images", "ocrResults", "ovisResult"):
         if key in stored:
             result_payload[key] = stored.pop(key)
 
@@ -2840,7 +2862,7 @@ def split_task_for_storage(task: dict) -> tuple[dict, dict | None]:
 
     has_result_payload = any(
         bool(result_payload.get(key))
-        for key in ("markdown", "images", "ocrResults", "batchMarkdown")
+        for key in ("markdown", "images", "ocrResults", "batchMarkdown", "ovisResult")
     )
     if preserve_result and not has_result_payload and isinstance(task_id, str):
         previous_state = {}
@@ -2898,6 +2920,8 @@ def task_summary(task: dict) -> dict:
         "comparisonGroupId": task.get("comparisonGroupId"),
         "comparisonSourceName": task.get("comparisonSourceName"),
         "benchmark": task.get("benchmark"),
+        "ovisOptions": task.get("ovisOptions"),
+        "ovisEnhancementStatus": task.get("ovisEnhancementStatus"),
         "error": task.get("error"),
         "completedPages": completed_pages,
         "batchCount": len(batches),
@@ -2954,7 +2978,7 @@ def hydrate_task_detail(task_id: str, task: dict) -> dict:
     if result_path.exists():
         try:
             result_payload = read_json_file(result_path)
-            for key in ("markdown", "images", "ocrResults"):
+            for key in ("markdown", "images", "ocrResults", "ovisResult"):
                 if key in result_payload:
                     task[key] = result_payload[key]
             batch_markdown = result_payload.get("batchMarkdown")
@@ -3431,6 +3455,11 @@ class OCRRequest(CompatibleModelRequest):
     minPixels: Optional[int] = None
     maxPixels: Optional[int] = None
     visualize: Optional[bool] = None
+    task: Optional[str] = None
+    taskOptions: dict = Field(default_factory=dict)
+    crossPageTables: bool = False
+    enhanceOnly: bool = False
+    pageResults: list = Field(default_factory=list)
 
 
 RawOCRInput = Union[bytes, str]
@@ -3541,6 +3570,48 @@ def parse_markdown_ignore_labels(value) -> List[str]:
     return [text]
 
 
+def parse_ovis_json_field(value, expected):
+    if value is None or value == '':
+        return expected()
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except ValueError as exc:
+        raise HTTPException(422, 'Invalid OvisOCR3 task options JSON') from exc
+    if not isinstance(parsed, expected):
+        raise HTTPException(422, 'Invalid OvisOCR3 task options type')
+    return parsed
+
+
+@app.get('/api/ovisocr3/capabilities')
+async def ovisocr3_capabilities():
+    from ovisocr3_tasks import TASKS
+    return {'tasks': list(TASKS.values()), 'crossPageTables': True,
+            'maxPages': int(OVISOCR2_MAX_PAGES_PER_REQUEST), 'maxDocumentPages': int(ovis_env('MAX_DOCUMENT_PAGES', '400'))}
+
+
+@app.post('/api/ovisocr3/crosspage')
+async def proxy_ovisocr3_pair(request: Request):
+    from ovisocr3_tasks import PairRequest
+    if not ENABLE_OVISOCR2:
+        raise HTTPException(404, 'OvisOCR3 is not enabled')
+    body = await request.body()
+    if len(body) > min(MAX_REQUEST_BYTES or 72 * 1024 * 1024, 72 * 1024 * 1024):
+        raise HTTPException(413, 'Cross-page request exceeds size limit')
+    try:
+        pair = PairRequest.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(422, 'Expected two base64 images and two page Markdown strings') from exc
+    lease = await acquire_ocr_slot('ovisocr2', 'OvisOCR3 service is not ready')
+    try:
+        async with httpx.AsyncClient(timeout=PADDLE_REQUEST_TIMEOUT or None) as client:
+            response = await client.post(OVISOCR2_SERVICE_URL.rsplit('/', 1)[0] + '/crosspage', json=pair.model_dump())
+            if response.status_code != 200:
+                raise HTTPException(response.status_code, response.text)
+            return response.json()
+    finally:
+        await release_ocr_slot(lease)
+
+
 async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
@@ -3556,6 +3627,11 @@ async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
             else form.get("markdownIgnoreLabels")
         )
         ocr_request = OCRRequest(
+            task=parse_optional_string(form.get('task')),
+            taskOptions=parse_ovis_json_field(form.get('taskOptions'), dict),
+            crossPageTables=parse_bool(form.get('crossPageTables')),
+            enhanceOnly=parse_bool(form.get('enhanceOnly')),
+            pageResults=parse_ovis_json_field(form.get('pageResults'), list),
             modelId=parse_optional_string(form.get("modelId")),
             fileType=parse_optional_int(form.get("fileType")),
             useLayoutDetection=parse_bool(form.get("useLayoutDetection"), True),
@@ -3588,7 +3664,10 @@ async def parse_ocr_input(request: Request) -> tuple[OCRRequest, RawOCRInput]:
         payload = json.loads(body)
     except json.JSONDecodeError as err:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from err
-    ocr_request = OCRRequest(**payload)
+    try:
+        ocr_request = OCRRequest(**payload)
+    except (ValidationError, TypeError) as exc:
+        raise HTTPException(422, 'Invalid OCR request parameters') from exc
     if not ocr_request.image:
         raise HTTPException(status_code=400, detail="Missing JSON field: image")
     return ocr_request, ocr_request.image
@@ -3724,10 +3803,17 @@ async def build_managed_unlimited_ocr_payload(request: OCRRequest, base64_data: 
 
 
 def build_ovisocr2_payload(request: OCRRequest, base64_data: str, file_type: int) -> dict:
-    return {
+    payload = {
         "file": base64_data,
         "fileType": file_type,
     }
+    from ovisocr3_tasks import validate_options
+    task = request.task or 'document_auto'
+    validate_options(task, request.taskOptions)
+    payload.update(task=task, taskOptions=request.taskOptions,
+                   crossPageTables=True if request.task is None else request.crossPageTables,
+                   enhanceOnly=request.enhanceOnly, pageResults=request.pageResults)
+    return payload
 
 
 def build_hpd_parsing_payload(base64_data: str, file_type: int) -> dict:
@@ -4166,6 +4252,8 @@ async def run_ovisocr2_request(ocr_request: OCRRequest, raw_input: RawOCRInput) 
             data = resp.json()
             if not isinstance(data, dict) or "layoutParsingResults" not in data:
                 raise HTTPException(status_code=500, detail="Unexpected response format from OvisOCR3")
+            if ocr_request.task and data.get('task') != ocr_request.task:
+                raise HTTPException(503, 'OvisOCR3 model service is outdated; rebuild/redeploy the OvisOCR3 image to enable document parsing')
             return data
     finally:
         await release_ocr_slot(controller_lease_id)

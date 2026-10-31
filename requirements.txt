@@ -4,7 +4,7 @@ httpx==0.28.1
 pydantic==2.11.10
 python-multipart==0.0.32
 Pillow==13.0.0
-pypdf==6.21.3
+pypdf==6.21.4
 pymupdf==1.27.2.2
 python-docx==1.2.0
 openpyxl==3.1.5

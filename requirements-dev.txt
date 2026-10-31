@@ -1,4 +1,5 @@
 -r requirements.txt
+-r requirements-ovisocr3-render.txt
 
 pytest==9.0.3
 pytest-cov==7.1.0

@@ -1,3 +1,6 @@
 *.sh text eol=lf
 *.command text eol=lf
 static/vendor/** -text
+ovisocr3_prompts/*.txt -text
+ovisocr3_assets/** -text whitespace=cr-at-eol
+ovisocr3_reference.py text eol=lf

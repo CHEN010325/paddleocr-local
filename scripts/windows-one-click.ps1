@@ -773,6 +773,19 @@ function New-RuntimeEnvFile {
 
     $lines = [string[]](Get-Content -Path $BaseEnvFile -Encoding UTF8)
     $lines = Set-EnvLine -Lines $lines -Key "PANDOCR_GPU_DEVICE_ID" -Value ([string]$Gpu.Index)
+    # Volta/Turing cannot use the default BF16/CUDA12.9 vLLM runtime. Keep
+    # the public model slot while selecting the CUDA12.6 Transformers image.
+    $computeProperty = $Gpu.PSObject.Properties['ComputeCapability']
+    if ($script:DeployModelIds -contains 'ovisocr2' -and $computeProperty -and
+        $null -ne $computeProperty.Value -and [double]$computeProperty.Value -lt 8.0) {
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_DOCKERFILE' -Value 'Dockerfile.ovisocr3-transformers'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_IMAGE' -Value 'pandocr-ovisocr3-transformers-cu126:latest'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_BACKEND' -Value 'transformers'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_TRANSFORMERS_DTYPE' -Value 'float16'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_TRANSFORMERS_DEVICE' -Value 'cuda'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_MAX_PIXELS' -Value '1048576'
+        $lines = Set-EnvLine -Lines $lines -Key 'OVISOCR3_RELEASE_CUDA_CACHE' -Value '1'
+    }
     $lines = Ensure-EnvLine -Lines $lines -Key "PANDOCR_APP_VERSION" -Value "0.2.0"
     $gitCommit = ""
     try {

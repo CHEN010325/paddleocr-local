@@ -44,9 +44,12 @@ deployment prerequisites, or `-SkipBuild -SkipPull` when local images are alread
 The shared launcher retains known Docker socket recovery, exclusive model switching,
 existing model entry points, saved tasks, and model caches.
 
-vLLM is the default NVIDIA backend; Transformers is also supported. Structured document
-parsing produces layout boxes, tables, formulas, and cropped image assets. Separate
-general-OCR, KIE, figure-captioning, and cross-page-table task interfaces are not included.
+The workbench provides one automatic document parsing flow. Upload a file to read
+text, layout, formulas, tables and figures, then automatically refine chart data,
+figure labels, invoice fields and cross-page tables. No task selector is required.
+Original outputs and source positions are retained. Modern GPUs default to vLLM;
+Volta GPUs use a separate CUDA 12.6 / Transformers FP16 image. See the
+[document workflow and validation limits](OVISOCR3_CAPABILITIES.md). Rebuild after upgrading.
 
 Apple Silicon has a dedicated entry point, defaulting to MLX:
 

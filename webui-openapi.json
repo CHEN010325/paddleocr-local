@@ -610,6 +610,38 @@
         }
       }
     },
+    "/api/ovisocr3/capabilities": {
+      "get": {
+        "summary": "Ovisocr3 Capabilities",
+        "operationId": "ovisocr3_capabilities_api_ovisocr3_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ovisocr3/crosspage": {
+      "post": {
+        "summary": "Proxy Ovisocr3 Pair",
+        "operationId": "proxy_ovisocr3_pair_api_ovisocr3_crosspage_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/parse": {
       "post": {
         "summary": "Parse With Selected Model",
@@ -804,6 +836,37 @@
                       }
                     ],
                     "title": "Visualize"
+                  },
+                  "task": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Task"
+                  },
+                  "taskOptions": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Taskoptions"
+                  },
+                  "crossPageTables": {
+                    "type": "boolean",
+                    "title": "Crosspagetables",
+                    "default": false
+                  },
+                  "enhanceOnly": {
+                    "type": "boolean",
+                    "title": "Enhanceonly",
+                    "default": false
+                  },
+                  "pageResults": {
+                    "items": {},
+                    "type": "array",
+                    "title": "Pageresults"
                   }
                 },
                 "type": "object",
@@ -998,6 +1061,37 @@
                       }
                     ],
                     "title": "Visualize"
+                  },
+                  "task": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Task"
+                  },
+                  "taskOptions": {
+                    "additionalProperties": true,
+                    "type": "object",
+                    "title": "Taskoptions"
+                  },
+                  "crossPageTables": {
+                    "type": "boolean",
+                    "title": "Crosspagetables",
+                    "default": false
+                  },
+                  "enhanceOnly": {
+                    "type": "boolean",
+                    "title": "Enhanceonly",
+                    "default": false
+                  },
+                  "pageResults": {
+                    "items": {},
+                    "type": "array",
+                    "title": "Pageresults"
                   }
                 },
                 "type": "object",

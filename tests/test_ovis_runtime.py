@@ -275,7 +275,7 @@ class OvisRuntimeTests(unittest.TestCase):
                 adapter, "prepare_images", return_value=([], 1)
             ):
                 with self.assertRaises(HTTPException):
-                    await adapter.ocr(object())
+                    await adapter.ocr(SimpleNamespace(headers={}, json=AsyncMock(return_value={})))
 
         asyncio.run(scenario())
 

@@ -341,7 +341,7 @@ test('Ovis enhancement uses complete source across batch boundaries and preserve
         ocrResults:[0,1,2].map(i=>({sourcePage:i+1,task:'document_structured',sourceHash:'h'+i,rawOutput:'[]'}))};
       getTaskSourceBytes=async()=>new Uint8Array([1,2]);
       saveTask=async()=>{};refreshTaskUi=()=>{};
-      apiFetch=async(url,options)=>{window.enhanceFields=Object.fromEntries(options.body.entries());return new Response(JSON.stringify({markdown:'merged',images:{},originalImages:{'old.jpg':'ORIGINAL_BYTES'},enhancement:{status:'complete',crossPageTables:[{source_pages:[1,2,3]}]}}),{status:200})};
+      apiFetch=async(url,options)=>{window.enhanceFields=Object.fromEntries(options.body.entries());return new Response(JSON.stringify({markdown:'merged',images:{},originalImages:{'old.jpg':'ORIGINAL_BYTES'},originalMarkdown:'MODEL_DOC_RAW',enhancement:{status:'complete',crossPageTables:[{source_pages:[1,2,3]}]}}),{status:200})};
     `);
     await window.eval('enhanceOvisDocument(window.enhanceTask)');
     assert.equal(JSON.parse(window.enhanceFields.pageResults).length,3);
@@ -349,6 +349,7 @@ test('Ovis enhancement uses complete source across batch boundaries and preserve
     assert.equal(window.enhanceTask.markdown,'merged');
     assert.equal(window.enhanceTask.ovisResult.originalMarkdown,'original');
     assert.equal(window.enhanceTask.ovisResult.originalImages['doc_enhanced/old.jpg'],'ORIGINAL_BYTES');
+    assert.equal(window.enhanceTask.ovisResult.originalBatchMarkdown.doc_enhanced,'MODEL_DOC_RAW');
     assert.equal(window.enhanceTask.ocrResults.length,3);
     assert.equal(window.eval('shouldRenderOfficialLayout(window.enhanceTask)'),false);
     dom.window.close();
@@ -392,13 +393,14 @@ test('retrying the first failed Ovis batch preserves frozen options and benchmar
         batches:[{id:'first',fileType:1,status:'error'}]};
       els.chartRecognitionSwitch.checked=true;
       ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
-      callOCR=async(batch,task)=>{window.retriedOptions=JSON.parse(JSON.stringify(task.ovisOptions));return {markdown:'done',images:{},originalImages:{'old.jpg':'PAGE_ORIGINAL'},layoutParsingResults:[]}};
+      callOCR=async(batch,task)=>{window.retriedOptions=JSON.parse(JSON.stringify(task.ovisOptions));return {markdown:'done',images:{},originalImages:{'old.jpg':'PAGE_ORIGINAL'},originalMarkdown:'MODEL_PAGE_RAW',layoutParsingResults:[]}};
       prepareFailedBatchesForRetry(window.firstFailed);
     `);
     await window.eval('processTask(window.firstFailed,{confirmCompleted:false})');
     assert.deepEqual(Array.from(window.retriedOptions.taskOptions.fields),['total']);
     assert.equal(window.firstFailed.benchmark.parsingSettings.useChartRecognition,false);
     assert.equal(window.firstFailed.ovisResult.originalImages['first/old.jpg'],'PAGE_ORIGINAL');
+    assert.equal(window.firstFailed.ovisResult.originalBatchMarkdown.first,'MODEL_PAGE_RAW');
     dom.window.close();
 });
 
@@ -3236,5 +3238,24 @@ test('recovered PDF figures link by figure identity even after later body text',
     `);
     window.document.querySelector('#markdown-view img').dispatchEvent(new window.MouseEvent('click',{bubbles:true}));
     assert.deepEqual(Array.from(window.figureBox),[300,200,900,500]);
+    dom.window.close();
+});
+
+
+test('source-ordered Markdown uses derived source geometry rather than original model positions', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf=null;
+      window.sourceOrdered={modelId:'ovisocr2',ocrResults:[{sourcePage:1,width:1000,height:1000,
+        parsing_res_list:[{block_label:'image',block_content:'![Figure 1](figure.png)',block_bbox:[0,0,500,100]}],
+        sourceOrder:{method:'pdf-native'},sourceOrderBlocks:[
+          {block_label:'image',block_content:'![Figure 1](figure.png)',block_bbox:[500,300,900,500]}
+        ]}]};
+      els.markdownView.innerHTML='<p><img alt="Figure 1" src="data:image/png;base64,AA=="></p>';
+      showSourceHighlight=block=>{window.sourceOrderBox=block.bbox};scrollSourceToLayoutBlock=()=>{};
+      linkMarkdownToSourceBlocks(window.sourceOrdered);
+    `);
+    window.document.querySelector('#markdown-view img').dispatchEvent(new window.MouseEvent('click',{bubbles:true}));
+    assert.deepEqual(Array.from(window.sourceOrderBox),[500,300,900,500]);
     dom.window.close();
 });

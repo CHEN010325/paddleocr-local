@@ -1093,7 +1093,7 @@ def make_docker_build_context(service_name: str) -> bytes:
             adapter_info.size = len(adapter_data)
             tar.addfile(adapter_info, io.BytesIO(adapter_data))
         if service_name == 'ovisocr2-api':
-            for name in ['ovisocr3_config.py', 'ovisocr3_tasks.py', 'ovisocr3_inference.py', 'ovisocr3_document.py', 'ovisocr3_pdf.py',
+            for name in ['ovisocr3_config.py', 'ovisocr3_tasks.py', 'ovisocr3_inference.py', 'ovisocr3_document.py', 'ovisocr3_pdf.py', 'ovisocr3_pdf_order.py',
                          'ovisocr3_crosspage.py', 'ovisocr3_reference.py', 'requirements-ovisocr3-render.txt'] + [
                              str(p.relative_to(PROJECT_ROOT)).replace('\\','/')
                              for folder in ('ovisocr3_prompts', 'ovisocr3_assets')
@@ -3001,6 +3001,8 @@ def hydrate_task_detail(task_id: str, task: dict) -> dict:
                 original_images = task.pop('originalImages', {})
                 if original_images:
                     task.setdefault('ovisResult', {}).setdefault('originalImages', {}).update(original_images)
+                if task.get('sourceOrder') and 'originalMarkdown' in task:
+                    task.setdefault('ovisResult', {}).setdefault('sourceOrderOriginalMarkdown', task.pop('originalMarkdown'))
             except Exception:
                 logger.warning('Source PDF figure recovery failed for task %s; keeping parsed results', task_id, exc_info=True)
     return task

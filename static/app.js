@@ -3042,7 +3042,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                 batch.markdown = prepared.markdown;
                 rebuildTaskMarkdownFromBatches(task);
                 Object.assign(task.images, prepared.images);
-                archiveOvisOriginalImages(task, result, batch.id);
+                archiveOvisOriginalResult(task, result, batch.id);
                 task.ocrResults.push(...normalizeOCRJsonResults(result).map((pageResult, pageIndex) => (
                     compactOCRJsonResult(pageResult, batch, pageIndex)
                 )));
@@ -4821,7 +4821,7 @@ function linkMarkdownToSourceBlocks(task) {
         const hint = match?.block || blocks[cursor];
         const nativeIndex = nativeIndexes?.get(hint?.page || 1);
         const authoritativeText = nativeIndex?.text.length >= Math.min(200,(pageTextLengths.get(hint?.page||1)||0)*0.4);
-        if (!isImageBlock && element.tagName !== 'TABLE' && nativeIndex?.text && authoritativeText) {
+        if (!isImageBlock && element.tagName !== 'TABLE' && nativeIndex?.text && authoritativeText && !match?.block.sourceOrderVerified) {
             const native = findPdfSourceTextBlock(element.innerText || element.textContent, hint, nativeCursors);
             // Never present a guessed model box as a verified source-text location.
             if (!native) return;
@@ -4842,7 +4842,9 @@ function collectLayoutBlocks(task) {
     const blocks = [];
     task.ocrResults.forEach((pageResult, pageIndex) => {
         const pruned = pageResult?.prunedResult || pageResult;
-        const parsingBlocks = Array.isArray(pruned?.parsing_res_list) ? pruned.parsing_res_list : [];
+        const sourceOrdered = pageResult?.sourceOrder?.method === 'pdf-native' && Array.isArray(pageResult.sourceOrderBlocks);
+        const parsingBlocks = sourceOrdered ? pageResult.sourceOrderBlocks
+            : (Array.isArray(pruned?.parsing_res_list) ? pruned.parsing_res_list : []);
         const pageNumber = Number(pageResult?.sourcePage || pruned?.sourcePage || pageResult?.page_index || pageIndex + 1);
 
         parsingBlocks.forEach((block, blockIndex) => {
@@ -4857,6 +4859,7 @@ function collectLayoutBlocks(task) {
                 page: pageNumber,
                 order: Number(block.block_order ?? blockIndex),
                 label,
+                sourceOrderVerified: Boolean(sourceOrdered),
                 bbox,
                 pageWidth: bounds.pageWidth,
                 pageHeight: bounds.pageHeight,
@@ -5681,12 +5684,18 @@ function needsOvisDocumentEnhancement(task) {
         && Number(task.pageCount || 1) > 1 && task.ovisResult?.enhancement?.status !== 'complete';
 }
 
-function archiveOvisOriginalImages(task, result, batchId) {
-    if (!isOvisOCR3Task(task) || !result.originalImages) return;
+function archiveOvisOriginalResult(task, result, batchId) {
+    if (!isOvisOCR3Task(task) || (!result.originalImages && result.originalMarkdown == null)) return;
     task.ovisResult ||= {};
-    task.ovisResult.originalImages ||= {};
-    for (const [path, payload] of Object.entries(result.originalImages)) {
-        task.ovisResult.originalImages[`${batchId}/${path}`] = payload;
+    if (result.originalImages) {
+        task.ovisResult.originalImages ||= {};
+        for (const [path, payload] of Object.entries(result.originalImages)) {
+            task.ovisResult.originalImages[`${batchId}/${path}`] = payload;
+        }
+    }
+    if (result.originalMarkdown != null) {
+        task.ovisResult.originalBatchMarkdown ||= {};
+        task.ovisResult.originalBatchMarkdown[batchId] = result.originalMarkdown;
     }
 }
 
@@ -5718,7 +5727,7 @@ async function enhanceOvisDocument(task, signal = activeOcrAbortController?.sign
         const prepared = prepareBatchResult(result,`${task.id}_enhanced`);
         task.markdown = prepared.markdown;
         Object.assign(task.images, prepared.images);
-        archiveOvisOriginalImages(task, result, `${task.id}_enhanced`);
+        archiveOvisOriginalResult(task, result, `${task.id}_enhanced`);
         task.ovisResult.enhancement = result.enhancement;
         task.ovisEnhancementStatus = result.enhancement.status;
         task.updatedAt = Date.now();

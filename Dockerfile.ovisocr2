@@ -41,7 +41,7 @@ RUN /opt/venv/bin/python -m pip install --no-cache-dir -r requirements-ovisocr3-
 COPY ovisocr2_adapter.py /app/ovisocr2_adapter.py
 COPY ovisocr3_config.py /app/ovisocr3_config.py
 COPY ovisocr3_document.py /app/ovisocr3_document.py
-COPY ovisocr3_pdf.py ovisocr3_tasks.py ovisocr3_inference.py ovisocr3_crosspage.py ovisocr3_reference.py /app/
+COPY ovisocr3_pdf.py ovisocr3_pdf_order.py ovisocr3_tasks.py ovisocr3_inference.py ovisocr3_crosspage.py ovisocr3_reference.py /app/
 COPY ovisocr3_assets /app/ovisocr3_assets
 COPY ovisocr3_prompts /app/ovisocr3_prompts
 

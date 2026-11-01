@@ -185,3 +185,18 @@ def test_rotated_pages_keep_existing_images_until_coordinate_recovery_is_support
         before=copy.deepcopy(task)
         assert recover_pdf_figures(pdf)==[]
         assert enrich_ovis_pdf_result(task,pdf)==before
+
+
+def test_figure_reference_in_body_is_not_a_caption_anchor():
+    from ovisocr3_pdf import _insert_by_caption
+    text='Earlier prose discusses Fig. 1 as an example.\n\nActual later paragraph.\n\nFig. 1. Source diagram.\n\nAfter diagram.'
+    result=_insert_by_caption(text,{'caption':'Fig. 1. Source diagram.'},'![Figure 1](figure.png)')
+    assert result.index('Actual later paragraph.') < result.index('![') < result.index('Fig. 1. Source diagram.')
+
+
+def test_manual_markdown_corrections_are_not_overwritten_by_pdf_recovery():
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    result={'manualEditedAt':123,'markdown':'User corrected wording and intentionally removed a figure.',
+            'images':{},'ocrResults':[{'pageIndex':0,'markdown':{'text':'Old model output','images':{}},'parsing_res_list':[]}]}
+    before=copy.deepcopy(result)
+    assert enrich_ovis_pdf_result(result,figure_pdf())==before

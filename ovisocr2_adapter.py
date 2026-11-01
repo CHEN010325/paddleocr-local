@@ -666,7 +666,12 @@ async def run_task_request(request, file_bytes, file_type):
         response = {'task': task, 'model': MODEL_NAME, 'fileType': 0, 'layoutParsingResults': [],
                     'markdown': markdown, 'images': enhanced.pop('images'), 'enhancement': enhanced}
         if task == 'document_auto':
-            response['layoutParsingResults'] = [{'pageIndex': i} for i in range(len(cached))]
+            response['layoutParsingResults'] = [
+                {'pageIndex': i, 'parsing_res_list': [
+                    {'block_label': b['category'], 'block_bbox': b['bbox'],
+                     'block_content': document_content(b['category'], b['content'])}
+                    for b in decode_result(stage1_task, record['rawOutput'])]}
+                for i, record in enumerate(cached)]
             await recover_document_figures(response, file_bytes)
             response['layoutParsingResults'] = []
         return response

@@ -149,12 +149,11 @@ def _archive_images(result, keys, page_images=None):
 
 
 def _insert_by_caption(text, figure, link):
-    # Tolerate formatting differences in the source caption's identifier.
+    # A prose reference to a figure does not identify the figure's placement.
     figure_id = _figure_id(figure['caption'])
-    for match in _FIGURE_ID.finditer(text):
-        if (match.group(1) or match.group(2)).lower() == figure_id:
-            line_start = text.rfind('\n', 0, match.start()) + 1
-            return text[:line_start] + link + '\n\n' + text[line_start:]
+    for match in re.finditer(r'(?m)^.*$', text):
+        if _CAPTION.match(match[0]) and _figure_id(match[0]) == figure_id:
+            return text[:match.start()] + link + '\n\n' + text[match.start():]
     return text.rstrip() + ('\n\n' if text.strip() else '') + link + '\n\n' + figure['caption']
 
 
@@ -165,6 +164,8 @@ def enrich_ovis_pdf_result(result, pdf_source):
     model crops are replaced in page and aggregate Markdown/images; unmatched
     figures are inserted by the source caption. Source text blocks are untouched.
     """
+    if result.get('manualEditedAt'):
+        return result
     pages = result.get('layoutParsingResults') or result.get('ocrResults') or []
     page_map = {(p['sourcePage'] - 1 if isinstance(p.get('sourcePage'), int) and p['sourcePage'] > 0
                  else p.get('pageIndex', i)): p for i, p in enumerate(pages)}
@@ -260,4 +261,5 @@ def enrich_ovis_pdf_result(result, pdf_source):
             inserted = False
             aggregate = _IMAGE_LINK.sub(replace_image, aggregate)
             result['markdown'] = aggregate if inserted else _insert_by_caption(aggregate, figure, link)
-    return result
+    from ovisocr3_pdf_order import project_native_pdf_pages
+    return project_native_pdf_pages(result, pdf_source, figures)

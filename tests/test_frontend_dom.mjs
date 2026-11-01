@@ -5,6 +5,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
+import { marked } from 'marked';
+import createDOMPurify from 'dompurify';
 
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -12,6 +14,257 @@ const html = fs.readFileSync(path.join(rootDir, 'static', 'index.html'), 'utf8')
 const app = fs.readFileSync(path.join(rootDir, 'static', 'app.js'), 'utf8');
 const i18n = fs.readFileSync(path.join(rootDir, 'static', 'i18n.js'), 'utf8');
 const appFunctionNames = [...app.matchAll(/^function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map((match) => match[1]);
+
+const ovisLayoutLabels = {
+    abstract: ['摘要', 'Abstract'], algorithm: ['算法', 'Algorithm'],
+    aside_text: ['侧栏文本', 'Aside text'], chart: ['图表', 'Chart'],
+    content: ['目录', 'Table of contents'], display_formula: ['行间公式', 'Display formula'],
+    doc_title: ['标题', 'Title'], figure_title: ['图表标题', 'Figure title'],
+    footer: ['页脚', 'Footer'], footer_image: ['页脚图片', 'Footer image'],
+    footnote: ['脚注', 'Footnote'], formula_number: ['公式编号', 'Formula numbering'],
+    header: ['页眉', 'Header'], header_image: ['页眉图片', 'Header image'],
+    image: ['图片', 'Image'], inline_formula: ['行内公式', 'Inline formula'],
+    number: ['页码', 'Page number'], paragraph_title: ['段落标题', 'Section title'],
+    reference_content: ['参考文献', 'References'], seal: ['印章', 'Seal'],
+    table: ['表格', 'Table'], text: ['文本', 'Text'],
+    vertical_text: ['竖排文本', 'Vertical text'], vision_footnote: ['图表脚注', 'Visual footnote']
+};
+
+test('all 24 Ovis layout categories have Chinese and English display labels without changing raw keys', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    for (const [language, column] of [['zh-CN', 0], ['en', 1]]) {
+        window.eval(`currentLanguage = ${JSON.stringify(language)}`);
+        for (const [category, names] of Object.entries(ovisLayoutLabels)) {
+            assert.equal(window.eval(`layoutLabelText(${JSON.stringify(category)})`), names[column], category);
+            assert.equal(window.eval(`layoutLabelText(${JSON.stringify(category)}, {parser:'ovisocr2'})`), names[column], category);
+            assert.equal(window.eval(`layoutLabelText(${JSON.stringify(category)}, {parser:'ovisocr3'})`), names[column], category);
+        }
+    }
+    window.eval(`window.categoryTask = {ocrResults:[{width:1000,height:1000,parsing_res_list:
+        ${JSON.stringify(Object.keys(ovisLayoutLabels))}.map((category, index) => ({
+            block_label:category,block_bbox:[0,index*20,100,index*20+10],block_content:'sentinel '+category
+        }))}]}`);
+    const before = JSON.stringify(window.categoryTask);
+    assert.deepEqual(Array.from(window.eval('collectLayoutBlocks(window.categoryTask)'), block => block.label), Object.keys(ovisLayoutLabels));
+    assert.equal(JSON.stringify(window.categoryTask), before);
+    dom.window.close();
+});
+
+test('layout display names follow native parser taxonomy rather than the selected model', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval("selectedModelId='ovisocr2'");
+    for (const [model, label, expected] of [
+        ['unlimited-ocr', 'image_caption', '图片说明'], ['unlimited-ocr', 'table_caption', '表格说明'],
+        ['paddleocr-vl-1.6', 'image_caption', '图片标题'], ['paddleocr-vl-1.6', 'table_caption', '表格标题'],
+        ['hpd-parsing', 'figure', '图片'], ['hpd-parsing', 'figure_title', '图注'],
+        ['ovisocr2', 'table_caption', 'table_caption'], ['unlimited-ocr', 'vertical_text', 'vertical_text'],
+        ['hpd-parsing', 'content', 'content'], ['unknown-engine', 'text', 'text'],
+        ['unknown-engine', 'Future-Type', 'Future-Type'],
+        ['paddleocr-vl-1.6', 'inline_formula', '行内公式'],
+        ['navidc-ocr', 'char', '科学图示'], ['navidc-ocr', 'phonetic', '注音/拼音'], ['navidc-ocr', 'unknown', '未分类'],
+        ['unlimited-ocr', 'cross_image', '图片'], ['unlimited-ocr', 'append_ref_text', '参考文献'],
+        ['unlimited-ocr', 'figure', '图片'], ['unlimited-ocr', 'picture', '图片'], ['unlimited-ocr', 'img', '图片'],
+    ]) {
+        assert.equal(window.eval(`layoutLabelText(${JSON.stringify(label)}, {parser:${JSON.stringify(model)}})`), expected, model + ':' + label);
+    }
+    window.eval(`window.nativeCaptionTask={modelId:'ovisocr2',ocrResults:[{parser:'unlimited-ocr',width:1000,height:1000,
+      parsing_res_list:[{block_label:'table_caption',block_bbox:[0,0,200,50],block_content:'Shared caption'}]}]};
+      els.markdownView.innerHTML='<p>Shared caption</p>';linkMarkdownToSourceBlocks(window.nativeCaptionTask);`);
+    assert.equal(window.document.querySelector('#markdown-view p').dataset.layoutLabel, '表格说明');
+    assert.equal(window.eval('layoutLabelText(collectLayoutBlocks(window.nativeCaptionTask)[0].label, collectLayoutBlocks(window.nativeCaptionTask)[0])'), '表格说明');
+    assert.equal(window.eval('layoutLabelText(collectOfficialRenderBlocks(window.nativeCaptionTask)[0].label, collectOfficialRenderBlocks(window.nativeCaptionTask)[0])'), '表格说明');
+    window.eval("currentLanguage='en'");
+    assert.equal(window.eval("layoutLabelText('figure_title',{parser:'hpd-parsing'})"), 'Figure caption');
+    assert.equal(window.eval("layoutLabelText('char',{parser:'navidc-ocr'})"), 'Scientific figure');
+    assert.equal(window.eval("layoutLabelText('phonetic',{parser:'navidc-ocr'})"), 'Phonetics / Pinyin');
+    assert.equal(window.eval("layoutLabelText('unknown',{parser:'navidc-ocr'})"), 'Unclassified');
+    dom.window.close();
+});
+
+test('Unlimited cleanup preserves marginal text code indentation and native heading levels', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    const raw = '<|det|>header [0,0,100,10]<|/det|>HEADER_SENTINEL\n'
+        + '<|det|>title [0,10,100,20]<|/det|><LEVEL3>SUBSECTION\n'
+        + '<|det|>code [0,20,100,50]<|/det|>```python\nif ok:\n    step()\n\n\n    finish()\n```\n'
+        + '<|det|>footer [0,80,100,90]<|/det|>FOOTER_SENTINEL\n'
+        + '<|det|>append_page_number [0,90,100,100]<|/det|>7';
+    window.nativeDet = raw;
+    const markdown = window.eval("normalizeOCRMarkdown(window.nativeDet,{modelId:'unlimited-ocr'})");
+    assert.ok(markdown.includes('HEADER_SENTINEL'));
+    assert.ok(markdown.includes('FOOTER_SENTINEL'));
+    assert.ok(markdown.endsWith('7'));
+    assert.ok(markdown.includes('### SUBSECTION'));
+    assert.ok(markdown.includes('if ok:\n    step()\n\n\n    finish()'));
+    dom.window.close();
+});
+
+test('Unlimited formatting preserves existing title math caption and visual markup', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    for (const [label, content, expected] of [
+        ['title', '## Existing heading', '## Existing heading'],
+        ['formula', '$$x=1$$', '$$x=1$$'],
+        ['display_formula', '\\[x=1\\]', '\\[x=1\\]'],
+        ['equation', '\\(x=1\\)', '\\(x=1\\)'],
+        ['equation_block', '$x=1$', '$x=1$'],
+        ['equation', 'x=1', '$$\nx=1\n$$'],
+        ['equation_block', 'x=2', '$$\nx=2\n$$'],
+        ['image_caption', '**Bold caption**', '**Bold caption**'],
+        ['table_caption', '[Caption link](https://example.com)', '[Caption link](https://example.com)'],
+        ['image', '![Actual image](figure.png)', '![Actual image](figure.png)'],
+        ['chart', '<img src="chart.png">', '<img src="chart.png">'],
+    ]) {
+        assert.equal(window.eval(`formatUnlimitedOCRBlock(${JSON.stringify(label)},${JSON.stringify(content)},false).block`), expected, label);
+    }
+    dom.window.close();
+});
+
+test('non-Unlimited model rendering copying and batch preparation preserve literal det code', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.literalDet = '```text\n<|det|>text [0,0,100,100]<|/det|>    literal\n```';
+    for (const modelId of ['ovisocr2', 'hpd-parsing', 'navidc-ocr', 'paddleocr-vl-1.6']) {
+        window.nativeOwner = { modelId, markdown: window.literalDet, images: {}, ocrResults: [] };
+        for (const expression of [
+            'normalizeOCRMarkdown(window.literalDet,window.nativeOwner)',
+            'prepareMarkdownForRender(window.literalDet,window.nativeOwner)',
+            'embedTaskImagesInMarkdown(window.nativeOwner)',
+            'activeResultCopyText(window.nativeOwner)',
+            "prepareBatchResult({markdown:window.literalDet},'batch',{},window.nativeOwner).markdown"
+        ]) assert.equal(window.eval(expression), window.literalDet, modelId + ':' + expression);
+    }
+    dom.window.close();
+});
+
+test('layout linking retains content-free categories and raw category aliases', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`window.layoutOnlyTask = {ocrResults:[{width:1000,height:1000,parsing_res_list:
+        ${JSON.stringify(Object.keys(ovisLayoutLabels))}.map((category,index)=>({category,bbox:[0,index*20,100,index*20+10]}))}]}`);
+    assert.deepEqual(Array.from(window.eval('collectLayoutBlocks(window.layoutOnlyTask)'), block => block.label), Object.keys(ovisLayoutLabels));
+    dom.window.close();
+});
+
+test('PDF figure overlays use recovered geometry without rewriting original model categories', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`els.ignoreHeaderSwitch.checked=false;
+      window.recoveredPage = {width:1000,height:1000,
+      parsing_res_list:[{block_label:'chart',block_bbox:[0,0,100,100],block_content:'raw chart'},
+        {block_label:'header_image',block_bbox:[0,100,100,200],block_content:'raw header'}],
+      sourceFigureBlocks:[{block_label:'chart',block_bbox:[200,200,400,400],block_content:'recovered chart',figureSource:'pdf',sourceModelIndex:0},
+        {block_label:'header_image',block_bbox:[200,400,400,500],block_content:'recovered header',figureSource:'pdf',sourceModelIndex:1}]};
+      window.figureTask = {ocrResults:[window.recoveredPage]};`);
+    const original = JSON.stringify(window.recoveredPage.parsing_res_list);
+    const linked = Array.from(window.eval('collectLayoutBlocks(window.figureTask)'));
+    const rendered = Array.from(window.eval('collectOfficialRenderBlocks(window.figureTask)'));
+    for (const blocks of [linked, rendered]) {
+        assert.deepEqual(Array.from(blocks, block => block.label), ['chart', 'header_image']);
+        assert.deepEqual(Array.from(blocks[0].bbox), [200, 200, 400, 400]);
+    }
+    assert.ok(linked.every(block => block.sourceOrderVerified === false));
+    assert.equal(JSON.stringify(window.recoveredPage.parsing_res_list), original);
+    window.eval(`window.recoveredPage.sourceOrder={method:'pdf-native'};
+      window.recoveredPage.sourceOrderBlocks=[{block_label:'text',block_bbox:[600,600,700,700],block_content:'native text'}]`);
+    assert.deepEqual(Array.from(window.eval('collectLayoutBlocks(window.figureTask)'), block => block.label), ['text']);
+    assert.equal(window.eval('collectLayoutBlocks(window.figureTask)[0].sourceOrderVerified'), true);
+    assert.deepEqual(Array.from(window.eval('collectOfficialRenderBlocks(window.figureTask)'), block => block.label), ['text']);
+    dom.window.close();
+});
+
+test('real Markdown renderer and sanitizer preserve all24 content and semantic HTML', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.marked = marked;
+    window.DOMPurify = createDOMPurify(window);
+    const content = {
+        doc_title: '<h1>DOCUMENT TITLE</h1>', paragraph_title: '<h2>SECTION TITLE</h2>',
+        table: '<table><tr><th>HEAD</th></tr><tr><td>CELL</td></tr></table>',
+        algorithm: '<pre><code>ALGORITHM\n  step()</code></pre>',
+        display_formula: '$$a_1 + b = c$$', inline_formula: '$x_2$',
+        image: '<img alt="IMAGE" src="data:image/png;base64,AAAA">',
+        header_image: '<img alt="HEADER IMAGE" src="data:image/png;base64,AAAA">',
+        footer_image: '<img alt="FOOTER IMAGE" src="data:image/png;base64,AAAA">',
+        chart: '<img alt="CHART" src="data:image/png;base64,AAAA">',
+        seal: '<img alt="SEAL" src="data:image/png;base64,AAAA">'
+    };
+    const markdown = Object.keys(ovisLayoutLabels).map(category =>
+        `<section data-category="${category}"><p>SENTINEL_${category}</p>${content[category] || '<p>正文 CONTENT</p>'}</section>`
+    ).join('\n\n') + '<script>window.unsafe=true</script>';
+    window.full24Markdown = markdown;
+    window.eval('els.markdownView.innerHTML = renderMarkdownHtml(prepareMarkdownForRender(window.full24Markdown))');
+    const view = window.document.getElementById('markdown-view');
+    for (const category of Object.keys(ovisLayoutLabels)) {
+        assert.ok(view.querySelector(`[data-category="${category}"]`)?.textContent.includes(`SENTINEL_${category}`), category);
+    }
+    assert.equal(view.querySelectorAll('h1,h2,table,pre').length, 4);
+    assert.equal(view.querySelectorAll('img').length, 5);
+    assert.ok(view.textContent.includes('$$a_1 + b = c$$'));
+    assert.ok(view.textContent.includes('$x_2$'));
+    assert.equal(view.querySelector('script'), null);
+    dom.window.close();
+});
+
+test('real KaTeX renders prose formulas while leaving algorithm code and options literal', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(fs.readFileSync(path.join(rootDir, 'static/vendor/katex/katex.min.js'), 'utf8'));
+    window.eval(fs.readFileSync(path.join(rootDir, 'static/vendor/katex/contrib/auto-render.min.js'), 'utf8'));
+    const view = window.document.getElementById('markdown-view');
+    view.innerHTML = '<p id="prose">Formula $x^2$</p><pre id="algorithm"><code>cost = "$x^2$"; display = "$$y$$";</code></pre>'
+        + '<p><code id="inline-code">literal $z$</code></p><select><option id="formula-option">$w$</option></select>';
+    const literalIds = ['algorithm', 'inline-code', 'formula-option'];
+    const before = literalIds.map(id => window.document.getElementById(id).innerHTML);
+    window.eval('renderMathWhenReady(els.markdownView)');
+    assert.ok(window.document.querySelector('#prose .katex'));
+    for (const [index, id] of literalIds.entries()) {
+        assert.equal(window.document.getElementById(id).innerHTML, before[index], id);
+        assert.equal(window.document.getElementById(id).querySelector('.katex'), null, id);
+    }
+    dom.window.close();
+});
+
+test('visual source links retain header footer seal and sequential generic image categories', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`currentPdf=null;
+      els.markdownView.innerHTML='<p><img alt="" src="data:image/png;base64,AA=="></p>'.repeat(5);
+      window.visualLabels=['header_image','image','chart','footer_image','seal'];
+      window.visualLinkTask={ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'table',block_bbox:[0,0,100,10],block_content:'REAL TABLE'},
+        ...window.visualLabels.map((label,i)=>({block_label:label,block_bbox:[10,i*100+20,200,i*100+80],block_content:''}))]}]};
+      linkMarkdownToSourceBlocks(window.visualLinkTask);`);
+    const entries = Array.from(window.eval('linkedLayoutEntries'));
+    assert.deepEqual(entries.map(entry => entry.block.label), ['header_image', 'image', 'chart', 'footer_image', 'seal']);
+    assert.deepEqual(entries.map(entry => entry.element.dataset.layoutLabel), ['页眉图片', '图片', '图表', '页脚图片', '印章']);
+    assert.deepEqual(entries.map(entry => entry.block.bbox[1]), [20, 120, 220, 320, 420]);
+    dom.window.close();
+});
+
+test('unique image identity permits reordered and repeated visuals without consuming another category', async () => {
+    const { dom, window } = createBrowser();
+    await boot(window);
+    window.eval(`currentPdf=null;
+      els.markdownView.innerHTML='<p><img alt="footer only" src="data:image/png;base64,BB=="></p>'
+        +'<p><img alt="header only" src="data:image/png;base64,AA=="></p>'
+        +'<p><img alt="footer only" src="data:image/png;base64,BB=="></p>';
+      linkMarkdownToSourceBlocks({images:{'head.png':'AA==','foot.png':'BB=='},ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'header_image',block_bbox:[0,0,100,20],block_content:'![header only](head.png)'},
+        {block_label:'footer_image',block_bbox:[0,900,100,950],block_content:'![footer only](foot.png)'}]}]});`);
+    assert.deepEqual(Array.from(window.eval('linkedLayoutEntries'), entry => entry.block.label), ['footer_image', 'header_image', 'footer_image']);
+    window.eval(`els.markdownView.innerHTML='<p><img alt="generic" src="data:image/png;base64,BB=="></p>'
+        +'<p><img alt="generic" src="data:image/png;base64,AA=="></p>'
+        +'<p><img alt="generic" src="data:image/png;base64,BB=="></p>';
+      linkMarkdownToSourceBlocks({images:{'head.png':'data:image/png;base64,AA==','foot.png':'data:image/png;base64,BB=='},
+        ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'header_image',block_bbox:[0,0,100,20],block_content:'<img alt="generic" src="head.png">'},
+        {block_label:'footer_image',block_bbox:[0,900,100,950],block_content:'![generic](foot.png)'}]}]});`);
+    assert.deepEqual(Array.from(window.eval('linkedLayoutEntries'), entry => entry.block.label), ['footer_image', 'header_image', 'footer_image']);
+    dom.window.close();
+});
 
 test('footnotes and sidebar text survive by default and can be explicitly excluded', async () => {
     const { dom, window } = createBrowser();

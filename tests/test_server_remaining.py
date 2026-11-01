@@ -575,7 +575,7 @@ class ServerRemainingTests(unittest.IsolatedAsyncioTestCase):
                 seen_title=False,
             )[0],
         )
-        self.assertEqual(self.server.clean_unlimited_ocr_markdown(" a   b "), "a b")
+        self.assertEqual(self.server.clean_unlimited_ocr_markdown(" a   b "), "a   b")
         self.assertEqual(
             self.server.clean_unlimited_ocr_markdown("<|det|> malformed"),
             "malformed",

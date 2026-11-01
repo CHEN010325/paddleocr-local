@@ -397,7 +397,7 @@ test('OCR markdown and result compaction remove transport-only data', () => {
         '<|det|>title [1,2,3,4]<|/det|>Title ' +
         '<|det|>formula [1,2,3,4]<|/det|>x^2'
     )`);
-    assert.equal(markdown.includes('skip'), false);
+    assert.equal(markdown.includes('skip'), true);
     assert.equal(markdown.includes('# Title'), true);
     assert.equal(markdown.includes('$$\nx^2\n$$'), true);
 

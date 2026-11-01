@@ -3,7 +3,8 @@ import unittest
 
 import fitz
 
-from ovisocr3_pdf_order import project_native_pdf_pages, _text_parts
+from ovisocr3_pdf_order import project_native_pdf_pages, _text_parts, _visuals_bound
+from ovisocr3_tasks import CATEGORIES
 
 
 def document(lines, rotation=0, table=False):
@@ -35,6 +36,171 @@ def figure(box, caption='Fig. 1. Source diagram.'):
 
 
 class SourceOrderTests(unittest.TestCase):
+    def test_two_model_visuals_cannot_share_one_native_figure_identity(self):
+        with fitz.open(stream=document([]), filetype='pdf') as doc:
+            blocks = [{'block_label': 'image', 'block_bbox': [80, 180, 900, 375],
+                       'block_content': '![First](figure.png)'},
+                      {'block_label': 'chart', 'block_bbox': [80, 180, 900, 375],
+                       'block_content': '![Second](figure.png)'}]
+            self.assertFalse(_visuals_bound(blocks, [figure([80, 180, 900, 375])], doc[0]))
+
+    def test_all_24_unbound_categories_preserve_model_markdown(self):
+        pdf = document([(50, 60, 'Native prose has enough source text for a source reading order projection.'),
+                        (50, 100, 'A second source paragraph supplies more reliable native evidence.')])
+        for label in sorted(CATEGORIES):
+            with self.subTest(label=label):
+                original = '**Recognized semantic content**\n\nsecond recognized paragraph'
+                data = result([{'block_label': label, 'block_content': original}])
+                data['ocrResults'][0]['markdown']['text'] = original
+                data['markdown'] = original
+                before = copy.deepcopy(data['ocrResults'][0]['parsing_res_list'])
+                project_native_pdf_pages(data, pdf, [])
+                self.assertEqual(data['markdown'], original)
+                self.assertEqual(data['ocrResults'][0]['parsing_res_list'], before)
+                self.assertEqual(data['ocrResults'][0]['sourceOrderDiagnostic']['method'], 'model-preserved')
+
+    def test_text_categories_keep_their_semantic_label_with_wrong_model_box(self):
+        pdf = document([(50, 60, 'Recognized semantic content.'),
+                        (50, 160, 'Native body prose has sufficient reliable source text for a source '
+                         'reading order projection and preserves the rest of this paragraph.')])
+        labels = ('abstract', 'algorithm', 'aside_text', 'content', 'doc_title', 'figure_title',
+                  'footer', 'footnote', 'formula_number', 'header', 'inline_formula', 'number',
+                  'paragraph_title', 'reference_content', 'seal', 'text', 'vertical_text', 'vision_footnote')
+        for label in labels:
+            with self.subTest(label=label):
+                data = result([{'block_label': label, 'block_content': 'Recognized semantic content.',
+                                'block_bbox': [900, 900, 999, 999], 'customMetadata': {'retained': True}}])
+                project_native_pdf_pages(data, pdf, [])
+                block = next(b for b in data['ocrResults'][0]['sourceOrderBlocks']
+                             if b.get('sourceModelIndex') == 0)
+                self.assertEqual(block['block_label'], label)
+                self.assertEqual(block['customMetadata'], {'retained': True})
+                self.assertLess(block['block_bbox'][1], 100)
+
+    def test_number_inside_body_cannot_authorize_formula_number_semantics(self):
+        pdf = document([(50, 60, 'This source paragraph evaluates 2026 independent source documents.'),
+                        (50, 160, 'More native text supplies sufficient evidence for source projection.')])
+        data = result([{'block_label': 'formula_number', 'block_content': '0',
+                        'block_bbox': [900, 900, 999, 999]}])
+        project_native_pdf_pages(data, pdf, [])
+        self.assertNotIn('sourceOrderBlocks', data['ocrResults'][0])
+
+    def test_hybrid_pdf_plain_model_text_absent_from_native_layer_is_preserved(self):
+        pdf = document([(50, 60, 'This native source paragraph explains the main printed document body.'),
+                        (50, 160, 'A second native paragraph provides enough source text for ordering.')])
+        data = result([{'block_label': 'text', 'block_content': 'Recognized text in a raster inset.'}])
+        data['markdown'] = data['ocrResults'][0]['markdown']['text'] = 'Recognized text in a raster inset.'
+        project_native_pdf_pages(data, pdf, [])
+        self.assertEqual(data['markdown'], 'Recognized text in a raster inset.')
+        self.assertNotIn('sourceOrderBlocks', data['ocrResults'][0])
+
+    def test_recovered_visual_keeps_all_four_model_visual_categories(self):
+        pdf = document([(50, 60, 'A readable native source paragraph introduces a figure.'),
+                        (50, 320, 'Fig. 1. Source diagram.'),
+                        (50, 360, 'An additional source paragraph follows the original figure.')])
+        for label in ('image', 'chart', 'header_image', 'footer_image'):
+            with self.subTest(label=label):
+                data = result([{'block_label': label, 'block_content': '![Original](figure.png)',
+                                'block_bbox': [80, 180, 900, 375]}])
+                project_native_pdf_pages(data, pdf, [figure([80, 180, 900, 375])])
+                visual = next(b for b in data['ocrResults'][0]['sourceOrderBlocks']
+                              if b.get('sourceModelIndex') == 0)
+                self.assertEqual(visual['block_label'], label)
+                self.assertEqual(visual['sourceModelContent'], '![Original](figure.png)')
+
+    def test_inline_formula_retains_emitted_math_delimiters(self):
+        pdf = document([(50, 60, 'x = 1'),
+                        (50, 160, 'A native paragraph supplies reliable body text for source ordering '
+                         'and retains the independently recognized inline equation above.')])
+        data = result([{'block_label': 'inline_formula', 'block_content': r'\(x=1\)'}])
+        project_native_pdf_pages(data, pdf, [])
+        self.assertIn(r'\(x=1\)', data['markdown'])
+        self.assertEqual(data['ocrResults'][0]['sourceOrderBlocks'][0]['block_label'], 'inline_formula')
+
+    def test_native_transfer_keeps_inline_emphasis_code_and_hard_line_boundaries(self):
+        pdf = document([(50, 60, 'A recognized semantic paragraph.'),
+                        (50, 160, 'A second source paragraph supplies sufficient native prose to trust '
+                         'the source reading order and to keep this ordinary body text.')])
+        for content in ('A *recognized* semantic paragraph.',
+                        'A _recognized_ semantic paragraph.',
+                        'A `recognized` semantic paragraph.',
+                        '# A recognized semantic paragraph.',
+                        '> A recognized semantic paragraph.',
+                        'A recognized\nsemantic paragraph.'):
+            with self.subTest(content=content):
+                data = result([{'block_label': 'text', 'block_content': content}])
+                project_native_pdf_pages(data, pdf, [])
+                self.assertIn(content, data['markdown'])
+
+    def test_anchored_plain_content_keeps_model_punctuation_exactly(self):
+        pdf = document([(50, 60, 'Recognized semantic content.'),
+                        (50, 160, 'A source body paragraph supplies sufficient native evidence for '
+                         'a reliable source reading order projection of this page.')])
+        data = result([{'block_label': 'text', 'block_content': 'Recognized semantic content!'}])
+        project_native_pdf_pages(data, pdf, [])
+        self.assertEqual(data['ocrResults'][0]['sourceOrderBlocks'][0]['block_content'],
+                         'Recognized semantic content!')
+
+    def test_bound_visual_keeps_model_caption_and_mermaid_in_main_markdown(self):
+        pdf = document([(50, 60, 'A reliable source paragraph introduces the original figure.'),
+                        (50, 320, 'Fig. 1. Source diagram.'),
+                        (50, 360, 'An additional source paragraph follows the original figure.')])
+        body = '\n\nCaption **recognized** exactly.\n\n```mermaid\ngraph LR\nA-->B\n```'
+        data = result([{'block_label': 'chart', 'block_content': '![Original](figure.png)' + body,
+                        'block_bbox': [80, 180, 900, 375]}])
+        project_native_pdf_pages(data, pdf, [figure([80, 180, 900, 375])])
+        self.assertIn(body, data['markdown'])
+
+    def test_native_projection_retains_semantic_subblocks_and_markdown(self):
+        pdf = document([(50, 60, 'ABSTRACT\nA detailed study of reliable document structure.\n'
+                         'First semantic paragraph.\nSecond semantic paragraph.'),
+                        (50, 160, 'An additional native paragraph supplies enough source text.')])
+        model = [
+            {'block_label': 'abstract', 'block_content': '**ABSTRACT**\n\nA detailed study of reliable document structure.'},
+            {'block_label': 'text', 'block_content': 'First semantic paragraph.\n\nSecond semantic paragraph.'}]
+        data = result(model)
+        project_native_pdf_pages(data, pdf, [])
+        blocks = data['ocrResults'][0]['sourceOrderBlocks']
+        abstract = next(b for b in blocks if b['block_label'] == 'abstract')
+        self.assertEqual(abstract['block_content'], model[0]['block_content'])
+        self.assertIn(model[1]['block_content'], data['markdown'])
+        self.assertEqual(data['ocrResults'][0]['parsing_res_list'], model)
+
+    def test_unbound_semantic_category_falls_back_without_losing_its_content(self):
+        pdf = document([(50, 60, 'Native prose supplies enough reliable text for source projection.'),
+                        (50, 100, 'More native prose has no matching algorithm or inline formula.')])
+        for label in ('algorithm', 'inline_formula', 'seal', 'header_image', 'formula_number'):
+            with self.subTest(label=label):
+                data = result([{'block_label': label, 'block_content': 'recognized semantic content'}])
+                data['ocrResults'][0]['markdown']['text'] = 'recognized semantic content'
+                data['markdown'] = 'recognized semantic content'
+                project_native_pdf_pages(data, pdf, [])
+                self.assertEqual(data['markdown'], 'recognized semantic content')
+                self.assertEqual(data['ocrResults'][0]['sourceOrderDiagnostic']['method'], 'model-preserved')
+
+    def test_fallback_replaces_legacy_flattened_projection_with_original(self):
+        pdf = document([(50, 60, 'Native source cannot anchor this recognized semantic algorithm.'),
+                        (50, 100, 'Another source paragraph provides sufficient native text.')])
+        data = result([{'block_label': 'algorithm', 'block_content': 'for each item: return item'}])
+        page = data['ocrResults'][0]
+        page['originalMarkdown'] = '```python\nfor item in items: return item\n```'
+        page['sourceOrder'] = {'method': 'pdf-native', 'version': 1}
+        page['sourceOrderBlocks'] = [{'block_label': 'text', 'block_content': 'flattened'}]
+        project_native_pdf_pages(data, pdf, [])
+        self.assertEqual(data['markdown'], page['originalMarkdown'])
+        self.assertNotIn('sourceOrderBlocks', page)
+
+    def test_same_source_block_keeps_separate_model_titles(self):
+        pdf = document([(50, 60, 'First recognized title\nSecond recognized title', 22),
+                        (50, 200, 'A long native body paragraph provides enough ordinary text to identify '
+                         'the source body and confidently distinguish the two titles.', 10)])
+        data = result([{'block_label': 'doc_title', 'block_content': '# First recognized title'},
+                       {'block_label': 'doc_title', 'block_content': '# Second recognized title'}])
+        project_native_pdf_pages(data, pdf, [])
+        titles = [b for b in data['ocrResults'][0]['sourceOrderBlocks'] if b['block_label'] == 'doc_title']
+        self.assertEqual([b['block_content'] for b in titles],
+                         ['# First recognized title', '# Second recognized title'])
+
     def test_merged_reference_block_splits_entries_and_source_geometry(self):
         doc = fitz.open()
         page = doc.new_page(width=600, height=800)
@@ -133,6 +299,7 @@ class SourceOrderTests(unittest.TestCase):
             data = result()
             before = copy.deepcopy(data)
             project_native_pdf_pages(data, pdf, [])
+            data['ocrResults'][0].pop('sourceOrderDiagnostic', None)
             self.assertEqual(data, before)
 
     def test_footer_and_vertical_aside_do_not_interrupt_body(self):
@@ -160,6 +327,7 @@ class SourceOrderTests(unittest.TestCase):
                      result([{'block_label': 'table', 'block_content': '<table>Inventory</table>'}])):
             before = copy.deepcopy(data)
             project_native_pdf_pages(data, pdf, [])
+            data['ocrResults'][0].pop('sourceOrderDiagnostic', None)
             self.assertEqual(data, before)
 
     def test_unanchored_formula_keeps_original_output(self):
@@ -168,6 +336,7 @@ class SourceOrderTests(unittest.TestCase):
         data = result([{'block_label': 'display_formula', 'block_content': '$$x=1$$'}])
         before = copy.deepcopy(data)
         project_native_pdf_pages(data, pdf, [])
+        self.assertEqual(data['ocrResults'][0].pop('sourceOrderDiagnostic')['method'], 'model-preserved')
         self.assertEqual(data, before)
 
     def test_author_header_rows_precede_body_and_keep_left_to_right_order(self):
@@ -220,7 +389,7 @@ class SourceOrderTests(unittest.TestCase):
             {'block_label': 'display_formula', 'block_bbox': [540, 170, 950, 205], 'block_content': '$$x=2$$'},
             {'block_label': 'display_formula', 'block_bbox': [80, 360, 480, 390], 'block_content': '$$x=1$$'}])
         project_native_pdf_pages(data, pdf, [])
-        formulas = [b for b in data['ocrResults'][0]['sourceOrderBlocks'] if b['block_label'] == 'formula']
+        formulas = [b for b in data['ocrResults'][0]['sourceOrderBlocks'] if b['block_label'] == 'display_formula']
         self.assertEqual([b['sourceEquationNumber'] for b in formulas], [1, 2])
         for number, block in enumerate(formulas, 1):
             self.assertIn(f'x={number}', block['block_content'])
@@ -271,6 +440,7 @@ class SourceOrderTests(unittest.TestCase):
             data['ocrResults'][0]['markdown']['text'] += '\n![Uncaptioned](unconfirmed.png)'
             before = copy.deepcopy(data)
             project_native_pdf_pages(data, pdf, [])
+            self.assertEqual(data['ocrResults'][0].pop('sourceOrderDiagnostic')['method'], 'model-preserved')
             self.assertEqual(data, before)
 
 

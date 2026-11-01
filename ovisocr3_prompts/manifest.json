@@ -21,9 +21,9 @@
     "ovisocr3_prompts/text_translation.txt": "82d6fecdacebd20f864e43c4d5d024b4dba03801118a83b48c5943b1c8b38dd7",
     "ovisocr3_prompts/visual_question_answering.txt": "910753f062284aeb81a4b02e7233ba838dc34b427e245801713381cd3e60c2d9",
     "ovisocr3_prompts/word_spotting.txt": "7fb246da0a3b37529562e71e2fc685ac43fcf0266d22a443855fac70cc768a77",
-    "ovisocr3_reference.py": "a35c962ef258041664dbec7771c87e74331f7e18f1d764253939fd21ca508e3b",
+    "ovisocr3_reference.py": "c58e02f47d81069121b987cd6fe44fa4af53584848f81fbe0a61823e4bb2379b",
     "ovisocr3_assets/mathjax.js": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
   },
   "upstreamReferenceSha256": "3c5d4ded915fee1e27c4b662b37f11f231f0b5fb9b8a12e60a3586a53272e2ad",
-  "referenceAdaptation": "Explicit UTF-8 text I/O on Windows and canonical LF source line endings; inference and reconstruction algorithm unchanged."
+  "referenceAdaptation": "Explicit UTF-8 text I/O on Windows and canonical LF source line endings; structured category projection retains literal code fences instead of unwrapping them as response fences. Inference prompts and table reconstruction algorithm unchanged."
 }

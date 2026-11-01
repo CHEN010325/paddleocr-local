@@ -50,6 +50,83 @@ def test_build_response_promotes_only_the_first_page_title_to_document_title():
     assert result["layoutParsingResults"][1]["markdown"]["text"] == "## Methods"
 
 
+def test_main_document_preserves_hpd_empty_seal_as_source_crop():
+    raw = '<BLOCK>seal [100, 200, 500, 600]<BLOCK>text [100, 650, 900, 750]<CHILD>Body'
+    blocks = adapter.parse_blocks(raw)
+    assert blocks[0] == {'type': 'seal', 'bbox': [100, 200, 500, 600], 'text': ''}
+    with Image.new('RGB', (100, 200), 'white') as page:
+        result = adapter.build_response([page], [('Body', blocks)])
+    seal = result['layoutParsingResults'][0]['parsing_res_list'][0]
+    assert seal['block_label'] == 'seal'
+    assert seal['block_bbox'] == [100, 200, 500, 600]
+    assert '![seal 1]' in seal['block_content']
+    assert seal['block_content'] in result['markdown']
+    image_data = next(iter(result['images'].values()))
+    with Image.open(io.BytesIO(base64.b64decode(image_data))) as crop:
+        assert crop.size == (40, 80)
+    assert adapter.format_rag_text_block('seal', '', None) == ''
+
+
+def test_main_document_keeps_marginal_text_and_visuals_without_changing_rag_defaults():
+    blocks = [
+        {'type': kind, 'bbox': [10, 10 + n * 100, 900, 90 + n * 100], 'text': content}
+        for n, (kind, content) in enumerate([
+            ('header', 'HEADER\n\nSECOND HEADER'), ('footer', 'FOOTER'),
+            ('page_number', '12'), ('header_image', ''), ('footer_image', ''),
+            ('paragraph_title', 'II. Methods'), ('text', 'BODY'),
+        ])]
+    with Image.new('RGB', (100, 200), 'white') as page:
+        result = adapter.build_response([page], [('Official fallback', blocks)])
+    output = result['layoutParsingResults'][0]['parsing_res_list']
+    assert [b['block_label'] for b in output] == [b['type'] for b in blocks]
+    assert [b['block_bbox'] for b in output] == [b['bbox'] for b in blocks]
+    assert 'HEADER\n\nSECOND HEADER' in result['markdown']
+    assert 'FOOTER' in result['markdown'] and '12' in result['markdown']
+    assert len(result['images']) == 2
+    assert all(output[n]['block_content'].startswith('![') for n in (3, 4))
+    assert output[5]['block_content'] == '## II. Methods'
+    assert adapter.format_rag_text_block('footer', 'FOOTER', None) == ''
+
+
+def test_hpd_main_document_keeps_paragraph_reference_code_and_html_structure():
+    table = '<table><caption>Table caption</caption><tr><td rowspan="2">A</td><td>1</td></tr><tr><td>2</td></tr></table>'
+    code = '```python\nfor x in values:\n    emit(x)\n```'
+    blocks = [
+        {'type': label, 'bbox': [10, 20, 900, 900], 'text': content}
+        for label, content in [
+            ('text', 'First paragraph\nsoft wrap.\n\nSecond paragraph.'),
+            ('ref_text', '[1] First reference.\nContinuation.\n\n[2] Second reference.'),
+            ('algorithm', code), ('table', table),
+        ]]
+    with Image.new('RGB', (100, 200), 'white') as page:
+        result = adapter.build_response([page], [('fallback', blocks)])
+    contents = [b['block_content'] for b in result['layoutParsingResults'][0]['parsing_res_list']]
+    assert contents == [
+        'First paragraph soft wrap.\n\nSecond paragraph.',
+        '1. First reference. Continuation.\n\n2. Second reference.',
+        code, table,
+    ]
+    assert table in result['markdown']
+
+
+def test_normalize_prose_keeps_blank_paragraphs_and_indented_code():
+    assert adapter.normalize_prose('First line\ncontinued.\n\nNext paragraph.') == 'First line continued.\n\nNext paragraph.'
+    assert adapter.normalize_prose('Example:\n\n    emit(x)\n    emit(y)') == 'Example:\n\n    emit(x)\n    emit(y)'
+    assert adapter.normalize_prose('    emit(x)\n    emit(y)') == '    emit(x)\n    emit(y)'
+
+
+def test_model_emitted_visual_text_and_original_wire_response_survive():
+    raw = '<BLOCK>chart [100,100,800,500]<CHILD>CHART VALUES 42<BLOCK>seal [100,550,800,800]<CHILD>SEAL TEXT'
+    response = http_response(200, {'choices': [{'message': {'content': raw}}]})
+    with Image.new('RGB', (100, 100), 'white') as image:
+        parsed = asyncio.run(adapter.parse_page(FakeClient(post_response=response), image, asyncio.Semaphore(1)))
+        result = adapter.build_response([image], [parsed])
+    assert 'CHART VALUES 42' in result['markdown']
+    assert 'SEAL TEXT' in result['markdown']
+    assert len(result['images']) == 2
+    assert result['layoutParsingResults'][0]['rawOutput'] == raw
+
+
 def test_normalized_bbox_to_pixels_clamps_and_rejects_invalid_boxes():
     assert adapter.normalized_bbox_to_pixels([100, 200, 500, 600], 100, 200) == (10, 40, 50, 120)
     assert adapter.normalized_bbox_to_pixels([-10, -20, 1100, 1200], 100, 200) == (0, 0, 100, 200)
@@ -151,9 +228,10 @@ def test_official_markdown_postprocess_defaults():
     assert [block["text"] for block in blocks] == [
         "Heading",
         r"\(a\div b\)",
-        "",
+        "ignored",
         "Figure text",
     ]
+    assert 'ignored' not in adapter.blocks_to_official_markdown(blocks)
 
 
 def test_load_image_and_pdf_pages():
@@ -238,7 +316,8 @@ def http_response(status: int, payload=None, text: str = ""):
 def test_parse_page_and_health_paths():
     image = Image.new("RGB", (4, 4), "white")
     success = http_response(200, {"choices": [{"message": {"content": "<BLOCK>text [0,0,1,1]<CHILD>Body"}}]})
-    markdown, blocks = asyncio.run(adapter.parse_page(FakeClient(post_response=success), image, asyncio.Semaphore(1)))
+    parsed = asyncio.run(adapter.parse_page(FakeClient(post_response=success), image, asyncio.Semaphore(1)))
+    markdown, blocks = parsed[:2]
     assert markdown == "Body"
     assert blocks[0]["text"] == "Body"
 

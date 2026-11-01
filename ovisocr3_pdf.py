@@ -5,10 +5,14 @@ geometry qualify. Crops include vector artwork and embedded images together.
 Generated descriptions never enter ``sourceTextBlocks``.
 """
 import base64
+import copy
+import json
+import math
 import os
 import re
 
 import fitz
+from ovisocr3_tasks import CATEGORIES, VISUAL_CATEGORIES, valid_bbox, document_content, caption_markdown
 
 
 _CAPTION = re.compile(r'^\s*(?:Fig(?:ure)?\.?\s*\d+[A-Za-z]?|图\s*\d+)\s*(?:[.:：、]|\s|$)', re.I)
@@ -114,33 +118,6 @@ def _overlaps(a, b):
         return False
 
 
-def _source_graphics(pdf_source, page_indices):
-    """Native geometry used only to reject crops with no graphic content."""
-    doc = (fitz.open(stream=bytes(pdf_source), filetype='pdf')
-           if isinstance(pdf_source, (bytes, bytearray, memoryview)) else fitz.open(os.fspath(pdf_source)))
-    output = {}
-    with doc:
-        for index in page_indices:
-            if not 0 <= index < len(doc):
-                continue
-            page = doc[index]
-            if page.rotation:
-                continue
-            rects = list(page.cluster_drawings())
-            rects.extend(fitz.Rect(info['bbox']) for info in page.get_image_info())
-            output[index] = [[r.x0 / page.rect.width * 1000, r.y0 / page.rect.height * 1000,
-                              r.x1 / page.rect.width * 1000, r.y1 / page.rect.height * 1000]
-                             for r in rects if r.width >= 8 and r.height >= 8]
-    return output
-
-
-def _has_geometry(box, graphics):
-    try:
-        return any((fitz.Rect(box) & fitz.Rect(native)).get_area() > 1 for native in graphics)
-    except (TypeError, ValueError):
-        return True  # Unknown geometry is not evidence for deleting an image.
-
-
 def _archive_images(result, keys, page_images=None):
     for key in keys:
         for source in (page_images or {}, result.get('images', {})):
@@ -157,6 +134,84 @@ def _insert_by_caption(text, figure, link):
     return text.rstrip() + ('\n\n' if text.strip() else '') + link + '\n\n' + figure['caption']
 
 
+def _restore_model_layout(result, page_map, pdf_source, merged_tables):
+    """Recover legacy derived labels from intact validated model evidence."""
+    pending = []
+    for index, page in page_map.items():
+        try:
+            value = json.loads(page.get('rawOutput', ''))
+            source = 'raw-output'
+        except (ValueError, TypeError):
+            value, source = page.get('taskResult'), 'task-result'
+        if not isinstance(value, list) or not all(
+                isinstance(b, dict) and isinstance(b.get('category'), str) and b['category'] in CATEGORIES
+                and valid_bbox(b.get('bbox')) and isinstance(b.get('content'), str) for b in value):
+            continue
+        if [b['category'] for b in value] == [b.get('block_label') for b in page.get('parsing_res_list', [])]:
+            continue
+        pending.append((index, page, value, source))
+    if not pending:
+        return False
+    doc = (fitz.open(stream=bytes(pdf_source), filetype='pdf')
+           if isinstance(pdf_source, (bytes, bytearray, memoryview)) else fitz.open(os.fspath(pdf_source)))
+    restored = False
+    with doc:
+        for index, page, value, source in pending:
+            if not isinstance(index, int) or not 0 <= index < len(doc):
+                continue
+            native = doc[index]
+            visual_boxes = [b['bbox'] for b in value if b['category'] in VISUAL_CATEGORIES]
+            area = sum((b[2]-b[0])*(b[3]-b[1])/1e6*native.rect.get_area() for b in visual_boxes)
+            scale = min(2., math.sqrt(4_000_000 / max(1., area)))
+            blocks, images = [], {}
+            for block in value:
+                label, box, content = block['category'], block['bbox'], block['content']
+                if label in VISUAL_CATEGORIES:
+                    key = f'ocr_images/ovisocr3_restored_p{index+1}_bbox_' + '_'.join(map(str, box)) + '.png'
+                    clip = fitz.Rect(*(box[n] * (native.rect.width if n % 2 == 0 else native.rect.height) / 1000 for n in range(4)))
+                    pix = native.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, colorspace=fitz.csRGB, alpha=False)
+                    images[key] = base64.b64encode(pix.tobytes('png')).decode('ascii')
+                    link = f'![{label}]({key})'
+                    content = caption_markdown(content)
+                    content = _IMAGE_LINK.sub(lambda _: link, content) if _IMAGE_LINK.search(content) else link + '\n\n' + content
+                blocks.append({'block_label': label, 'block_bbox': list(box), 'block_content': document_content(label, content)})
+            page['modelLayoutBlocks'] = blocks
+            page['sourceFigureBlocks'] = copy.deepcopy(blocks)
+            page['modelLayoutRestoration'] = {'source': source, 'reason': 'legacy-category-mismatch'}
+            markdown = page.get('markdown')
+            if not isinstance(markdown, dict):
+                markdown = page['markdown'] = {'text': markdown or '', 'images': {}}
+            page.setdefault('legacyMarkdown', markdown.get('text', ''))
+            markdown['text'] = '\n\n'.join(b['block_content'] for b in blocks)
+            markdown.setdefault('images', {}).update(images)
+            result.setdefault('images', {}).update(images)
+            page.pop('sourceOrder', None)
+            page.pop('sourceOrderBlocks', None)
+            restored = True
+    return restored and not merged_tables
+
+
+def _resolve_page_image_aliases(result, page):
+    """Page caches use raw names while the task stores batch-qualified assets."""
+    markdown = page.get('markdown')
+    if not isinstance(markdown, dict):
+        return
+    available = dict(result.get('ovisResult', {}).get('originalImages', {}))
+    available.update(result.get('originalImages', {}))
+    available.update(result.get('images', {}))
+    aliases = markdown.get('images', {})
+
+    def resolve(match):
+        key = _image_key(match)
+        mapped = aliases.get(key)
+        target = mapped if isinstance(mapped, str) and mapped in available else key
+        if target in available:
+            result.setdefault('images', {})[target] = available[target]
+        return match[0].replace(key, target) if target != key else match[0]
+
+    markdown['text'] = _IMAGE_LINK.sub(resolve, markdown.get('text', ''))
+
+
 def enrich_ovis_pdf_result(result, pdf_source):
     """Mutate and return an OCR response or persisted task, preserving body text.
 
@@ -171,37 +226,31 @@ def enrich_ovis_pdf_result(result, pdf_source):
                  else p.get('pageIndex', i)): p for i, p in enumerate(pages)}
     if not page_map:
         return result
-    figures = recover_pdf_figures(pdf_source, page_indices=page_map)
-    native_graphics = _source_graphics(pdf_source, {f['pageIndex'] for f in figures}) if figures else {}
-    # Reject text-only model crops on pages for which native figure recovery is
-    # available. Keep all text following a rejected Markdown image link.
-    for index, page in page_map.items():
-        if index not in native_graphics:
-            continue
-        dead_keys = set()
-        blocks = []
-        for block in page.get('parsing_res_list', []):
-            if (block.get('block_label') in _VISUALS and block.get('block_bbox') and
-                    not _has_geometry(block['block_bbox'], native_graphics[index])):
-                dead_keys.update(_image_key(m) for m in _IMAGE_LINK.finditer(block.get('block_content', '')))
+    merged_tables = (result.get('enhancement', {}).get('crossPageTables') or
+                     result.get('ovisResult', {}).get('enhancement', {}).get('crossPageTables'))
+    restored = _restore_model_layout(result, page_map, pdf_source, merged_tables)
+    for page in page_map.values():
+        if not merged_tables and page.get('sourceOrder', {}).get('method') == 'pdf-native' and 'originalMarkdown' in page:
+            md = page.get('markdown')
+            if isinstance(md, dict):
+                md['text'] = page['originalMarkdown']
             else:
-                blocks.append(block)
-        page['parsing_res_list'] = blocks
-        if page.get('batchId'):
-            dead_keys.update(f'ocr_images/{page["batchId"]}_{k.rsplit("/", 1)[-1]}' for k in list(dead_keys))
-        # Full-document enhancement emits coordinate-bearing names independently
-        # of the page response. Their source page and box let us validate them.
-        for key in result.get('images', {}):
-            match = re.search(r'enhanced_page_(\d+)_bbox_(\d+)_(\d+)_(\d+)_(\d+)', key)
-            if match and int(match[1]) == index + 1:
-                box = [int(match[i]) for i in range(2, 6)]
-                if not _has_geometry(box, native_graphics[index]):
-                    dead_keys.add(key)
-        md = page.get('markdown', {})
-        if isinstance(md, dict):
-            md['text'] = _IMAGE_LINK.sub(lambda m: '' if _image_key(m) in dead_keys else m[0], md.get('text', ''))
-        result['markdown'] = _IMAGE_LINK.sub(lambda m: '' if _image_key(m) in dead_keys else m[0], result.get('markdown', ''))
-        _archive_images(result, dead_keys, md.get('images', {}) if isinstance(md, dict) else None)
+                page['markdown'] = {'text': page['originalMarkdown'], 'images': {}}
+            page.pop('sourceOrder', None)
+            page.pop('sourceOrderBlocks', None)
+            restored = True
+        _resolve_page_image_aliases(result, page)
+    if restored:
+        result['markdown'] = '\n\n'.join(
+            page['markdown'].get('text', '') if isinstance(page.get('markdown'), dict)
+            else page.get('markdown', '') for _, page in sorted(page_map.items()))
+        result.pop('sourceOrder', None)
+    figures = recover_pdf_figures(pdf_source, page_indices=page_map)
+    # Raw model layout is immutable. Source crops are a separate derived view;
+    # missing native graphic evidence does not prove that a model region is empty.
+    for page in page_map.values():
+        if figures:
+            page['sourceFigureBlocks'] = copy.deepcopy(page.get('modelLayoutBlocks', page.get('parsing_res_list', [])))
     for figure in figures:
         page = page_map[figure['pageIndex']]
         markdown = page.setdefault('markdown', {'text': '', 'images': {}})
@@ -211,19 +260,19 @@ def enrich_ovis_pdf_result(result, pdf_source):
         all_images = result.setdefault('images', {})
         key = figure['key']
         link = f'![Figure {_figure_id(figure["caption"])}]({key})'
-        blocks = page.setdefault('parsing_res_list', [])
+        blocks = page['sourceFigureBlocks']
         previous_text = markdown.get('text', '')
         text = previous_text
         removed_keys = set()
-        kept_blocks = []
-        for block in blocks:
-            matched = block.get('block_label') in _VISUALS and (
-                _overlaps(block.get('block_bbox', []), figure['bbox']) or
-                (_figure_id(block.get('block_content', '')) == _figure_id(figure['caption'])))
-            if matched:
-                removed_keys.update(_image_key(m) for m in _IMAGE_LINK.finditer(block.get('block_content', '')))
-            else:
-                kept_blocks.append(block)
+        matches = [i for i, block in enumerate(blocks)
+                   if block.get('block_label') in _VISUALS and (
+                       _overlaps(block.get('block_bbox', []), figure['bbox']) or
+                       _figure_id(block.get('block_content', '')) == _figure_id(figure['caption']))]
+        if len(matches) > 1:
+            page.setdefault('sourceFigureRecovery', {})[key] = 'ambiguous_model_regions'
+            continue
+        for i in matches:
+            removed_keys.update(_image_key(m) for m in _IMAGE_LINK.finditer(blocks[i].get('block_content', '')))
         # A source key is deterministic for a given selected page set.
         removed_keys.add(key)
         if page.get('batchId'):
@@ -248,9 +297,17 @@ def enrich_ovis_pdf_result(result, pdf_source):
             text = _insert_by_caption(text, figure, link)
         _archive_images(result, removed_keys - {key}, images)
         images[key] = all_images[key] = figure['imageBase64']
-        kept_blocks.append({'block_label': 'image', 'block_bbox': figure['bbox'], 'block_content': link,
-                            'figureSource': 'pdf', 'caption': figure['caption']})
-        page['parsing_res_list'] = sorted(kept_blocks, key=lambda block: (block.get('block_bbox') or [0, 0])[1])
+        if matches:
+            i = matches[0]
+            original = blocks[i]
+            content = _IMAGE_LINK.sub(link, original.get('block_content', ''))
+            if not _IMAGE_LINK.search(content):
+                content = link + ('\n\n' + content if content else '')
+            blocks[i] = dict(original, block_bbox=figure['bbox'], block_content=content,
+                             figureSource='pdf', caption=figure['caption'], sourceModelIndex=i)
+        else:
+            blocks.append({'block_label': 'image', 'block_bbox': figure['bbox'], 'block_content': link,
+                           'figureSource': 'pdf', 'caption': figure['caption']})
         markdown['text'] = text
         aggregate = result.get('markdown', '')
         if previous_text and previous_text in aggregate:

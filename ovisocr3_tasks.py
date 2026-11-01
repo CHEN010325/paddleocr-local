@@ -8,7 +8,22 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 PROMPT_DIR = Path(__file__).with_name('ovisocr3_prompts')
-CATEGORIES = set('abstract algorithm aside_text chart content display_formula doc_title figure_title footer footer_image footnote formula_number header header_image image inline_formula number paragraph_title reference_content seal table text vertical_text vision_footnote'.split())
+# The official prompt defines four content encodings, not 24 independent renderers.
+# In particular headers, references, algorithms, seals, notes and vertical text
+# are literal Markdown: keep paragraphs, lists, code and emitted reading order.
+CATEGORY_CONTENT_KINDS = {
+    'abstract': 'markdown', 'algorithm': 'markdown', 'aside_text': 'markdown',
+    'chart': 'visual', 'content': 'markdown', 'display_formula': 'display_latex',
+    'doc_title': 'document_heading', 'figure_title': 'markdown', 'footer': 'markdown',
+    'footer_image': 'visual', 'footnote': 'markdown', 'formula_number': 'markdown',
+    'header': 'markdown', 'header_image': 'visual', 'image': 'visual',
+    'inline_formula': 'inline_latex', 'number': 'markdown',
+    'paragraph_title': 'section_heading', 'reference_content': 'markdown',
+    'seal': 'markdown', 'table': 'html_table', 'text': 'markdown',
+    'vertical_text': 'markdown', 'vision_footnote': 'markdown',
+}
+CATEGORIES = set(CATEGORY_CONTENT_KINDS)
+VISUAL_CATEGORIES = frozenset(label for label, kind in CATEGORY_CONTENT_KINDS.items() if kind == 'visual')
 
 # Public parameter names deliberately match the API and saved-task snapshot.
 _DEFINITIONS = [
@@ -172,10 +187,16 @@ def caption_markdown(content):
 
 def document_content(label, content):
     """Project category-specific content consistently in single-page and stage-two views."""
-    if label == 'display_formula':
-        return '$$\n' + content.strip('$ \n') + '\n$$'
-    if label == 'inline_formula':
-        return '$' + content.strip('$ \n') + '$'
-    if label in {'doc_title', 'paragraph_title'} and not content.lstrip().startswith('#'):
-        return ('# ' if label == 'doc_title' else '## ') + content
+    kind = CATEGORY_CONTENT_KINDS[label]
+    if kind in {'display_latex', 'inline_latex'}:
+        formula = content.strip()
+        # Already delimited model output is valid LaTeX. Do not nest delimiters
+        # or strip literal escaped dollars from the mathematical expression.
+        pairs = (('$$', '$$'), ('$', '$'), (r'\[', r'\]'), (r'\(', r'\)'))
+        if any(len(formula) >= len(start) + len(end) and formula.startswith(start)
+               and formula.endswith(end) for start, end in pairs):
+            return content
+        return '$$\n' + formula + '\n$$' if kind == 'display_latex' else '$' + formula + '$'
+    if kind in {'document_heading', 'section_heading'} and not content.lstrip().startswith('#'):
+        return ('# ' if kind == 'document_heading' else '## ') + content
     return content

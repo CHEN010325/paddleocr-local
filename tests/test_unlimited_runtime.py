@@ -444,7 +444,7 @@ class UnlimitedRuntimeTests(unittest.TestCase):
 
     def test_layout_degeneration_and_rendering_helpers(self):
         self.assertEqual(adapter.normalize_newlines("a\r\nb\rc"), "a\nb\nc")
-        self.assertEqual(adapter.compact_block_text(" a   b\n\n\nc "), "a b\n\nc")
+        self.assertEqual(adapter.compact_block_text(" a   b\n\n\nc "), "a   b\n\n\nc")
         self.assertIsNone(adapter.parse_bbox(None))
         blocks = adapter.parse_layout_blocks("<|det|>text<|/det|>a<|det|>text [1,2,3,4]<|/det|>b")
         self.assertEqual(len(blocks), 2)

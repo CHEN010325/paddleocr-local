@@ -34,7 +34,9 @@ def test_auto_adapter_recovers_pdf_figure_without_requiring_model_visual_detecti
         r=TestClient(adapter.app).post('/ocr',json={'file':base64.b64encode(source_pdf()).decode(),'task':'document_auto'})
     assert r.status_code==200,r.text
     result=r.json();assert '![Figure 1]' in result['markdown']
-    assert any(b.get('figureSource')=='pdf' for b in result['layoutParsingResults'][0]['parsing_res_list'])
+    page = result['layoutParsingResults'][0]
+    assert page['parsing_res_list'] == [{'block_bbox': [0, 0, 999, 100], 'block_label': 'text', 'block_content': 'Body text'}]
+    assert any(b.get('figureSource')=='pdf' for b in page['sourceFigureBlocks'])
 
 
 def test_cached_enhancement_preserves_latex_delimiters_when_projecting_native_order():

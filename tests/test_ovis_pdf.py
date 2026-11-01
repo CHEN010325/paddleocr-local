@@ -2,6 +2,7 @@ import base64
 import copy
 
 import fitz
+import pytest
 
 
 def figure_pdf(caption=True, split=False):
@@ -64,7 +65,8 @@ def test_missing_figure_is_inserted_before_caption_on_its_page():
     enrich_ovis_pdf_result(result, figure_pdf())
     assert result['markdown'].index('![') < result['markdown'].index('Fig. 1.')
     assert 'After caption' in result['markdown']
-    assert len(page['parsing_res_list']) == 1
+    assert page['parsing_res_list'] == []
+    assert len(page['sourceFigureBlocks']) == 1
 
 
 def test_persisted_batch_local_indices_use_one_based_source_page():
@@ -95,7 +97,7 @@ def test_persisted_top_level_batch_image_alias_is_replaced():
     assert 'batch_123' not in result['markdown']
 
 
-def test_wrong_head_crop_and_enhanced_aliases_do_not_survive_in_display_markdown():
+def test_unmatched_model_region_is_retained_while_verified_figure_alias_is_replaced():
     from ovisocr3_pdf import enrich_ovis_pdf_result
     raw_key = 'ocr_images/ovisocr3_p1_image_1.jpg'
     head_alias = 'ocr_images/b_enhanced_page_1_bbox_0_0_999_100.jpg'
@@ -108,12 +110,14 @@ def test_wrong_head_crop_and_enhanced_aliases_do_not_survive_in_display_markdown
               'ovisResult': {'originalMarkdown': f'![image]({figure_alias})'}}
     original = copy.deepcopy(result['ovisResult'])
     enrich_ovis_pdf_result(result, figure_pdf())
-    assert result['markdown'].count('![') == 1
-    assert 'enhanced_page_' not in result['markdown']
+    assert result['markdown'].count('![') == 2
+    assert head_alias in result['markdown']
+    assert figure_alias not in result['markdown']
     assert 'KEEP BODY' in result['markdown'] and 'KEEP BODY' in page['markdown']['text']
     assert result['ovisResult'] == original
     assert result['originalImages'][figure_alias] == 'PARTIAL'
-    assert len(result['images']) == 1
+    assert result['images'][head_alias] == 'HEAD'
+    assert len(result['images']) == 2
 
 
 def test_image_alt_is_safe_when_source_caption_contains_square_brackets():
@@ -173,7 +177,8 @@ def test_html_image_aliases_are_replaced_and_deduplicated_with_markdown():
     assert 'KEEP BODY' in result['markdown']
     assert result['ovisResult'] == original
     assert len(page['parsing_res_list']) == 1
-    assert 'enhanced_page_' not in page['parsing_res_list'][0]['block_content']
+    assert page['parsing_res_list'][0]['block_content'] == old_html
+    assert 'enhanced_page_' not in page['sourceFigureBlocks'][0]['block_content']
 
 
 def test_rotated_pages_keep_existing_images_until_coordinate_recovery_is_supported():
@@ -200,3 +205,79 @@ def test_manual_markdown_corrections_are_not_overwritten_by_pdf_recovery():
             'images':{},'ocrResults':[{'pageIndex':0,'markdown':{'text':'Old model output','images':{}},'parsing_res_list':[]}]}
     before=copy.deepcopy(result)
     assert enrich_ovis_pdf_result(result,figure_pdf())==before
+
+
+def test_figure_recovery_preserves_model_blocks_order_and_chart_category():
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    link = '![chart](model.png)'
+    blocks = [
+        {'block_label': 'reference_content', 'block_bbox': [50, 700, 450, 760], 'block_content': '[1] Source.'},
+        {'block_label': 'chart', 'block_bbox': [510, 225, 940, 380], 'block_content': link + '\n\nChart description.'},
+        {'block_label': 'header_image', 'block_bbox': [0, 0, 999, 100], 'block_content': '![logo](logo.png)'}]
+    before = copy.deepcopy(blocks)
+    page = {'pageIndex': 0, 'parsing_res_list': blocks,
+            'markdown': {'text': '\n\n'.join(b['block_content'] for b in blocks),
+                         'images': {'model.png': 'CROP', 'logo.png': 'LOGO'}}}
+    task = {'markdown': page['markdown']['text'], 'images': dict(page['markdown']['images']), 'ocrResults': [page]}
+    enrich_ovis_pdf_result(task, figure_pdf())
+    assert page['parsing_res_list'] == before
+    derived = page['sourceFigureBlocks']
+    assert [b['block_label'] for b in derived] == ['reference_content', 'chart', 'header_image']
+    assert derived[1]['sourceModelIndex'] == 1
+    assert derived[1]['figureSource'] == 'pdf'
+    assert 'Chart description.' in derived[1]['block_content']
+    assert '![logo](logo.png)' in task['markdown']
+    assert task['images']['logo.png'] == 'LOGO'
+
+
+def test_legacy_native_fallback_restores_model_before_replacing_image_links():
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    link = '![chart](model.png)'
+    original = link + '\n\nChart description.\n\nFig. 1. A complete vector diagram.'
+    page = {'pageIndex': 0, 'sourceOrder': {'method': 'pdf-native', 'version': 1},
+            'sourceOrderBlocks': [], 'originalMarkdown': original,
+            'parsing_res_list': [{'block_label': 'chart', 'block_bbox': [510, 225, 940, 380], 'block_content': link}],
+            'markdown': {'text': 'Legacy flattened view.', 'images': {'model.png': 'CROP'}}}
+    task = {'markdown': 'Legacy flattened view.', 'sourceOrder': {'method': 'pdf-native'},
+            'images': {'model.png': 'CROP'}, 'ocrResults': [page]}
+    enrich_ovis_pdf_result(task, figure_pdf())
+    assert 'model.png' not in task['markdown']
+    assert '![Figure 1](' in task['markdown']
+    assert 'Chart description.' in task['markdown']
+    assert page['originalMarkdown'] == original
+    assert task['markdown'] == page['markdown']['text']
+
+
+@pytest.mark.parametrize('persisted', [False, True])
+def test_legacy_page_restore_does_not_overwrite_completed_crosspage_merge(persisted):
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    with fitz.open() as doc:
+        doc.new_page()
+        pdf = doc.tobytes()
+    page = {'pageIndex': 0, 'sourceOrder': {'method': 'pdf-native', 'version': 1},
+            'originalMarkdown': 'ORIGINAL_PAGE', 'parsing_res_list': [],
+            'markdown': {'text': 'Legacy view.', 'images': {}}}
+    task = {'markdown': '<table><tr><td>ENHANCED_MERGED_TABLE</td></tr></table>',
+            'ocrResults': [page], 'images': {}}
+    enhancement = {'crossPageTables': [{'source_pages': [1, 2]}]}
+    task.update({'ovisResult': {'enhancement': enhancement}} if persisted else {'enhancement': enhancement})
+    before = copy.deepcopy(task)
+    assert enrich_ovis_pdf_result(task, pdf) == before
+
+
+def test_restored_page_markdown_resolves_saved_batch_alias_and_archived_asset():
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    with fitz.open() as doc:
+        doc.new_page()
+        pdf = doc.tobytes()
+    raw_key, stored_key = 'ocr_images/raw.jpg', 'ocr_images/batch_raw.jpg'
+    original = f'![image]({raw_key})'
+    page = {'pageIndex': 0, 'sourceOrder': {'method': 'pdf-native'},
+            'originalMarkdown': original, 'parsing_res_list': [],
+            'markdown': {'text': 'Old view.', 'images': {raw_key: stored_key}}}
+    task = {'markdown': 'Old view.', 'images': {}, 'ocrResults': [page],
+            'ovisResult': {'originalImages': {stored_key: 'BASE64_ASSET'}}}
+    enrich_ovis_pdf_result(task, pdf)
+    assert task['markdown'] == f'![image]({stored_key})'
+    assert task['images'][stored_key] == 'BASE64_ASSET'
+    assert page['originalMarkdown'] == original

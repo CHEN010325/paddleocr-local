@@ -16,7 +16,7 @@ from PIL import Image
 from ovisocr3_config import resolve_model_settings, ovis_env
 from ovisocr3_tasks import (CATEGORIES, TASKS, DOCUMENT_TASKS, JSON_TASKS, PairRequest,
                            task_prompt, validate_options, decode_result, caption_markdown,
-                           document_content, page_hash)
+                           document_content, page_hash, VISUAL_CATEGORIES)
 from ovisocr3_inference import infer as dynamic_infer
 
 
@@ -586,8 +586,9 @@ def build_task_response(task, options, raws, pages, file_type):
             for value in outputs:
                 blocks = []
                 for block in value:
-                    content = caption_markdown(block['content'])
-                    if block['category'] in {'image', 'chart', 'header_image', 'footer_image'}:
+                    content = block['content']
+                    if block['category'] in VISUAL_CATEGORIES:
+                        content = caption_markdown(content)
                         box = '_'.join(str(n) for n in block['bbox'])
                         content = f'<img src="images/bbox_{box}.jpg" />\n\n' + content
                     blocks.append(dict(block, content=content))

@@ -208,7 +208,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Unlimited-OCR-2 Adapter", version="0.1.0", lifespan=lifespan)
 
-DET_BLOCK_RE = re.compile(r"<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|/det\|>")
+DET_BLOCK_RE = re.compile(r"<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|/det\|>(?:\s*<LEVEL(\d+)>)?")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z-]+|\d+")
 ANCHOR_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 COMMON_BIBLIOGRAPHY_GRAMS = {
@@ -238,7 +238,7 @@ SGLANG_CONTEXT_ERROR_RE = re.compile(
 SKIP_MARKDOWN_LABELS = {"header", "footer", "number", "page_number", "page_num"}
 CAPTION_LABELS = {"image_caption", "figure_caption", "table_caption"}
 TITLE_LABELS = {"title", "section_title"}
-IMAGE_LABELS = {"image", "chart"}
+IMAGE_LABELS = {"image", "figure", "picture", "chart", "img", "seal"}
 UNLIMITED_OCR_COORDINATE_SIZE = 1000
 
 
@@ -1244,22 +1244,21 @@ def normalize_newlines(text: str) -> str:
 def normalize_layout_syntax(text: str) -> str:
     """Normalize the released tokenizer's BLOCK/FORK layout into det spans."""
     text = re.sub(
-        r"<BLOCK>\s*([A-Za-z_][\w-]*)(?:<LEVEL\d+>)?\s*(\[[^\]\n]+\])\s*(?:<(?:FORK|CHILD)>)?",
-        lambda match: f"<|det|>{match.group(1)}{match.group(2)}<|/det|>",
+        r"<BLOCK>\s*([A-Za-z_][\w-]*)\s*(?:<LEVEL(\d+)>)?\s*(\[[^\]\n]+\])\s*(?:<LEVEL(\d+)>)?\s*(?:<(?:FORK|CHILD)>)?",
+        lambda match: f"<|det|>{match.group(1)}{match.group(3)}<|/det|>" +
+        (f"<LEVEL{match.group(2) or match.group(4)}>" if match.group(2) or match.group(4) else ""),
         text,
     )
     # A streaming header is not document prose. Wait for its closing bracket
     # instead of leaking coordinates into the preview as tokens arrive.
     text = re.sub(r"<BLOCK>\s*[A-Za-z_][\w-]*(?:<LEVEL\d+>)?\s*\[[^\]\n]*$", "", text)
-    return re.sub(r"<(?:BLOCK|FORK|CHILD|LEVEL\d+)>", "", text)
+    return re.sub(r"<(?:BLOCK|FORK|CHILD)>", "", text)
 
 
 def compact_block_text(text: str) -> str:
     text = normalize_newlines(text)
     text = text.replace("<PAGE>", "\n\n")
     text = re.sub(r"<｜(?:begin▁of▁sentence|end▁of▁sentence)｜>", "", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
@@ -1334,6 +1333,7 @@ def parse_layout_blocks(markdown: str) -> list[dict]:
                 "label": match.group(1),
                 "bbox": parse_bbox(match.group(2)),
                 "text": text[match.end() : next_start],
+                **({"heading_level": int(match.group(3))} if match.group(3) else {}),
                 **({"explicit_page_index": max(0, page_index)} if boundaries else {}),
             }
         )
@@ -1607,23 +1607,34 @@ def crop_block_image(block: dict, image_pages: list[bytes], image_number: int) -
         return None
 
 
-def format_unlimited_ocr_block(label: str, content: str, *, seen_title: bool) -> tuple[str, bool]:
+def format_unlimited_ocr_block(label: str, content: str, *, seen_title: bool,
+                               preserve_labels: bool = False, heading_level: int | None = None) -> tuple[str, bool]:
     normalized_label = label.lower().strip()
+    for prefix in ("cross_", "append_"):
+        if normalized_label.startswith(prefix):
+            normalized_label = normalized_label[len(prefix):]
+            break
     text = compact_block_text(content)
-    if not text or normalized_label in SKIP_MARKDOWN_LABELS:
+    if not text or (not preserve_labels and normalized_label in SKIP_MARKDOWN_LABELS):
         return "", seen_title
 
     if normalized_label in TITLE_LABELS:
-        level = "##" if seen_title else "#"
+        if text.startswith('#'):
+            return text, True
+        level = "#" * max(1, min(6, heading_level)) if heading_level else ("##" if seen_title else "#")
         return f"{level} {text}", True
 
     if normalized_label in CAPTION_LABELS:
-        return f"*{text}*", seen_title
+        return (text if preserve_labels else f"*{text}*"), seen_title
 
-    if normalized_label in {"formula", "display_formula"}:
+    if normalized_label in {"formula", "display_formula", "equation", "equation_block"}:
+        if text.startswith(("$", r"\(", r"\[")):
+            return text, seen_title
         return f"$$\n{text}\n$$", seen_title
 
     if normalized_label in IMAGE_LABELS:
+        if preserve_labels:
+            return text, seen_title
         return (f"**{normalized_label.replace('_', ' ').title()}:** {text}" if text else ""), seen_title
 
     return text, seen_title
@@ -1652,14 +1663,17 @@ def render_unlimited_ocr_document(
     for block_info in layout_blocks:
         label = str(block_info.get("label") or "")
         normalized_label = label.lower().strip()
-        if image_pages and normalized_label in IMAGE_LABELS:
+        visual_label = re.sub(r"^(?:cross_|append_)", "", normalized_label)
+        if image_pages and visual_label in IMAGE_LABELS:
             cropped = crop_block_image(block_info, image_pages, image_number)
             if cropped:
                 path, data = cropped
                 images[path] = data
                 blocks.append(f"![{normalized_label.replace('_', ' ')}]({path})")
                 image_number += 1
-        block, seen_title = format_unlimited_ocr_block(label, str(block_info.get("text") or ""), seen_title=seen_title)
+        block, seen_title = format_unlimited_ocr_block(label, str(block_info.get("text") or ""),
+                                                      seen_title=seen_title, preserve_labels=True,
+                                                      heading_level=block_info.get("heading_level"))
         if block:
             blocks.append(block)
 
@@ -1723,6 +1737,8 @@ def build_layout_parsing_results(
             "block_order": block_order,
             "block_content": content,
         }
+        if block.get("heading_level") is not None:
+            parsing_block["heading_level"] = block["heading_level"]
         if bbox:
             parsing_block["block_bbox"] = [float(value) for value in bbox[:4]]
         pages[page_index]["parsing_res_list"].append(parsing_block)

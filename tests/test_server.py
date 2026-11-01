@@ -488,11 +488,11 @@ class ServerTaskApiTests(unittest.TestCase):
         response = self.server.parse_unlimited_ocr_response({"markdown": raw})
 
         self.assertNotIn("<|det|>", response["markdown"])
-        self.assertNotIn("Baidu", response["markdown"])
+        self.assertIn("Baidu", response["markdown"])
         self.assertIn("# Unlimited OCR Works", response["markdown"])
         self.assertIn("## Abstract", response["markdown"])
         self.assertIn("Body text.", response["markdown"])
-        self.assertIn("*Figure 1. Caption.*", response["markdown"])
+        self.assertIn("Figure 1. Caption.", response["markdown"])
 
     def test_unlimited_ocr_stream_position_tracks_page_reset(self):
         adapter = importlib.import_module("unlimited_ocr_adapter")

@@ -3951,7 +3951,7 @@ def parse_ppocr_response(data: dict) -> dict:
     }
 
 
-UNLIMITED_OCR_DET_RE = re.compile(r"<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|/det\|>")
+UNLIMITED_OCR_DET_RE = re.compile(r"<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|/det\|>(?:\s*<LEVEL(\d+)>)?")
 UNLIMITED_OCR_SKIP_MARKDOWN_LABELS = {"header", "footer", "number", "page_number", "page_num"}
 UNLIMITED_OCR_CAPTION_LABELS = {"image_caption", "figure_caption", "table_caption"}
 UNLIMITED_OCR_TITLE_LABELS = {"title", "section_title"}
@@ -3959,28 +3959,33 @@ UNLIMITED_OCR_TITLE_LABELS = {"title", "section_title"}
 
 def compact_markdown_block(text: str) -> str:
     text = str(text).replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
-def format_unlimited_ocr_block(label: str, content: str, *, seen_title: bool) -> tuple[str, bool]:
+def format_unlimited_ocr_block(label: str, content: str, *, seen_title: bool,
+                               preserve_labels: bool = False, heading_level: int | None = None) -> tuple[str, bool]:
     normalized_label = label.lower().strip()
     text = compact_markdown_block(content)
-    if not text or normalized_label in UNLIMITED_OCR_SKIP_MARKDOWN_LABELS:
+    if not text or (not preserve_labels and normalized_label in UNLIMITED_OCR_SKIP_MARKDOWN_LABELS):
         return "", seen_title
 
     if normalized_label in UNLIMITED_OCR_TITLE_LABELS:
-        level = "##" if seen_title else "#"
+        if text.startswith('#'):
+            return text, True
+        level = "#" * max(1, min(6, heading_level)) if heading_level else ("##" if seen_title else "#")
         return f"{level} {text}", True
 
     if normalized_label in UNLIMITED_OCR_CAPTION_LABELS:
-        return f"*{text}*", seen_title
+        return (text if preserve_labels else f"*{text}*"), seen_title
 
-    if normalized_label in {"formula", "display_formula"}:
+    if normalized_label in {"formula", "display_formula", "equation", "equation_block"}:
+        if text.startswith(("$", r"\(", r"\[")):
+            return text, seen_title
         return f"$$\n{text}\n$$", seen_title
 
     if normalized_label in {"image", "chart"}:
+        if preserve_labels:
+            return text, seen_title
         return f"**{normalized_label.replace('_', ' ').title()}:** {text}", seen_title
 
     return text, seen_title
@@ -4003,7 +4008,9 @@ def clean_unlimited_ocr_markdown(markdown: str) -> str:
     seen_title = False
     for index, match in enumerate(matches):
         next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        block, seen_title = format_unlimited_ocr_block(match.group(1), text[match.end() : next_start], seen_title=seen_title)
+        block, seen_title = format_unlimited_ocr_block(match.group(1), text[match.end() : next_start],
+                                                      seen_title=seen_title, preserve_labels=True,
+                                                      heading_level=int(match.group(3)) if match.group(3) else None)
         if block:
             blocks.append(block)
 

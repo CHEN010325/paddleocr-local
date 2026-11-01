@@ -5,11 +5,11 @@ import logging
 
 from fastapi import HTTPException
 
-from ovisocr3_tasks import task_prompt, decode_result
+from ovisocr3_tasks import task_prompt, decode_result, VISUAL_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
-VISUAL_LABELS = {'image', 'chart', 'header_image', 'footer_image'}
+VISUAL_LABELS = VISUAL_CATEGORIES
 
 
 def parse_document_page(image, infer, *, refine=None):

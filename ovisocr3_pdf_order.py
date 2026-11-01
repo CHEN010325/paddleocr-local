@@ -5,9 +5,13 @@ its own geometry and keeps the original Markdown for inspection or rollback.
 """
 import os
 import re
+from copy import deepcopy
 from collections import Counter
+from difflib import SequenceMatcher
 
 import fitz
+
+from ovisocr3_tasks import VISUAL_CATEGORIES
 
 
 _FIG = re.compile(r'^\s*(?:Fig(?:ure)?\.?\s*(\d+[A-Za-z]?)|图\s*(\d+))\s*[.:：、]', re.I)
@@ -16,7 +20,8 @@ _EQUATION = re.compile(r'\((\d+)\)\s*$')
 _FORMULAS = {'formula', 'display_formula', 'equation'}
 _SECTION = re.compile(r'^[IVXLCDM]+\.\s+[A-Z][A-Z0-9 &,:\-]+$')
 _SUBSECTION = re.compile(r'^[A-Z]\.\s+[A-Z][^.!?]{2,100}$')
-_VISUALS = {'image', 'chart', 'figure', 'header_image', 'footer_image'}
+_VISUALS = set(VISUAL_CATEGORIES) | {'figure'}
+_IMAGE_LINK = re.compile(r'''!\[[^\]]*\]\([^)]*\)|<img\b[^>]*>''', re.I)
 
 
 def _text(block):
@@ -179,6 +184,108 @@ def _math_block(block):
     return not words or (len(words) <= 1 and len(block['text']) < 120)
 
 
+def _anchor_text(value):
+    """Ignore presentation punctuation, retaining offsets into the native text."""
+    characters, offsets = [], []
+    for index, character in enumerate(value):
+        if character.isalnum():
+            characters.append(character.lower())
+            offsets.append(index)
+    return ''.join(characters), offsets
+
+
+def _preserve_semantics(blocks, model, display_model=None):
+    """Transfer only text-anchored semantic boundaries; ambiguity rejects the page.
+
+    Text recognition may have bad boxes even when its content is correct. Never
+    use those boxes to relabel native prose. A bounded whole-block comparison
+    tolerates small OCR spelling errors, but cannot match arbitrary fragments.
+    """
+    result = deepcopy(blocks)
+    for index, source in enumerate(model):
+        label = source.get('block_label', 'text')
+        content = _text(source)
+        if not isinstance(content, str):
+            return None, f'non-text-model-content:{index}:{label}'
+        if label in _FORMULAS or label == 'table' or label in _VISUALS:
+            # Table/equation/visual binding already established a source identity.
+            candidates = [b for b in result if b.get('sourceModelIndex') == index]
+            if len(candidates) != 1:
+                return None, f'unbound-model-block:{index}:{label}'
+            candidates[0]['block_label'] = label
+            candidates[0]['sourceModelContent'] = content
+            if label in _VISUALS:
+                # Source recovery may substitute a crop, but captions, diagram
+                # code, and surrounding Markdown still belong to the model.
+                derived = next((b for b in display_model or []
+                                if b.get('sourceModelIndex') == index), source)
+                rendered = _text(derived)
+                links = list(_IMAGE_LINK.finditer(rendered))
+                if len(links) > 1:
+                    return None, f'ambiguous-visual-content:{index}:{label}'
+                native_link = candidates[0]['block_content']
+                candidates[0]['block_content'] = (_IMAGE_LINK.sub(lambda _: native_link, rendered)
+                                                   if links else native_link + ('\n\n' + rendered if rendered else ''))
+            continue
+        target, _ = _anchor_text(content)
+        # A hybrid PDF may contain model-recognized text inside raster insets
+        # which the native layer cannot see. Plain prose needs an anchor too.
+        required = label != 'text' or bool(content.strip())
+        if not target:
+            if required:
+                return None, f'empty-text-anchor:{index}:{label}'
+            continue
+        matches = []
+        for position, native in enumerate(result):
+            if native.get('sourceModelIndex') is not None or native['block_label'] in _VISUALS | _FORMULAS | {'table'}:
+                continue
+            value, offsets = _anchor_text(native['block_content'])
+            start = value.find(target)
+            if start >= 0 and value.find(target, start + 1) < 0:
+                begin, end = offsets[start], offsets[start + len(target) - 1] + 1
+                raw = native['block_content']
+                if ((begin and raw[begin - 1].isalnum()) or
+                        (end < len(raw) and raw[end].isalnum()) or
+                        (len(target) <= 3 and value != target)):
+                    continue
+                matches.append((1., position, begin, end))
+        if not matches and required and len(target) >= 40:
+            for position, native in enumerate(result):
+                if native.get('sourceModelIndex') is not None or native['block_label'] in _VISUALS | _FORMULAS | {'table'}:
+                    continue
+                value, _ = _anchor_text(native['block_content'])
+                if .8 <= len(value) / len(target) <= 1.25:
+                    similarity = SequenceMatcher(None, target, value, autojunk=False).ratio()
+                    if similarity >= .9:
+                        matches.append((similarity, position, 0, len(native['block_content'])))
+        matches.sort(reverse=True)
+        if not matches or (len(matches) > 1 and matches[0][0] - matches[1][0] < .05):
+            if required:
+                return None, f'ambiguous-or-missing-text-anchor:{index}:{label}'
+            continue
+        _, position, begin, end = matches[0]
+        native = result[position]
+        value = native['block_content']
+        # Consume standalone Markdown prefix and trailing punctuation with the
+        # anchored region rather than emitting punctuation-only source blocks.
+        if not _anchor_text(value[:begin])[0]:
+            begin = 0
+        if not _anchor_text(value[end:])[0]:
+            end = len(value)
+        semantic = deepcopy(source)
+        semantic.update(block_label=label, block_bbox=list(native['block_bbox']),
+                        block_content=content, textSource='model-markdown',
+                        sourceModelIndex=index, sourceModelContent=content)
+        replacement = []
+        if value[:begin].strip():
+            replacement.append(dict(native, block_content=value[:begin].strip()))
+        replacement.append(semantic)
+        if value[end:].strip():
+            replacement.append(dict(native, block_content=value[end:].strip()))
+        result[position:position + 1] = replacement
+    return result, None
+
+
 def _column(rect, page):
     middle = page.rect.width / 2
     if rect.x0 < middle - page.rect.width * .04 and rect.x1 > middle + page.rect.width * .04:
@@ -224,22 +331,24 @@ def _bind_columns(models, source_rects, page):
 
 
 def _visuals_bound(model, figures, page):
+    used = set()
     for block in model:
         if block.get('block_label') not in _VISUALS:
             continue
-        if any(f['key'] in _text(block) for f in figures):
-            continue
-        box = block.get('block_bbox')
-        if not isinstance(box, (list, tuple)) or len(box) != 4:
+        matches = [f for f in figures if f['key'] in _text(block)]
+        if not matches:
+            box = block.get('block_bbox')
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                return False
+            try:
+                rect = _rect(box, page)
+                matches = [f for f in figures if (rect & _rect(f['bbox'], page)).get_area()
+                           / max(1, min(rect.get_area(), _rect(f['bbox'], page).get_area())) >= .5]
+            except (TypeError, ValueError):
+                return False
+        if len(matches) != 1 or matches[0]['key'] in used:
             return False
-        try:
-            rect = _rect(box, page)
-            matches = [f for f in figures if (rect & _rect(f['bbox'], page)).get_area()
-                       / max(1, min(rect.get_area(), _rect(f['bbox'], page).get_area())) >= .5]
-        except (TypeError, ValueError):
-            return False
-        if len(matches) != 1:
-            return False
+        used.add(matches[0]['key'])
     return True
 
 
@@ -288,6 +397,7 @@ def _equation_units(native, model, page):
             else:
                 content = content.rstrip() + f'\n\n({number})'
         part = _block('formula', rect, content, page)
+        part['sourceModelIndex'] = next(i for i, item in enumerate(model) if item is formula)
         part['sourceEquationNumber'] = number
         units.append(_unit(rect, part))
     return units, claimed
@@ -306,8 +416,8 @@ def _project_page(page, output, figures):
     letters = sum(c.isalpha() for c in text)
     if letters < 80 or text.count('\ufffd') / max(1, len(text)) > .03:
         return None
-    model = output.get('parsing_res_list', [])
-    if not _visuals_bound(model, figures, page):
+    model = output.get('modelLayoutBlocks', output.get('parsing_res_list', []))
+    if not _visuals_bound(output.get('sourceFigureBlocks', model), figures, page):
         return None
     units, claimed = _equation_units(native, model, page)
     if len(units) != sum(b.get('block_label') in _FORMULAS and bool(_text(b).strip()) for b in model):
@@ -333,6 +443,11 @@ def _project_page(page, output, figures):
         masks.append(box)
         image = _block('image', box, f'![Figure {identifier}]({figure["key"]})', page)
         image['figureSource'] = 'pdf'
+        for visual in output.get('sourceFigureBlocks', model):
+            if visual.get('block_label') in _VISUALS and figure['key'] in _text(visual):
+                image['sourceModelIndex'] = visual.get('sourceModelIndex', next(
+                    (j for j, item in enumerate(model) if item is visual), None))
+                break
         units.append(_unit(box | caption['rect'], image,
                            _block('figure_caption', caption['rect'], _clean(caption['text']), page)))
 
@@ -372,6 +487,8 @@ def _project_page(page, output, figures):
         if not content.strip():
             return None
         part = _block('table', box, content, page)
+        if model_tables:
+            part['sourceModelIndex'] = next(j for j, item in enumerate(model) if item is model_tables[n])
         part['textSource'] = 'model-table' if model_tables else 'pdf-native-table'
         units.append(_unit(box | caption_box,
                            _block('table_caption', caption_box, _clean('\n'.join(caption_text)), page), part))
@@ -393,7 +510,10 @@ def _project_page(page, output, figures):
         unit = _unit(box, *_text_parts(lines, block, page, body_font, aside))
         unit['aside'] = aside
         units.append(unit)
-    return _reading_order(units, page)
+    blocks, reason = _preserve_semantics(_reading_order(units, page), model, output.get('sourceFigureBlocks'))
+    if reason:
+        output['sourceOrderDiagnostic'] = {'method': 'model-preserved', 'reason': reason}
+    return blocks
 
 
 def project_native_pdf_pages(result, pdf_source, figures):
@@ -412,6 +532,7 @@ def project_native_pdf_pages(result, pdf_source, figures):
     doc = (fitz.open(stream=bytes(pdf_source), filetype='pdf')
            if isinstance(pdf_source, (bytes, bytearray, memoryview)) else fitz.open(os.fspath(pdf_source)))
     changed = []
+    restored = False
     with doc:
         for position, output in enumerate(pages):
             index = (output['sourcePage'] - 1 if isinstance(output.get('sourcePage'), int)
@@ -421,7 +542,20 @@ def project_native_pdf_pages(result, pdf_source, figures):
             page_figures = [f for f in figures if f.get('pageIndex') == index]
             blocks = _project_page(doc[index], output, page_figures)
             if not blocks:
+                if output.get('parsing_res_list'):
+                    output.setdefault('sourceOrderDiagnostic', {
+                        'method': 'model-preserved', 'reason': 'unreliable-native-or-structural-binding'})
+                if output.get('sourceOrder', {}).get('method') == 'pdf-native' and 'originalMarkdown' in output:
+                    markdown = output.get('markdown')
+                    if isinstance(markdown, dict):
+                        markdown['text'] = output['originalMarkdown']
+                    else:
+                        output['markdown'] = output['originalMarkdown']
+                    output.pop('sourceOrder', None)
+                    output.pop('sourceOrderBlocks', None)
+                    restored = True
                 continue
+            output.pop('sourceOrderDiagnostic', None)
             md = output.get('markdown', {})
             old = md.get('text', '') if isinstance(md, dict) else md
             output.setdefault('originalMarkdown', old)
@@ -434,14 +568,15 @@ def project_native_pdf_pages(result, pdf_source, figures):
                 md.setdefault('images', {})[figure['key']] = figure['imageBase64']
                 result.setdefault('images', {})[figure['key']] = figure['imageBase64']
             output['sourceOrderBlocks'] = blocks
-            output['sourceOrder'] = {'method': 'pdf-native', 'version': 1}
+            output['sourceOrder'] = {'method': 'pdf-native', 'version': 2}
             changed.append(index)
-    if changed:
+    if changed or restored:
         result.setdefault('originalMarkdown', result.get('markdown', ''))
         ordered = sorted(enumerate(pages), key=lambda pair: (
             pair[1].get('sourcePage', pair[1].get('pageIndex', pair[0]) + 1)))
         result['markdown'] = '\n\n'.join(
             p['markdown'].get('text', '') if isinstance(p.get('markdown'), dict)
             else p.get('markdown', '') for _, p in ordered)
-        result['sourceOrder'] = {'method': 'pdf-native', 'version': 1, 'pageIndices': changed}
+        result['sourceOrder'] = {'method': 'pdf-native' if changed else 'model-preserved',
+                                 'version': 2, 'pageIndices': changed}
     return result

@@ -51,7 +51,7 @@ INFERENCE_LOCK = asyncio.Lock()
 
 FORMULA_TYPES = {"equation", "equation_block", "formula"}
 VISUAL_TYPES = {"image", "chart", "seal", "char"}
-DEFAULT_IGNORE_LABELS = {"header", "footer", "page_number"}
+DEFAULT_IGNORE_LABELS: set[str] = set()
 
 
 def decode_file_payload(value: str) -> bytes:
@@ -347,8 +347,6 @@ def build_page_response(
     ignore_labels = ignore_labels or set()
     for block in blocks:
         block_type = str(block.get("type") or "unknown").lower()
-        if block_type in ignore_labels:
-            continue
         bbox = block_bbox(block, width, height)
         content = str(block.get("content") or "").strip()
         block_content = format_content(block_type, content)
@@ -358,13 +356,11 @@ def build_page_response(
                 visual_index += 1
                 path = f"ocr_images/navidc_p{page_index + 1}_{block_type}_{visual_index}.jpg"
                 page_images[path] = encoded
-                if block_type in {"image", "chart", "seal"}:
-                    block_content = f"![{block_type}]({path})"
-                elif block_content:
+                if block_content:
                     block_content = f"![{block_type}]({path})\n\n{block_content}"
                 else:
                     block_content = f"![{block_type}]({path})"
-        if block_content:
+        if block_content and block_type not in ignore_labels:
             markdown_parts.append(block_content)
         render_blocks.append({
             "block_label": block_type,
@@ -379,6 +375,7 @@ def build_page_response(
         "height": height,
         "markdown": {"text": markdown, "images": page_images},
         "parsing_res_list": render_blocks,
+        "rawBlocks": copy.deepcopy(blocks),
     }
     return markdown, page_images, result
 

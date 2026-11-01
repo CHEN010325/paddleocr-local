@@ -8,7 +8,7 @@ from PIL import Image
 from fastapi import HTTPException
 
 import ovisocr3_reference as reference
-from ovisocr3_tasks import task_prompt, decode_result, caption_markdown, document_content, page_hash
+from ovisocr3_tasks import task_prompt, decode_result, caption_markdown, document_content, page_hash, VISUAL_CATEGORIES
 
 
 class PDFPages:
@@ -72,8 +72,8 @@ def enhance_document(images, raw_outputs, stage1_task, infer, renderer=None):
                     # as readable text/code for page rendering without executable HTML.
                     blocks = json.loads(raw)
                     for block in blocks:
-                        block['content'] = caption_markdown(block['content'])
-                        if block['category'] in {'image', 'chart', 'header_image', 'footer_image'}:
+                        if block['category'] in VISUAL_CATEGORIES:
+                            block['content'] = caption_markdown(block['content'])
                             box = '_'.join(str(n) for n in block['bbox'])
                             block['content'] = f'<img src="images/bbox_{box}.jpg" />\n\n' + block['content']
                     raw = json.dumps(blocks, ensure_ascii=False)

@@ -276,7 +276,7 @@ def _parse_page(number, image, output, backend, page_prompt, stage1_prompt):
         save(folder / "blocks.json", blocks)
         save(folder / "adapter.json", diagnostics)
         (folder / "projected.md").write_text(projected, encoding="utf-8")
-        markdown = page_markdown(projected, number) if projected.strip() else ""
+        markdown = page_markdown(projected, number, unwrap_fence=False) if projected.strip() else ""
     else:
         markdown = page_markdown(cleaned, number)
     (folder / "page.md").write_text(markdown, encoding="utf-8")
@@ -723,11 +723,15 @@ def remap(markdown: str, mapping: Mapping[int, int]) -> str:
     return REF.sub(replace, markdown)
 
 
-def page_markdown(raw, page):
+def page_markdown(raw, page, *, unwrap_fence=True):
     """Accept Markdown, optionally fenced; qualify page-local crop references."""
-    markdown = re.sub(
-        r"^```(?:markdown|html)?\s*\n|\n```\s*$", "", raw.strip(), flags=re.I
-    )
+    markdown = raw.strip()
+    # Structured category content already is Markdown; its code fences belong
+    # to algorithms/source examples rather than an enclosing response wrapper.
+    if unwrap_fence:
+        markdown = re.sub(
+            r"^```(?:markdown|html)?\s*\n|\n```\s*$", "", markdown, flags=re.I
+        )
     if not markdown:
         raise ValueError("Empty Stage 1 Markdown.")
     # Each Stage 1 call contains one image, so crop IDs refer to this page.

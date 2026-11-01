@@ -501,16 +501,11 @@ def is_markdown_table_separator(line: str) -> bool:
 
 
 def extract_markdown_tables(markdown: str) -> list[list[list[str]]]:
-    lines = normalize_markdown(markdown).split("\n")
+    lines = _without_fenced_code(normalize_markdown(markdown)).split("\n")
     tables: list[list[list[str]]] = []
-    in_fence = False
     index = 0
     while index < len(lines) - 1:
-        if FENCE_RE.match(lines[index]):
-            in_fence = not in_fence
-            index += 1
-            continue
-        if in_fence or "|" not in lines[index] or not is_markdown_table_separator(lines[index + 1]):
+        if "|" not in lines[index] or not is_markdown_table_separator(lines[index + 1]):
             index += 1
             continue
         header = split_markdown_table_row(lines[index])
@@ -652,7 +647,7 @@ class _HtmlTableParser(HTMLParser):
 
 def extract_html_table_specs(markdown: str) -> list[HtmlTableSpec]:
     parser = _HtmlTableParser()
-    for match in HTML_TABLE_RE.finditer(normalize_markdown(markdown)):
+    for match in HTML_TABLE_RE.finditer(_without_fenced_code(normalize_markdown(markdown))):
         parser.feed(match.group(0))
     return parser.tables
 
@@ -661,18 +656,67 @@ def extract_html_tables(markdown: str) -> list[list[list[str]]]:
     return [table.rows for table in extract_html_table_specs(markdown)]
 
 
+def _code_fence(line: str):
+    return re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip('\r\n'))
+
+
+def _closes_code_fence(fence, opened: tuple[str, int]) -> bool:
+    token, tail = fence.groups()
+    return token[0] == opened[0] and len(token) >= opened[1] and not tail.strip()
+
+
+def _fenced_code_ranges(markdown: str) -> list[tuple[int, int]]:
+    """Offsets of code fences, including unfinished code at the end of OCR."""
+    ranges = []
+    opened = None
+    offset = 0
+    for line in markdown.splitlines(keepends=True):
+        fence = _code_fence(line)
+        if fence:
+            token, tail = fence.groups()
+            if opened is None:
+                opened = (token[0], len(token), offset)
+            elif _closes_code_fence(fence, opened[:2]):
+                ranges.append((opened[2], offset + len(line)))
+                opened = None
+        offset += len(line)
+    if opened is not None:
+        ranges.append((opened[2], len(markdown)))
+    return ranges
+
+
+def _without_fenced_code(markdown: str) -> str:
+    # Preserve line boundaries so separate real tables never become adjacent.
+    chunks = []
+    previous = 0
+    for start, end in _fenced_code_ranges(markdown):
+        chunks.extend((markdown[previous:start], re.sub(r"[^\n]", " ", markdown[start:end])))
+        previous = end
+    chunks.append(markdown[previous:])
+    return "".join(chunks)
+
+
 def _prepare_html_table_markers(markdown: str) -> tuple[str, list[HtmlTableSpec]]:
     tables: list[HtmlTableSpec] = []
+    markdown = normalize_markdown(markdown)
+    code_ranges = _fenced_code_ranges(markdown)
 
     def replace(match: re.Match) -> str:
+        if any(start <= match.start() < end for start, end in code_ranges):
+            return match.group(0)
         parsed = extract_html_table_specs(match.group(0))
         if not parsed:
             return match.group(0)
         index = len(tables)
         tables.extend(parsed)
-        return f"\n__PANDOCR_HTML_TABLE_{index}__\n"
+        # A table's HTML caption is part of the recognized content, although it
+        # is not a cell. Keep it as a paragraph before replacing the grid.
+        captions = re.findall(r"<caption\b[^>]*>(.*?)</caption\s*>", match.group(0), re.I | re.S)
+        caption_text = "\n\n".join(_plain_markdown_preserving_formulas(value) for value in captions)
+        prefix = f"\n\n{caption_text}\n\n" if caption_text else "\n"
+        return prefix + f"__PANDOCR_HTML_TABLE_{index}__\n"
 
-    return HTML_TABLE_RE.sub(replace, normalize_markdown(markdown)), tables
+    return HTML_TABLE_RE.sub(replace, markdown), tables
 
 
 def _inline_token_content(match: re.Match) -> str:
@@ -1669,7 +1713,7 @@ def build_docx(task: dict) -> bytes:
 
     lines = markdown.split("\n")
     index = 0
-    in_fence = False
+    opened_fence = None
     code_lines: list[str] = []
     paragraph_lines: list[str] = []
     # A wide HTML table is rendered in a landscape section.  Keep that
@@ -1701,8 +1745,34 @@ def build_docx(task: dict) -> bytes:
         _add_inline_markdown(paragraph, content, display_math=display_math)
         paragraph_lines.clear()
 
+    def flush_code() -> None:
+        paragraph = document.add_paragraph("\n".join(code_lines))
+        paragraph.style = document.styles["Normal"]
+        paragraph.paragraph_format.left_indent = Inches(0.18)
+        paragraph.paragraph_format.right_indent = Inches(0.18)
+        for run in paragraph.runs:
+            _set_run_font(run, "Courier New")
+            run.font.size = Pt(9)
+        code_lines.clear()
+
     while index < len(lines):
         line = lines[index]
+        fence = _code_fence(line)
+        if opened_fence is not None:
+            if fence and _closes_code_fence(fence, opened_fence):
+                flush_code()
+                opened_fence = None
+            else:
+                code_lines.append(line)
+            index += 1
+            continue
+        if fence:
+            flush_paragraph()
+            ensure_portrait_section()
+            token = fence.group(1)
+            opened_fence = (token[0], len(token))
+            index += 1
+            continue
         if landscape_section_open and line.strip():
             next_marker = re.fullmatch(r"__PANDOCR_HTML_TABLE_(\d+)__", line.strip())
             is_next_wide_table = False
@@ -1779,24 +1849,6 @@ def build_docx(task: dict) -> bytes:
                     )
             index += 1
             continue
-        if FENCE_RE.match(line):
-            flush_paragraph()
-            if in_fence:
-                paragraph = document.add_paragraph("\n".join(code_lines))
-                paragraph.style = document.styles["Normal"]
-                paragraph.paragraph_format.left_indent = Inches(0.18)
-                paragraph.paragraph_format.right_indent = Inches(0.18)
-                for run in paragraph.runs:
-                    _set_run_font(run, "Courier New")
-                    run.font.size = Pt(9)
-                code_lines.clear()
-            in_fence = not in_fence
-            index += 1
-            continue
-        if in_fence:
-            code_lines.append(line)
-            index += 1
-            continue
         if index + 1 < len(lines) and "|" in line and is_markdown_table_separator(lines[index + 1]):
             flush_paragraph()
             header = split_markdown_table_row(line)
@@ -1862,8 +1914,8 @@ def build_docx(task: dict) -> bytes:
             continue
         paragraph_lines.append(line)
         index += 1
-    if in_fence and code_lines:
-        paragraph_lines.extend(code_lines)
+    if opened_fence is not None and code_lines:
+        flush_code()
     flush_paragraph()
 
     output = io.BytesIO()

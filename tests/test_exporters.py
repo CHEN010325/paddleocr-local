@@ -36,6 +36,48 @@ from exporters import (
 )
 
 
+def test_algorithm_html_table_source_stays_code_in_docx():
+    source = '```html\n<table><caption>Literal caption</caption><tr><td>LITERAL_CELL</td></tr></table>\n```\n\nAFTER_CODE'
+    doc = Document(io.BytesIO(build_docx({'name': 'Algorithm', 'markdown': source})))
+    assert len(doc.tables) == 0
+    text = '\n'.join(p.text for p in doc.paragraphs)
+    assert '<table><caption>Literal caption</caption>' in text
+    assert 'LITERAL_CELL' in text and 'AFTER_CODE' in text
+
+
+@pytest.mark.parametrize('opening,body,closing', [
+    ('```html', '<table><tr><td>UNCLOSED_CELL</td></tr></table>', ''),
+    ('````html', '```\n<table><tr><td>NESTED_CELL</td></tr></table>', '````'),
+    ('```python', 'BEFORE_SENTINEL\nAlgorithm 1: EXAMPLE\nprint("<table>")', '```'),
+])
+def test_docx_preserves_fenced_source_verbatim_even_if_unclosed(opening, body, closing):
+    markdown = opening + '\n' + body + ('\n' + closing + '\n\nAFTER_CODE' if closing else '')
+    doc = Document(io.BytesIO(build_docx({'markdown': markdown})))
+    texts = [p.text for p in doc.paragraphs]
+    assert body in texts
+    assert len(doc.tables) == 0
+    if closing:
+        assert texts.index(body) < texts.index('AFTER_CODE')
+
+
+@pytest.mark.parametrize('fence', ['```', '~~~~'])
+def test_xlsx_ignores_fenced_html_and_markdown_tables(fence):
+    markdown = (fence + 'html\n<table><tr><td>FAKE_HTML</td></tr></table>\n'
+                '| FAKE_MD | Value |\n| --- | --- |\n| x | y |\n' + fence
+                + '\n\n<table><tr><td>REAL_CELL</td></tr></table>')
+    assert extract_html_tables(markdown) == [[['REAL_CELL']]]
+    assert extract_markdown_tables(markdown) == []
+    workbook = load_workbook(io.BytesIO(build_xlsx({'markdown': markdown})))
+    assert len(workbook.worksheets) == 1
+    assert workbook.active.cell(1, 1).value == 'REAL_CELL'
+
+
+def test_markdown_table_extraction_obeys_outer_fence_length_and_unclosed_tail():
+    markdown = '````md\n```\n| FAKE | Value |\n| --- | --- |\n| a | b |\n````\n\n'
+    markdown += '| REAL | Value |\n| --- | --- |\n| a | b |\n\n~~~md\n| FAKE | Tail |\n| --- | --- |'
+    assert extract_markdown_tables(markdown) == [[['REAL', 'Value'], ['a', 'b']]]
+
+
 SAMPLE_MARKDOWN = """# 项目报告
 
 这是包含 **重点**、`code` 和 [链接](https://example.com) 的正文。

@@ -33,7 +33,7 @@ BLOCK_HEADER_RE = re.compile(
     r"([a-zA-Z_]+)\s*\[\s*([-\d.,\s]+)\]\s*(?:<(?:FORK|CHILD|BLOCK)>)?"
 )
 EMPTY_CONTENT_TYPES = {"chart", "seal"}
-CROPPED_VISUAL_TYPES = {"image", "figure", "chart"}
+CROPPED_VISUAL_TYPES = {"image", "figure", "chart", "seal", "header_image", "footer_image"}
 HPD_COORDINATE_SIZE = 1000.0
 SKIPPED_RAG_TYPES = {
     "header", "footer", "header_image", "footer_image", "page_number", "page_num", "number", "seal",
@@ -415,7 +415,13 @@ def convert_html_tables(text: str) -> str:
 
 
 def normalize_prose(text: str) -> str:
-    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if re.search(r'(?m)^\s*(?:```|~~~)|^(?: {4}|\t)\S', text):
+        return text.strip('\n')
+    text = text.strip()
+    paragraphs = re.split(r'\n[ \t]*\n+', text)
+    if len(paragraphs) > 1:
+        return '\n\n'.join(normalize_prose(paragraph) for paragraph in paragraphs if paragraph.strip())
     text = re.sub(r"(?<=[A-Za-z])-\s*\n\s*(?=[a-z])", "", text)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n") if line.strip()]
     if not lines:
@@ -455,9 +461,12 @@ def display_formula(text: str) -> str:
 
 
 def format_reference(text: str) -> str:
+    references = re.split(r'\n(?=\s*(?:\[\d+\]|\d+[.)])\s*)', text.strip())
+    if len(references) > 1:
+        return '\n\n'.join(format_reference(reference.strip()) for reference in references if reference.strip())
     text = normalize_prose(text)
     match = re.match(r"^\[(\d+)\]\s*(.*)", text, re.DOTALL)
-    return f"{match.group(1)}. {match.group(2).strip()}" if match else f"- {text}"
+    return f"{match.group(1)}. {match.group(2).strip()}" if match else text if re.match(r'^\d+[.)]\s', text) else f"- {text}"
 
 
 def format_rag_text_block(block_type: str, text: str, bbox: Any) -> str:
@@ -644,10 +653,11 @@ def parse_blocks(raw_text: str) -> list[dict[str, Any]]:
             if len(values) == 4:
                 bbox = [int(value) if value.is_integer() else value for value in values]
         text = ""
-        if block_type.lower() not in EMPTY_CONTENT_TYPES:
-            content = re.search(r"<CHILD>(.*)", segment, re.DOTALL)
-            if content:
-                text = clean_block_text(re.split(r"<(?:FORK|CHILD|BLOCK)>", content.group(1))[0])
+        # Chart/seal normally have no child text. Preserve any text the model
+        # actually emits, while the official Markdown utility keeps its defaults.
+        content = re.search(r"<CHILD>(.*)", segment, re.DOTALL)
+        if content:
+            text = clean_block_text(re.split(r"<(?:FORK|CHILD|BLOCK)>", content.group(1))[0])
         blocks.append({"type": block_type, "bbox": bbox, "text": text})
     return blocks
 
@@ -660,7 +670,7 @@ def blocks_to_official_markdown(blocks: list[dict[str, Any]]) -> str:
     ).strip()
 
 
-async def parse_page(client: httpx.AsyncClient, image: Image.Image, semaphore: asyncio.Semaphore) -> tuple[str, list[dict[str, Any]]]:
+async def parse_page(client: httpx.AsyncClient, image: Image.Image, semaphore: asyncio.Semaphore) -> tuple[str, list[dict[str, Any]], str]:
     body = {
         "model": MODEL_NAME,
         "messages": [{
@@ -683,18 +693,19 @@ async def parse_page(client: httpx.AsyncClient, image: Image.Image, semaphore: a
         raise HTTPException(status_code=502, detail="Unexpected response from HPD-Parsing server") from error
     blocks = parse_blocks(str(raw_text))
     markdown = blocks_to_official_markdown(blocks) or str(raw_text).strip()
-    return markdown, blocks
+    return markdown, blocks, str(raw_text)
 
 
 def build_response(
     pages: list[Image.Image],
-    parsed: list[tuple[str, list[dict[str, Any]]]],
+    parsed: list[tuple[str, list[dict[str, Any]]] | tuple[str, list[dict[str, Any]], str]],
     page_offset: int = 0,
 ) -> dict[str, Any]:
     markdown_pages: list[str] = []
     results: list[dict[str, Any]] = []
     all_images: dict[str, str] = {}
-    for local_index, (image, (markdown, blocks)) in enumerate(zip(pages, parsed)):
+    for local_index, (image, parsed_page) in enumerate(zip(pages, parsed)):
+        markdown, blocks = parsed_page[:2]
         index = page_offset + local_index
         document_title_pending = index == 0
         page_images: dict[str, str] = {}
@@ -705,7 +716,7 @@ def build_response(
             content_parts: list[str] = []
             block_type = str(block["type"] or "unknown").lower()
             formatting_type = block_type
-            if document_title_pending and block_type in TITLE_TYPES and str(block["text"] or "").strip():
+            if document_title_pending and block_type in {"title", "doc_title"} and str(block["text"] or "").strip():
                 formatting_type = "doc_title"
                 document_title_pending = False
             if block_type in CROPPED_VISUAL_TYPES:
@@ -718,7 +729,16 @@ def build_response(
                     page_images[image_path] = encoded_crop
                     all_images[image_path] = encoded_crop
                     content_parts.append(image_markdown)
-            formatted_text = format_rag_text_block(formatting_type, str(block["text"] or ""), block["bbox"])
+            if block_type == 'table' or '<table' in str(block['text'] or '').lower():
+                # Main document output retains captions, merged cells and HTML
+                # attributes. GFM conversion remains an opt-in utility for RAG.
+                formatted_text = str(block['text'] or '').strip()
+            else:
+                formatted_text = format_rag_text_block(formatting_type, str(block["text"] or ""), block["bbox"])
+            # The main document view retains marginal content. RAG consumers
+            # can still call the formatter with its established skip policy.
+            if block_type in SKIPPED_RAG_TYPES:
+                formatted_text = str(block["text"] or "").strip()
             if formatted_text:
                 content_parts.append(formatted_text)
             block_content = "\n\n".join(content_parts).strip()
@@ -739,6 +759,8 @@ def build_response(
             "markdown": {"text": page_markdown, "images": page_images},
             "parsing_res_list": parsing_blocks,
         })
+        if len(parsed_page) > 2:
+            results[-1]['rawOutput'] = parsed_page[2]
     return {
         "markdown": "\n\n".join(page for page in markdown_pages if page),
         "images": all_images,

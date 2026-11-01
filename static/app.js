@@ -1962,7 +1962,7 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
         return;
     }
 
-    const markdown = prepareMarkdownForRender(visibleTaskMarkdown(task));
+    const markdown = prepareMarkdownForRender(visibleTaskMarkdown(task), task);
     if (!markdown) {
         renderedOfficialLayoutContext = '';
         clearSourceHighlight();
@@ -2854,7 +2854,7 @@ function startMarkdownEdit() {
     if (!task || isProcessing || !visibleTaskMarkdown(task) || activeResultView !== 'markdown') return;
     const editor = document.createElement('textarea');
     editor.className = 'markdown-editor';
-    editor.value = normalizeOCRMarkdown(visibleTaskMarkdown(task));
+    editor.value = normalizeOCRMarkdown(visibleTaskMarkdown(task), task);
     const shell = document.createElement('div');
     shell.className = 'markdown-editor-shell';
     const actions = document.createElement('div');
@@ -3037,7 +3037,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                     delete batch._progressStartedAt;
                     releaseBatchPayload(batch);
                 }
-                const prepared = prepareBatchResult(result, batch.id);
+                const prepared = prepareBatchResult(result, batch.id, {}, task);
                 batch.status = 'completed';
                 batch.markdown = prepared.markdown;
                 rebuildTaskMarkdownFromBatches(task);
@@ -3408,7 +3408,8 @@ async function callStreamingUnlimitedOCR(batch, task, formData, model, signal = 
                 const prepared = prepareBatchResult(
                     { markdown: event.markdown, images: event.images || {} },
                     batch.id,
-                    batch._streamImagePathMap || {}
+                    batch._streamImagePathMap || {},
+                    task
                 );
                 batch._streamImagePathMap = prepared.imagePathMap;
                 if (!task.images || typeof task.images !== 'object') task.images = {};
@@ -3630,7 +3631,7 @@ function updateActionState(task) {
     }
     if (els.htmlExportBtn) els.htmlExportBtn.disabled = !hasMarkdown;
     if (els.csvExportBtn) {
-        const tableCount = cachedExtractMarkdownTables(visibleTaskMarkdown(task)).length;
+        const tableCount = cachedExtractMarkdownTables(visibleTaskMarkdown(task), task).length;
         els.csvExportBtn.classList.toggle('hidden', tableCount === 0);
         els.csvExportBtn.disabled = tableCount === 0;
         els.csvExportBtn.title = tableCount > 0
@@ -3740,7 +3741,7 @@ function activeResultCopyText(task) {
         return JSON.stringify(toOfficialJson(task), null, 2);
     }
     const markdown = visibleTaskMarkdown(task);
-    return markdown ? normalizeOCRMarkdown(markdown) : '';
+    return markdown ? normalizeOCRMarkdown(markdown, task) : '';
 }
 
 async function copyActiveResult() {
@@ -3769,7 +3770,7 @@ async function downloadActiveTask() {
         return;
     }
 
-    const markdown = normalizeOCRMarkdown(visibleTaskMarkdown(task));
+    const markdown = normalizeOCRMarkdown(visibleTaskMarkdown(task), task);
     const ovisMode = task.ovisOptions?.task;
     if (isOvisOCR3Task(task) && ['plain_ocr','region_ocr','text_translation','formula_recognition'].includes(ovisMode)) {
         downloadBlob(new Blob([markdown], { type:'text/plain;charset=utf-8' }), safeDownloadName(task.name, ovisMode === 'formula_recognition' ? 'tex' : 'txt'));
@@ -3807,7 +3808,7 @@ function imageMimeTypeForPath(path) {
 }
 
 function embedTaskImagesInMarkdown(task, markdown = visibleTaskMarkdown(task)) {
-    let embedded = normalizeOCRMarkdown(markdown || '');
+    let embedded = normalizeOCRMarkdown(markdown || '', task);
     Object.entries(task?.images || {}).forEach(([path, payload]) => {
         const value = String(payload || '');
         const dataUri = value.startsWith('data:')
@@ -3906,8 +3907,8 @@ function isMarkdownTableSeparator(line) {
     return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
 }
 
-function extractMarkdownTables(markdown) {
-    const lines = normalizeOCRMarkdown(markdown || '').split('\n');
+function extractMarkdownTables(markdown, context = null) {
+    const lines = normalizeOCRMarkdown(markdown || '', context).split('\n');
     const tables = [];
     let inFence = false;
     for (let index = 0; index < lines.length - 1; index += 1) {
@@ -3933,11 +3934,11 @@ function extractMarkdownTables(markdown) {
     return tables;
 }
 
-function cachedExtractMarkdownTables(markdown) {
-    const source = String(markdown || '');
+function cachedExtractMarkdownTables(markdown, context = null) {
+    const source = normalizeOCRMarkdown(markdown || '', context);
     if (source === cachedMarkdownTableSource) return cachedMarkdownTables;
     cachedMarkdownTableSource = source;
-    cachedMarkdownTables = extractMarkdownTables(source);
+    cachedMarkdownTables = extractMarkdownTables(source, context);
     return cachedMarkdownTables;
 }
 
@@ -3952,7 +3953,7 @@ function markdownTableToCsv(rows) {
 async function downloadActiveTaskTablesAsCsv() {
     const task = getActiveTask();
     if (!task) return;
-    const tables = cachedExtractMarkdownTables(visibleTaskMarkdown(task));
+    const tables = cachedExtractMarkdownTables(visibleTaskMarkdown(task), task);
     if (tables.length === 0) return;
     if (tables.length === 1) {
         const csv = `\ufeff${markdownTableToCsv(tables[0])}`;
@@ -4331,8 +4332,7 @@ async function getTaskSourceBlob(task, mimeType) {
     return blob;
 }
 
-const unlimitedOCRDetPattern = /<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|\/det\|>/g;
-const unlimitedOCRSkipMarkdownLabels = new Set(['header', 'footer', 'number', 'page_number', 'page_num']);
+const unlimitedOCRDetPattern = /<\|det\|>\s*([A-Za-z_][\w-]*)\s*(\[[^\]]*\])?\s*<\|\/det\|>(?:\s*<LEVEL(\d+)>)?/g;
 const unlimitedOCRCaptionLabels = new Set(['image_caption', 'figure_caption', 'table_caption']);
 const unlimitedOCRTitleLabels = new Set(['title', 'section_title']);
 
@@ -4344,28 +4344,26 @@ function normalizeMarkdownNewlines(markdown) {
 
 function compactMarkdownBlock(text) {
     return normalizeMarkdownNewlines(text)
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
+        .replace(/^\n+|\n+$/g, '');
 }
 
-function formatUnlimitedOCRBlock(label, content, seenTitle) {
-    const normalizedLabel = String(label || '').toLowerCase().trim();
+function formatUnlimitedOCRBlock(label, content, seenTitle, headingLevel = null) {
+    const normalizedLabel = String(label || '').toLowerCase().trim().replace(/^(?:cross_|append_)+/, '');
     const text = compactMarkdownBlock(content);
-    if (!text || unlimitedOCRSkipMarkdownLabels.has(normalizedLabel)) {
+    if (!text.trim()) {
         return { block: '', seenTitle };
     }
     if (unlimitedOCRTitleLabels.has(normalizedLabel)) {
-        return { block: `${seenTitle ? '##' : '#'} ${text}`, seenTitle: true };
+        if (text.trimStart().startsWith('#')) return { block: text, seenTitle: true };
+        const depth = headingLevel ? Math.min(6, Math.max(1, Number(headingLevel))) : (seenTitle ? 2 : 1);
+        return { block: `${'#'.repeat(depth)} ${text.trim()}`, seenTitle: true };
     }
     if (unlimitedOCRCaptionLabels.has(normalizedLabel)) {
-        return { block: `*${text}*`, seenTitle };
+        return { block: text, seenTitle };
     }
-    if (normalizedLabel === 'formula' || normalizedLabel === 'display_formula') {
+    if (['formula', 'display_formula', 'equation', 'equation_block'].includes(normalizedLabel)) {
+        if (/^(?:\$|\\\(|\\\[)/.test(text.trimStart())) return { block: text, seenTitle };
         return { block: `$$\n${text}\n$$`, seenTitle };
-    }
-    if (normalizedLabel === 'image' || normalizedLabel === 'chart') {
-        return { block: `**${normalizedLabel.replace(/_/g, ' ')}:** ${text}`, seenTitle };
     }
     return { block: text, seenTitle };
 }
@@ -4387,7 +4385,7 @@ function cleanUnlimitedOCRMarkdown(markdown) {
     let seenTitle = false;
     matches.forEach((match, index) => {
         const nextStart = matches[index + 1]?.index ?? text.length;
-        const formatted = formatUnlimitedOCRBlock(match[1], text.slice(match.index + match[0].length, nextStart), seenTitle);
+        const formatted = formatUnlimitedOCRBlock(match[1], text.slice(match.index + match[0].length, nextStart), seenTitle, match[3]);
         seenTitle = formatted.seenTitle;
         if (formatted.block) blocks.push(formatted.block);
     });
@@ -4395,9 +4393,11 @@ function cleanUnlimitedOCRMarkdown(markdown) {
     return compactMarkdownBlock(blocks.join('\n\n'));
 }
 
-function normalizeOCRMarkdown(markdown) {
+function normalizeOCRMarkdown(markdown, context = null) {
     const normalized = normalizeMarkdownNewlines(markdown);
-    return normalized.includes('<|det|>') ? cleanUnlimitedOCRMarkdown(normalized) : normalized;
+    const parser = context?.parser || context?.modelId || context?.ocrResults?.find(page => page?.parser)?.parser;
+    const unlimited = context == null || parser === UNLIMITED_OCR_MODEL_ID;
+    return unlimited && normalized.includes('<|det|>') ? cleanUnlimitedOCRMarkdown(normalized) : normalized;
 }
 
 function escapeHtml(value) {
@@ -4439,8 +4439,8 @@ function mathToken(index) {
     return `PANDOCRMATHTOKEN${index}X`;
 }
 
-function prepareMarkdownForRender(markdown) {
-    return normalizeOCRMarkdown(markdown);
+function prepareMarkdownForRender(markdown, context = null) {
+    return normalizeOCRMarkdown(markdown, context);
 }
 
 function renderMathWhenReady(container, retries = 20) {
@@ -4455,7 +4455,7 @@ function renderMathWhenReady(container, retries = 20) {
             { left: '\\(', right: '\\)', display: false },
             { left: '$', right: '$', display: false }
         ],
-        ignoredTags: ['script', 'noscript', 'style', 'textarea'],
+        ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
         throwOnError: false,
         strict: false
     });
@@ -4512,7 +4512,7 @@ function createOfficialLayoutBlockElement(block, blockKey, task) {
     const element = document.createElement('section');
     element.className = 'layout-linked-block official-layout-block';
     element.dataset.blockKey = blockKey;
-    element.dataset.layoutLabel = layoutLabelText(block.label);
+    element.dataset.layoutLabel = layoutLabelText(block.label, block);
     element.dataset.page = String(block.page);
     element.dataset.blockIndex = String(block.blockIndex);
 
@@ -4625,11 +4625,14 @@ function collectOfficialRenderBlocks(task) {
 
     task.ocrResults.forEach((pageResult, pageIndex) => {
         const pruned = pageResult?.prunedResult || pageResult;
-        const parsingBlocks = Array.isArray(pruned?.parsing_res_list) ? pruned.parsing_res_list : [];
+        const sourceOrdered = pageResult?.sourceOrder?.method === 'pdf-native' && Array.isArray(pageResult.sourceOrderBlocks);
+        const parsingBlocks = sourceOrdered ? pageResult.sourceOrderBlocks
+            : Array.isArray(pageResult?.sourceFigureBlocks) ? pageResult.sourceFigureBlocks
+            : (Array.isArray(pruned?.parsing_res_list) ? pruned.parsing_res_list : []);
 
         parsingBlocks.forEach((sourceBlock, blockIndex) => {
             const bbox = sourceBlock.block_bbox || sourceBlock.coordinate || sourceBlock.bbox;
-            const label = sourceBlock.block_label || sourceBlock.label || '';
+            const label = sourceBlock.block_label || sourceBlock.label || sourceBlock.category || '';
             const content = sourceBlock.block_content ?? sourceBlock.text ?? sourceBlock.content ?? '';
             if (!Array.isArray(bbox) || bbox.length < 4) return;
             const bounds = layoutCoordinateBoundsForBlock(pageResult, pruned, bbox);
@@ -4641,6 +4644,7 @@ function collectOfficialRenderBlocks(task) {
                 page: Number(pageResult?.sourcePage || pageResult?.page_index || pageIndex + 1),
                 blockIndex,
                 label,
+                parser: pageResult?.parser || pruned?.parser || task?.modelId || '',
                 bbox,
                 pageWidth: bounds.pageWidth,
                 pageHeight: bounds.pageHeight,
@@ -4676,16 +4680,16 @@ function isIgnoredLayoutLabel(label) {
 }
 
 function isVisualLayoutLabel(label) {
-    return ['image', 'chart', 'table', 'algorithm'].includes(String(label || '').toLowerCase());
+    return ['image', 'chart', 'table', 'algorithm', 'header_image', 'footer_image', 'seal', 'char', 'figure', 'picture', 'img'].includes(String(label || '').toLowerCase());
 }
 
 function fallbackBlockContent(block) {
-    const label = layoutLabelText(block.label);
+    const label = layoutLabelText(block.label, block);
     return label ? `<div class="layout-block-placeholder">${escapeHtml(label)}</div>` : '';
 }
 
 function rewriteBlockImageSources(content, pageResult, task) {
-    let output = normalizeOCRMarkdown(String(content || ''));
+    let output = normalizeOCRMarkdown(String(content || ''), pageResult?.parser ? pageResult : task);
     const imageMaps = [
         pageResult?.markdown?.images,
         pageResult?.prunedResult?.markdown?.images,
@@ -4802,17 +4806,15 @@ function linkMarkdownToSourceBlocks(task) {
         }
     }
     let cursor = 0;
+    const usedVisualBlocks = new Set();
 
     elements.forEach((element) => {
         const isImageBlock = isMarkdownImageBlock(element);
-        const imageAlt = isImageBlock ? (element.matches('img') ? element.alt : element.querySelector('img')?.alt) : '';
-        const sourceFigureIndex = /^figure\s+\d+[a-z]?$/i.test(imageAlt || '')
-            ? blocks.findIndex(block=>['image','chart'].includes(block.label) && block.text.startsWith(normalizeMatchText(imageAlt)+' ')) : -1;
         const text = normalizeMatchText(element.innerText || element.textContent || '');
         if (!isImageBlock && text.length < 2) return;
 
-        let match = sourceFigureIndex >= 0 ? {index:sourceFigureIndex,block:blocks[sourceFigureIndex]} : isImageBlock
-            ? findNextLayoutBlockByLabel(blocks, cursor, ['image', 'chart', 'table'])
+        let match = isImageBlock
+            ? findVisualLayoutBlock(element, blocks, usedVisualBlocks)
             : isAlgorithmText(element.innerText || element.textContent || '')
                 ? findNextLayoutBlockByLabel(blocks, cursor, ['algorithm'])
             : isFigureTitleText(element.innerText || element.textContent || '')
@@ -4828,10 +4830,11 @@ function linkMarkdownToSourceBlocks(task) {
             match = {index:match?.index ?? cursor,block:{label:'text',...match?.block,...native}};
         }
         if (!match) return;
+        if (isImageBlock) usedVisualBlocks.add(match.index);
 
         cursor = Math.max(cursor, match.index);
         element.classList.add('layout-linked-block');
-        element.dataset.layoutLabel = layoutLabelText(match.block.label);
+        element.dataset.layoutLabel = layoutLabelText(match.block.label, match.block);
         registerLinkedLayoutBlock(element, match.block);
         addSourceHotspot(match.block, element);
         bindLinkedBlockEvents(element, match.block);
@@ -4844,21 +4847,26 @@ function collectLayoutBlocks(task) {
         const pruned = pageResult?.prunedResult || pageResult;
         const sourceOrdered = pageResult?.sourceOrder?.method === 'pdf-native' && Array.isArray(pageResult.sourceOrderBlocks);
         const parsingBlocks = sourceOrdered ? pageResult.sourceOrderBlocks
+            : Array.isArray(pageResult?.sourceFigureBlocks) ? pageResult.sourceFigureBlocks
             : (Array.isArray(pruned?.parsing_res_list) ? pruned.parsing_res_list : []);
         const pageNumber = Number(pageResult?.sourcePage || pruned?.sourcePage || pageResult?.page_index || pageIndex + 1);
 
         parsingBlocks.forEach((block, blockIndex) => {
             const bbox = block.block_bbox || block.coordinate || block.bbox;
-            const content = block.block_content || block.text || block.content || '';
-            const label = block.block_label || block.label || '';
+            const content = block.block_content ?? block.text ?? block.content ?? '';
+            const label = block.block_label || block.label || block.category || '';
             if (!Array.isArray(bbox) || bbox.length < 4) return;
             const bounds = layoutCoordinateBoundsForBlock(pageResult, pruned, bbox);
             if (!bounds) return;
-            if (!content && !['image', 'chart', 'table'].includes(label)) return;
+            // Layout-only results have valid regions without recognized text.
+            // Keep their original category available for source linking.
             blocks.push({
                 page: pageNumber,
                 order: Number(block.block_order ?? blockIndex),
                 label,
+                parser: pageResult?.parser || pruned?.parser || task?.modelId || '',
+                content: String(content),
+                imageRefs: layoutImageReferences(content, pageResult, task),
                 sourceOrderVerified: Boolean(sourceOrdered),
                 bbox,
                 pageWidth: bounds.pageWidth,
@@ -4868,6 +4876,37 @@ function collectLayoutBlocks(task) {
         });
     });
     return blocks.sort((a, b) => (a.page - b.page) || (a.order - b.order));
+}
+
+function layoutImageReferences(content, pageResult, task) {
+    const refs = Array.from(String(content || '').matchAll(/!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?(?:\s+[^)]*)?\)/g),
+        match => ({ alt: match[1], src: match[2] }));
+    for (const match of String(content || '').matchAll(/<img\b[^>]*>/gi)) {
+        const src = /\bsrc\s*=\s*(["'])(.*?)\1/i.exec(match[0]);
+        const alt = /\balt\s*=\s*(["'])(.*?)\1/i.exec(match[0]);
+        if (src) refs.push({ alt: alt?.[2] || '', src: src[2] });
+    }
+    return refs.map(ref => {
+        const value = pageResult?.markdown?.images?.[ref.src]
+            ?? pageResult?.prunedResult?.markdown?.images?.[ref.src] ?? task?.images?.[ref.src];
+        return { ...ref, resolvedSrc: value == null ? ref.src : imageValueToSrc(value) };
+    });
+}
+
+function findVisualLayoutBlock(element, blocks, used) {
+    const image = element.matches('img') ? element : element.querySelector('img');
+    const src = image?.getAttribute('src') || '';
+    const alt = String(image?.alt || '').trim();
+    const candidates = blocks.map((block, index) => ({ block, index })).filter(({ block }) =>
+        ['image', 'chart', 'header_image', 'footer_image', 'seal', 'char', 'figure', 'picture', 'img'].includes(String(block.label).toLowerCase())
+        || block.imageRefs?.length);
+    const bySource = src ? candidates.filter(({ block }) => block.imageRefs.some(ref => ref.src === src || ref.resolvedSrc === src)) : [];
+    const byAlt = alt ? candidates.filter(({ block }) => block.imageRefs.some(ref => ref.alt.trim() === alt)) : [];
+    // A unique image identity can be repeated or appear after later body text.
+    // Ambiguous/generic images consume regions once in document order.
+    if (bySource.length === 1) return bySource[0];
+    if (byAlt.length === 1) return byAlt[0];
+    return (bySource.length ? bySource : byAlt.length ? byAlt : candidates).find(({ index }) => !used.has(index)) || null;
 }
 
 function registerLinkedLayoutBlock(element, block) {
@@ -5094,7 +5133,7 @@ function showSourceHighlight(block) {
     positionSourceOverlayBox(box, block, surface.element);
     const label = document.createElement('span');
     label.className = 'source-highlight-label';
-    label.textContent = layoutLabelText(block.label);
+    label.textContent = layoutLabelText(block.label, block);
     box.appendChild(label);
     surface.layer.appendChild(box);
 
@@ -5128,7 +5167,7 @@ function showStreamingSourceHighlight(position) {
 
     const label = document.createElement('span');
     label.className = 'source-highlight-label';
-    label.textContent = position?.label ? layoutLabelText(position.label) : t('解析中');
+    label.textContent = position?.label ? layoutLabelText(position.label, position.parser || position.modelId ? position : getActiveTask()) : t('解析中');
     box.appendChild(label);
     surface.layer.appendChild(box);
 }
@@ -5193,7 +5232,7 @@ function addSourceHotspot(block, markdownElement) {
     const hotspot = document.createElement('button');
     hotspot.type = 'button';
     hotspot.className = 'source-link-hotspot';
-    hotspot.setAttribute('aria-label', layoutLabelText(block.label));
+    hotspot.setAttribute('aria-label', layoutLabelText(block.label, block));
     positionSourceOverlayBox(hotspot, block, surface.element);
 
     const preview = () => activateLinkedBlock(markdownElement, block);
@@ -5288,10 +5327,14 @@ function scrollElementIntoContainer(element, container, behavior = 'smooth') {
     container.scrollTo({ top: Math.max(centeredTop, 0), behavior });
 }
 
-function layoutLabelText(label) {
-    const normalized = String(label || '').trim().toLowerCase();
+function layoutLabelText(label, context = null) {
+    const raw = String(label || '').trim();
+    const nativeParser = String(context?.parser || context?.modelId || '').toLowerCase();
+    const parser = nativeParser === 'ovisocr3' ? OVIS_OCR_MODEL_ID : nativeParser;
+    const normalized = parser === UNLIMITED_OCR_MODEL_ID ? raw.toLowerCase().replace(/^(?:cross_|append_)+/, '') : raw.toLowerCase();
     const labels = {
         abstract: '摘要',
+        content: '目录',
         doc_title: '标题',
         title: '标题',
         paragraph_title: '段落标题',
@@ -5301,6 +5344,7 @@ function layoutLabelText(label) {
         table: '表格',
         formula: '公式',
         display_formula: '行间公式',
+        inline_formula: '行内公式',
         formula_number: '公式编号',
         equation: '公式',
         equation_block: '公式块',
@@ -5311,6 +5355,8 @@ function layoutLabelText(label) {
         table_footnote: '表格脚注',
         image_footnote: '图片脚注',
         page_footnote: '页脚注',
+        vision_footnote: '图表脚注',
+        vertical_text: '竖排文本',
         list: '列表',
         aside_text: '侧栏文本',
         footer: '页脚',
@@ -5341,13 +5387,28 @@ function layoutLabelText(label) {
         subtitle: '副标题',
         seal: '印章'
     };
-    return labels[normalized]
-        ? t(labels[normalized])
-        : (unlimitedLabels[normalized] ? t(unlimitedLabels[normalized]) : (normalized || t('版面块')));
+    const nativeKeys = {
+        'ovisocr2': 'abstract algorithm aside_text chart content display_formula doc_title figure_title footer footer_image footnote formula_number header header_image image inline_formula number paragraph_title reference_content seal table text vertical_text vision_footnote',
+        'unlimited-ocr': 'title section_title text image figure picture img chart table algorithm image_caption figure_caption table_caption image_footnote page_footnote ref_text aside_text header footer number page_number page_num equation formula display_formula footnote list code subtitle header_image footer_image seal',
+        'hpd-parsing': 'abstract algorithm aside_text chart doc_title title section_title paragraph_title subtitle reference_title ref_title image figure image_caption figure_caption figure_title table table_caption formula display_formula equation reference reference_content reference_text ref_text header footer header_image footer_image page_number page_num number seal text footnote code list',
+        'navidc-ocr': 'text title table image code algorithm header footer page_number page_footnote aside_text equation equation_block ref_text list phonetic table_caption image_caption code_caption table_footnote image_footnote unknown seal char'
+    };
+    const common = { ...unlimitedLabels, ...labels };
+    let display;
+    if (!parser || parser === DEFAULT_MODEL_ID) {
+        display = common[normalized];
+    } else if (nativeKeys[parser]?.split(' ').includes(normalized)) {
+        const overrides = parser === UNLIMITED_OCR_MODEL_ID ? unlimitedLabels
+            : parser === HPD_PARSING_MODEL_ID ? { image_caption: '图片说明', table_caption: '表格说明', figure_title: '图注', figure: '图片' }
+            : parser === 'navidc-ocr' ? { char: '科学图示', phonetic: '注音/拼音', unknown: '未分类' } : {};
+        display = overrides[normalized] || common[normalized];
+        if (parser === UNLIMITED_OCR_MODEL_ID && ['figure', 'picture', 'img'].includes(normalized)) display = '图片';
+    }
+    return display ? t(display) : (raw || t('版面块'));
 }
 
-function prepareBatchResult(result, batchId, existingImagePathMap = {}) {
-    let markdown = normalizeOCRMarkdown(result.markdown || '');
+function prepareBatchResult(result, batchId, existingImagePathMap = {}, context = null) {
+    let markdown = normalizeOCRMarkdown(result.markdown || '', context);
     const images = {};
     const imagePathMap = { ...(existingImagePathMap || {}) };
     Object.entries(result.images || {}).forEach(([path, base64]) => {
@@ -5724,7 +5785,7 @@ async function enhanceOvisDocument(task, signal = activeOcrAbortController?.sign
         if (!response.ok) throw new Error(await responseErrorText(response));
         const result = await response.json();
         if (!result.enhancement || typeof result.markdown !== 'string') throw new Error('跨页重建服务未返回完整结果，请更新模型服务');
-        const prepared = prepareBatchResult(result,`${task.id}_enhanced`);
+        const prepared = prepareBatchResult(result,`${task.id}_enhanced`,{},task);
         task.markdown = prepared.markdown;
         Object.assign(task.images, prepared.images);
         archiveOvisOriginalResult(task, result, `${task.id}_enhanced`);

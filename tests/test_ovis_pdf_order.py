@@ -3,7 +3,7 @@ import unittest
 
 import fitz
 
-from ovisocr3_pdf_order import project_native_pdf_pages
+from ovisocr3_pdf_order import project_native_pdf_pages, _text_parts
 
 
 def document(lines, rotation=0, table=False):
@@ -35,6 +35,28 @@ def figure(box, caption='Fig. 1. Source diagram.'):
 
 
 class SourceOrderTests(unittest.TestCase):
+    def test_merged_reference_block_splits_entries_and_source_geometry(self):
+        doc = fitz.open()
+        page = doc.new_page(width=600, height=800)
+        lines = [(fitz.Rect(x, y, 300, y + 8), text, (1, 0)) for x, y, text in [
+            (50, 60, '[9] A. Author, First source title,'),
+            (65, 70, 'Journal of reliable source document parsing, 2024.'),
+            (50, 80, '[10] B. Author, Second source title,'),
+            (65, 90, 'Conference on verified document understanding, 2025.')]]
+        blocks = _text_parts(lines, {'fonts': [(8, 200)]}, page, 10, False)
+        md = '\n\n'.join(block['block_content'] for block in blocks)
+        self.assertIn('Journal of reliable source document parsing, 2024.\n\n[10]', md)
+        self.assertEqual(len(blocks), 2)
+        self.assertLess(blocks[0]['block_bbox'][3], blocks[1]['block_bbox'][1])
+        doc.close()
+
+    def test_body_inline_citations_remain_one_paragraph(self):
+        pdf = document([(50, 60, 'Our detailed study [9] compares the two source document methods'),
+                        (50, 72, 'and [10] confirms the independently verified source result.')])
+        data = result()
+        project_native_pdf_pages(data, pdf, [])
+        self.assertEqual(data['markdown'], 'Our detailed study [9] compares the two source document methods and [10] confirms the independently verified source result.')
+
     def test_body_reference_does_not_anchor_figure(self):
         pdf = document([(50, 60, 'The discussion cites Fig. 1 before the actual diagram.'),
                         (50, 320, 'Fig. 1. Source diagram.'),

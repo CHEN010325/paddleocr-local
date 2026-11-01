@@ -83,6 +83,24 @@ def _text_parts(lines, block, page, body_font, aside):
         return [_block('aside', box, text, page)]
     if block['fonts'] and min(size for size, _ in block['fonts']) >= max(body_font * 1.6, body_font + 4):
         return [_block('doc_title', box, '# ' + text, page)]
+    # PDF producers often group an entire bibliography column into one block.
+    # Split only consecutive, line-leading numbered entries, never inline citations.
+    starts = [(i, int(match[1])) for i, (_, value, _) in enumerate(lines)
+              if (match := re.match(r'^\[(\d+)\]\s+\S', value))]
+    if (len(starts) >= 2 and starts[0][0] == 0
+            and all(b[1] == a[1] + 1 for a, b in zip(starts, starts[1:]))
+            and max(lines[i][0].x0 for i, _ in starts)
+            - min(lines[i][0].x0 for i, _ in starts) <= 8):
+        references = []
+        boundaries = [i for i, _ in starts] + [len(lines)]
+        for begin, end in zip(boundaries, boundaries[1:]):
+            entry = lines[begin:end]
+            entry_box = fitz.Rect(entry[0][0])
+            for rect, _, _ in entry[1:]:
+                entry_box |= rect
+            references.append(_block('text', entry_box,
+                                     _clean('\n'.join(value for _, value, _ in entry)), page))
+        return references
     parts = []
     remaining = list(lines)
     while remaining:

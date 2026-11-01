@@ -8,8 +8,8 @@ const vendorRoot = path.join(projectRoot, 'static', 'vendor');
 const checkOnly = process.argv.includes('--check');
 
 const mappings = [
-    ['node_modules/pdfjs-dist/build/pdf.min.mjs', 'pdfjs/pdf.min.mjs'],
-    ['node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'pdfjs/pdf.worker.min.mjs'],
+    ['node_modules/pdfjs-dist/legacy/build/pdf.min.mjs', 'pdfjs/pdf.min.mjs'],
+    ['node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs', 'pdfjs/pdf.worker.min.mjs'],
     ['node_modules/pdfjs-dist/LICENSE', 'pdfjs/LICENSE'],
     ['node_modules/pdf-lib/dist/pdf-lib.min.js', 'pdf-lib/pdf-lib.min.js'],
     ['node_modules/pdf-lib/LICENSE.md', 'pdf-lib/LICENSE.md'],

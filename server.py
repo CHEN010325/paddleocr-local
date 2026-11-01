@@ -1093,7 +1093,7 @@ def make_docker_build_context(service_name: str) -> bytes:
             adapter_info.size = len(adapter_data)
             tar.addfile(adapter_info, io.BytesIO(adapter_data))
         if service_name == 'ovisocr2-api':
-            for name in ['ovisocr3_config.py', 'ovisocr3_tasks.py', 'ovisocr3_inference.py', 'ovisocr3_document.py',
+            for name in ['ovisocr3_config.py', 'ovisocr3_tasks.py', 'ovisocr3_inference.py', 'ovisocr3_document.py', 'ovisocr3_pdf.py',
                          'ovisocr3_crosspage.py', 'ovisocr3_reference.py', 'requirements-ovisocr3-render.txt'] + [
                              str(p.relative_to(PROJECT_ROOT)).replace('\\','/')
                              for folder in ('ovisocr3_prompts', 'ovisocr3_assets')
@@ -2992,6 +2992,17 @@ def hydrate_task_detail(task_id: str, task: dict) -> dict:
     task.setdefault("markdown", "")
     task.setdefault("images", {})
     task.setdefault("ocrResults", [])
+    if task.get('modelId') in {'ovisocr2', 'ovisocr3'} and task.get('sourceKind') in {'pdf', 'office'} and task['ocrResults']:
+        source_path = task_source_path(task_id)
+        if source_path.exists():
+            try:
+                from ovisocr3_pdf import enrich_ovis_pdf_result
+                enrich_ovis_pdf_result(task, source_path)
+                original_images = task.pop('originalImages', {})
+                if original_images:
+                    task.setdefault('ovisResult', {}).setdefault('originalImages', {}).update(original_images)
+            except Exception:
+                logger.warning('Source PDF figure recovery failed for task %s; keeping parsed results', task_id, exc_info=True)
     return task
 
 
@@ -3235,7 +3246,7 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=500, detail="Failed to read task")
     if task_source_path(task_id).exists() and not task.get("sourceUrl"):
         task["sourceUrl"] = task_source_url(task_id)
-    task = hydrate_task_detail(task_id, task)
+    task = await run_in_threadpool(hydrate_task_detail, task_id, task)
     task["detailLoaded"] = True
     return task
 

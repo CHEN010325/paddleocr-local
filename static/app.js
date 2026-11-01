@@ -47,6 +47,7 @@ let activeResultView = 'markdown';
 let isProcessing = false;
 let processingTaskId = null;
 let currentPdf = null;
+const pdfSourceTextIndexes = new WeakMap();
 let currentPage = 1;
 let currentZoom = DEFAULT_PDF_ZOOM;
 let pdfDefaultPageWidth = PDF_DEFAULT_PAGE_WIDTH;
@@ -1746,16 +1747,33 @@ async function renderSource(task) {
 async function renderPdfDocument(renderToken = sourceRenderToken, scrollAnchor = null) {
     if (renderToken !== sourceRenderToken) return;
     if (!currentPdf) return;
-    currentPage = Math.min(Math.max(currentPage, 1), currentPdf.numPages);
+    const pdf = currentPdf;
+    currentPage = Math.min(Math.max(currentPage, 1), pdf.numPages);
     updatePdfControls();
     const flow = document.createElement('div');
     flow.className = 'pdf-document-flow';
 
-    for (let pageNumber = 1; pageNumber <= currentPdf.numPages; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
         if (renderToken !== sourceRenderToken) return;
 
-        const page = await currentPdf.getPage(pageNumber);
+        const page = await pdf.getPage(pageNumber);
+        if (renderToken !== sourceRenderToken) return;
         const viewport = page.getViewport({ scale: currentZoom });
+        if (typeof page.getTextContent === 'function') {
+            let indexes = pdfSourceTextIndexes.get(pdf);
+            if (!indexes) pdfSourceTextIndexes.set(pdf, indexes = new Map());
+            if (!indexes.has(pageNumber)) {
+                try {
+                    const content = await page.getTextContent();
+                    if (renderToken !== sourceRenderToken) return;
+                    indexes.set(pageNumber, buildPdfTextIndex(content, page.getViewport({ scale: 1 })));
+                } catch {
+                    // Scanned or damaged text layers still use the parser's coordinates.
+                    indexes.set(pageNumber, null);
+                }
+            }
+            if (renderToken !== sourceRenderToken) return;
+        }
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.width = viewport.width;
@@ -1881,7 +1899,6 @@ function showResultView(view) {
 }
 
 function renderResultPane(task, { deferJson = false, preserveScroll = true } = {}) {
-    renderOvisResultStatus(task);
     if (!task) {
         resetResultRenderCache();
         resetResultScrollPositions();
@@ -1957,11 +1974,8 @@ function renderResultPane(task, { deferJson = false, preserveScroll = true } = {
         return;
     }
 
-    let renderMarkdown = markdown;
     renderedOfficialLayoutContext = '';
-    Object.entries(task.images || {}).forEach(([path, base64]) => {
-        renderMarkdown = renderMarkdown.split(path).join(`data:image/jpeg;base64,${base64}`);
-    });
+    const renderMarkdown = embedTaskImagesInMarkdown(task, markdown);
     const html = renderMarkdownHtml(renderMarkdown);
     els.markdownView.innerHTML = html;
     linkMarkdownToSourceBlocks(task);
@@ -3028,6 +3042,7 @@ async function processTask(task, { confirmCompleted = true } = {}) {
                 batch.markdown = prepared.markdown;
                 rebuildTaskMarkdownFromBatches(task);
                 Object.assign(task.images, prepared.images);
+                archiveOvisOriginalImages(task, result, batch.id);
                 task.ocrResults.push(...normalizeOCRJsonResults(result).map((pageResult, pageIndex) => (
                     compactOCRJsonResult(pageResult, batch, pageIndex)
                 )));
@@ -3178,7 +3193,6 @@ function stripStreamStatusMarkdown(markdown) {
 }
 
 function visibleTaskMarkdown(task) {
-    if (task?.ovisResult?.view === 'original') return task.ovisResult.originalMarkdown || '';
     return stripStreamStatusMarkdown(task?.markdown || '');
 }
 
@@ -4697,8 +4711,9 @@ function imageValueToSrc(value) {
 }
 
 function bindLinkedBlockEvents(element, block) {
-    const preview = () => activateLinkedBlock(element, block);
-    const locate = () => activateLinkedBlock(element, block, { scrollSource: true });
+    const isOwnEvent = event => !event.target?.closest || event.target.closest('.layout-linked-block') === element;
+    const preview = event => { if (isOwnEvent(event)) activateLinkedBlock(element, block); };
+    const locate = event => { if (isOwnEvent(event)) activateLinkedBlock(element, block, { scrollSource: true }); };
     const deactivate = () => deactivateLinkedBlocks();
     element.addEventListener('mouseenter', preview);
     element.addEventListener('mouseover', preview);
@@ -4708,6 +4723,64 @@ function bindLinkedBlockEvents(element, block) {
     element.addEventListener('mouseleave', deactivate);
     element.addEventListener('pointerleave', deactivate);
     element.addEventListener('focusout', deactivate);
+}
+
+function compactPdfMatchText(value) {
+    return String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function buildPdfTextIndex(content, viewport) {
+    const entries = [];
+    let text = '';
+    for (const item of content?.items || []) {
+        const normalized = compactPdfMatchText(item.str);
+        if (!normalized || !Array.isArray(item.transform) || !viewport?.width || !viewport.height) continue;
+        const [a,b,c,d,e,f] = viewport.transform;
+        const [m,n,p,q,x,y] = item.transform;
+        const tx = [a*m+c*n, b*m+d*n, a*p+c*q, b*p+d*q, a*x+c*y+e, b*x+d*y+f];
+        const height = Math.hypot(tx[2], tx[3]);
+        const style = content.styles?.[item.fontName] || {};
+        const angle = Math.atan2(tx[1], tx[0]) + (style.vertical ? Math.PI/2 : 0);
+        const ascent = height * (style.ascent ?? (style.descent != null ? 1+style.descent : 0.8));
+        const width = Number(item.width || 0) * Number(viewport.scale || 1);
+        const left = tx[4] + Math.sin(angle)*ascent;
+        const top = tx[5] - Math.cos(angle)*ascent;
+        const points = [[left,top], [left+Math.cos(angle)*width,top+Math.sin(angle)*width],
+            [left-Math.sin(angle)*height,top+Math.cos(angle)*height],
+            [left+Math.cos(angle)*width-Math.sin(angle)*height,top+Math.sin(angle)*width+Math.cos(angle)*height]];
+        const bbox = [Math.min(...points.map(point=>point[0]))/viewport.width*1000,
+            Math.min(...points.map(point=>point[1]))/viewport.height*1000,
+            Math.max(...points.map(point=>point[0]))/viewport.width*1000,
+            Math.max(...points.map(point=>point[1]))/viewport.height*1000];
+        if (!bbox.every(Number.isFinite) || bbox[0]>=bbox[2] || bbox[1]>=bbox[3]) continue;
+        entries.push({start:text.length,end:text.length+normalized.length,bbox});
+        text += normalized;
+    }
+    return {text, entries};
+}
+
+function findPdfSourceTextBlock(text, hint, cursors) {
+    const indexes = currentPdf && pdfSourceTextIndexes.get(currentPdf);
+    const query = compactPdfMatchText(text);
+    if (!indexes || query.length < 4) return null;
+    const pages = hint?.page ? [hint.page] : [...indexes.keys()];
+    const fragments = String(text || '').split(/\$[^$]*\$|\\\([\s\S]*?\\\)/g)
+        .map(compactPdfMatchText).filter(fragment=>fragment.length>=16 && fragment!==query);
+    for (const page of pages) {
+        const index = indexes.get(page);
+        const matched = [query,...fragments].map(candidate=>({candidate,start:index?.text.indexOf(candidate,cursors.get(page)||0)??-1}))
+            .find(match=>match.start>=0);
+        if (!matched) continue;
+        const {start,candidate} = matched;
+        const end = start+candidate.length;
+        const hits = index.entries.filter(entry=>entry.end>start && entry.start<end);
+        if (!hits.length) continue;
+        cursors.set(page,end);
+        return {page,pageWidth:1000,pageHeight:1000,
+            bbox:[Math.min(...hits.map(hit=>hit.bbox[0])),Math.min(...hits.map(hit=>hit.bbox[1])),
+                Math.max(...hits.map(hit=>hit.bbox[2])),Math.max(...hits.map(hit=>hit.bbox[3]))]};
+    }
+    return null;
 }
 
 function linkMarkdownToSourceBlocks(task) {
@@ -4720,38 +4793,48 @@ function linkMarkdownToSourceBlocks(task) {
     if (!blocks.length) return;
 
     const elements = collectMarkdownBlockElements(els.markdownView);
+    const nativeCursors = new Map();
+    const nativeIndexes = isOvisOCR3Task(task) && currentPdf ? pdfSourceTextIndexes.get(currentPdf) : null;
+    const pageTextLengths = new Map();
+    for (const block of blocks) {
+        if (!['image','chart','table'].includes(block.label)) {
+            pageTextLengths.set(block.page,(pageTextLengths.get(block.page)||0)+compactPdfMatchText(block.text).length);
+        }
+    }
     let cursor = 0;
 
     elements.forEach((element) => {
         const isImageBlock = isMarkdownImageBlock(element);
+        const imageAlt = isImageBlock ? (element.matches('img') ? element.alt : element.querySelector('img')?.alt) : '';
+        const sourceFigureIndex = /^figure\s+\d+[a-z]?$/i.test(imageAlt || '')
+            ? blocks.findIndex(block=>['image','chart'].includes(block.label) && block.text.startsWith(normalizeMatchText(imageAlt)+' ')) : -1;
         const text = normalizeMatchText(element.innerText || element.textContent || '');
         if (!isImageBlock && text.length < 2) return;
 
-        const match = isImageBlock
+        let match = sourceFigureIndex >= 0 ? {index:sourceFigureIndex,block:blocks[sourceFigureIndex]} : isImageBlock
             ? findNextLayoutBlockByLabel(blocks, cursor, ['image', 'chart', 'table'])
             : isAlgorithmText(element.innerText || element.textContent || '')
                 ? findNextLayoutBlockByLabel(blocks, cursor, ['algorithm'])
             : isFigureTitleText(element.innerText || element.textContent || '')
                 ? findNextLayoutBlockByLabel(blocks, cursor, ['figure_title'])
             : findBestLayoutBlock(text, blocks, cursor);
+        const hint = match?.block || blocks[cursor];
+        const nativeIndex = nativeIndexes?.get(hint?.page || 1);
+        const authoritativeText = nativeIndex?.text.length >= Math.min(200,(pageTextLengths.get(hint?.page||1)||0)*0.4);
+        if (!isImageBlock && element.tagName !== 'TABLE' && nativeIndex?.text && authoritativeText) {
+            const native = findPdfSourceTextBlock(element.innerText || element.textContent, hint, nativeCursors);
+            // Never present a guessed model box as a verified source-text location.
+            if (!native) return;
+            match = {index:match?.index ?? cursor,block:{label:'text',...match?.block,...native}};
+        }
         if (!match) return;
 
-        cursor = match.index;
+        cursor = Math.max(cursor, match.index);
         element.classList.add('layout-linked-block');
         element.dataset.layoutLabel = layoutLabelText(match.block.label);
         registerLinkedLayoutBlock(element, match.block);
         addSourceHotspot(match.block, element);
-        const preview = () => activateLinkedBlock(element, match.block);
-        const locate = () => activateLinkedBlock(element, match.block, { scrollSource: true });
-        const deactivate = () => deactivateLinkedBlocks();
-        element.addEventListener('mouseenter', preview);
-        element.addEventListener('mouseover', preview);
-        element.addEventListener('pointerenter', preview);
-        element.addEventListener('focusin', preview);
-        element.addEventListener('click', locate);
-        element.addEventListener('mouseleave', deactivate);
-        element.addEventListener('pointerleave', deactivate);
-        element.addEventListener('focusout', deactivate);
+        bindLinkedBlockEvents(element, match.block);
     });
 }
 
@@ -4786,6 +4869,8 @@ function collectLayoutBlocks(task) {
 
 function registerLinkedLayoutBlock(element, block) {
     if (!element || !block) return;
+    element.dataset.sourcePage = String(block.page);
+    element.dataset.sourceBbox = JSON.stringify(block.bbox);
     linkedLayoutBlockByElement.set(element, block);
     linkedLayoutEntries.push({ element, block });
 }
@@ -4915,6 +5000,7 @@ function collectMarkdownBlockElements(container) {
     Array.from(container.querySelectorAll(selector)).forEach((element) => {
         if (element.closest('.empty-result')) return false;
         if (element.parentElement?.closest('li,table,pre,blockquote')) return false;
+        if (element.tagName === 'DIV' && element.querySelector('h1,h2,h3,h4,h5,h6,p,li,table,pre,blockquote,div,section')) return false;
         if (element.tagName === 'DIV' && !isMarkdownImageBlock(element) && !isFigureTitleText(element.innerText || element.textContent || '')) {
             return false;
         }
@@ -5595,6 +5681,15 @@ function needsOvisDocumentEnhancement(task) {
         && Number(task.pageCount || 1) > 1 && task.ovisResult?.enhancement?.status !== 'complete';
 }
 
+function archiveOvisOriginalImages(task, result, batchId) {
+    if (!isOvisOCR3Task(task) || !result.originalImages) return;
+    task.ovisResult ||= {};
+    task.ovisResult.originalImages ||= {};
+    for (const [path, payload] of Object.entries(result.originalImages)) {
+        task.ovisResult.originalImages[`${batchId}/${path}`] = payload;
+    }
+}
+
 async function enhanceOvisDocument(task, signal = activeOcrAbortController?.signal) {
     const options = task.ovisOptions;
     const originalMarkdown = task.ovisResult?.originalMarkdown ?? task.markdown;
@@ -5623,6 +5718,7 @@ async function enhanceOvisDocument(task, signal = activeOcrAbortController?.sign
         const prepared = prepareBatchResult(result,`${task.id}_enhanced`);
         task.markdown = prepared.markdown;
         Object.assign(task.images, prepared.images);
+        archiveOvisOriginalImages(task, result, `${task.id}_enhanced`);
         task.ovisResult.enhancement = result.enhancement;
         task.ovisEnhancementStatus = result.enhancement.status;
         task.updatedAt = Date.now();
@@ -5634,60 +5730,6 @@ async function enhanceOvisDocument(task, signal = activeOcrAbortController?.sign
         task.ovisEnhancementStatus = 'partial';
         await saveTask(task);
         throw error;
-    }
-}
-
-function renderOvisResultStatus(task) {
-    const panel = document.getElementById('ovis-result-status');
-    if (!panel) return;
-    panel.hidden = !isOvisOCR3Task(task) || !(task?.ovisOptions || task?.ovisResult);
-    panel.replaceChildren();
-    if (panel.hidden) return;
-    const text = document.createElement('span');
-    const enhancement = task.ovisResult?.enhancement;
-    text.textContent = '文档解析';
-    if (enhancement) {
-        const states = {processing:'正在重建跨页表格',complete:'跨页表格处理完成',partial:'跨页增强部分完成，原始内容已保留'};
-        text.textContent += ` · ${states[enhancement.status] || enhancement.status}`;
-        if (enhancement.status === 'complete') text.textContent += ` · ${enhancement.crossPageTables?.length || 0} 个续表`;
-    }
-    panel.append(text);
-    const documentWarnings = (task.ocrResults || []).flatMap((page) => page.documentExtras?.warnings || []);
-    for (const warning of [...(enhancement?.warnings || []), ...documentWarnings]) {
-        const note=document.createElement('p');note.textContent=warning.message || warning.type || JSON.stringify(warning);panel.append(note);
-    }
-    const spatialPages = (task.ocrResults || []).filter((page) => page.parsing_res_list?.length);
-    if (spatialPages.length) {
-        const details = document.createElement('details');
-        const summary = document.createElement('summary');summary.textContent = '查看识别位置';details.append(summary);
-        const select = document.createElement('select');select.setAttribute('aria-label','定位结果页');
-        spatialPages.forEach((page, index) => {
-            const option=document.createElement('option');option.value=String(index);
-            option.textContent=`第 ${page.sourcePage || page.pageIndex + 1} 页（${page.parsing_res_list.length} 处）`;select.append(option);
-        });
-        const regions = document.createElement('div');
-        const renderRegions = () => {
-            regions.replaceChildren();
-            const page=spatialPages[Number(select.value)];
-            page.parsing_res_list.forEach((region, index) => {
-                const button=document.createElement('button');button.type='button';button.className='ovis-spatial-result';
-                button.textContent=`${index + 1}. ${region.block_label || 'text'} · ${String(region.block_content || '').slice(0,70)}`;
-                button.addEventListener('click',()=>{
-                    const block={page:Number(page.sourcePage || page.pageIndex + 1),bbox:region.block_bbox,
-                        pageWidth:1000,pageHeight:1000,label:region.block_label};
-                    scrollSourceToLayoutBlock(block,'smooth');showSourceHighlight(block);
-                });regions.append(button);
-            });
-        };
-        select.addEventListener('change',renderRegions);details.append(select,regions);panel.append(details);renderRegions();
-    }
-    if (task.ovisResult?.originalMarkdown !== undefined) {
-        const toggle=document.createElement('button');toggle.className='secondary-button';toggle.type='button';
-        toggle.textContent=task.ovisResult.view === 'original' ? '查看增强结果' : '查看原始逐页结果';
-        toggle.addEventListener('click',()=>{
-            task.ovisResult.view=task.ovisResult.view === 'original' ? 'enhanced' : 'original';
-            task.updatedAt=Date.now();resetResultRenderCache(task.id);renderResultPane(task);
-        });panel.append(toggle);
     }
 }
 

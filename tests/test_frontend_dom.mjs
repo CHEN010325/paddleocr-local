@@ -341,13 +341,14 @@ test('Ovis enhancement uses complete source across batch boundaries and preserve
         ocrResults:[0,1,2].map(i=>({sourcePage:i+1,task:'document_structured',sourceHash:'h'+i,rawOutput:'[]'}))};
       getTaskSourceBytes=async()=>new Uint8Array([1,2]);
       saveTask=async()=>{};refreshTaskUi=()=>{};
-      apiFetch=async(url,options)=>{window.enhanceFields=Object.fromEntries(options.body.entries());return new Response(JSON.stringify({markdown:'merged',images:{},enhancement:{status:'complete',crossPageTables:[{source_pages:[1,2,3]}]}}),{status:200})};
+      apiFetch=async(url,options)=>{window.enhanceFields=Object.fromEntries(options.body.entries());return new Response(JSON.stringify({markdown:'merged',images:{},originalImages:{'old.jpg':'ORIGINAL_BYTES'},enhancement:{status:'complete',crossPageTables:[{source_pages:[1,2,3]}]}}),{status:200})};
     `);
     await window.eval('enhanceOvisDocument(window.enhanceTask)');
     assert.equal(JSON.parse(window.enhanceFields.pageResults).length,3);
     assert.equal(window.enhanceFields.enhanceOnly,'true');
     assert.equal(window.enhanceTask.markdown,'merged');
     assert.equal(window.enhanceTask.ovisResult.originalMarkdown,'original');
+    assert.equal(window.enhanceTask.ovisResult.originalImages['doc_enhanced/old.jpg'],'ORIGINAL_BYTES');
     assert.equal(window.enhanceTask.ocrResults.length,3);
     assert.equal(window.eval('shouldRenderOfficialLayout(window.enhanceTask)'),false);
     dom.window.close();
@@ -368,8 +369,6 @@ test('Ovis failed enhancement resumes cached pages and persists original results
     assert.equal(window.failedOvis.ovisResult.originalMarkdown,'ORIGINAL');
     assert.equal(window.failedOvis.ovisResult.enhancement.warnings.length,1);
     assert.equal(window.eval('shouldResumeTask(window.failedOvis)'),true);
-    window.eval('renderOvisResultStatus(window.failedOvis)');
-    assert.match(window.document.getElementById('ovis-result-status').textContent,/部分完成/);
     const snapshot=window.eval('taskForPersistence(window.failedOvis,{includeResults:false})');
     assert.equal(snapshot.ovisResult,undefined);
     assert.equal(snapshot.ovisEnhancementStatus,'partial');
@@ -378,9 +377,8 @@ test('Ovis failed enhancement resumes cached pages and persists original results
     assert.equal(window.failedOvis.markdown,'MERGED');
     assert.equal(window.failedOvis.ovisResult.originalMarkdown,'ORIGINAL');
     assert.equal(window.failedOvis.ovisEnhancementStatus,'complete');
-    window.eval('renderOvisResultStatus(window.failedOvis)');
-    window.document.querySelector('#ovis-result-status button').click();
-    assert.equal(window.eval('visibleTaskMarkdown(window.failedOvis)'),'ORIGINAL');
+    assert.equal(window.document.getElementById('ovis-result-status'),null);
+    assert.equal(window.eval('visibleTaskMarkdown(window.failedOvis)'),'MERGED');
     dom.window.close();
 });
 
@@ -394,12 +392,13 @@ test('retrying the first failed Ovis batch preserves frozen options and benchmar
         batches:[{id:'first',fileType:1,status:'error'}]};
       els.chartRecognitionSwitch.checked=true;
       ensureModelRuntimeReadyForTask=async()=>true;ensureBatchPayload=async()=>{};saveTask=async()=>{};refreshTaskUi=()=>{};
-      callOCR=async(batch,task)=>{window.retriedOptions=JSON.parse(JSON.stringify(task.ovisOptions));return {markdown:'done',images:{},layoutParsingResults:[]}};
+      callOCR=async(batch,task)=>{window.retriedOptions=JSON.parse(JSON.stringify(task.ovisOptions));return {markdown:'done',images:{},originalImages:{'old.jpg':'PAGE_ORIGINAL'},layoutParsingResults:[]}};
       prepareFailedBatchesForRetry(window.firstFailed);
     `);
     await window.eval('processTask(window.firstFailed,{confirmCompleted:false})');
     assert.deepEqual(Array.from(window.retriedOptions.taskOptions.fields),['total']);
     assert.equal(window.firstFailed.benchmark.parsingSettings.useChartRecognition,false);
+    assert.equal(window.firstFailed.ovisResult.originalImages['first/old.jpg'],'PAGE_ORIGINAL');
     dom.window.close();
 });
 
@@ -415,21 +414,6 @@ test('changing a failed task to Ovis starts with the newly selected task paramet
     await window.eval('processTask(window.changedModelTask,{confirmCompleted:true})');
     assert.equal(window.newModelOptions?.task,'document_auto');
     assert.deepEqual(Object.keys(window.newModelOptions.taskOptions),[]);
-    dom.window.close();
-});
-
-test('automatic document results expose source positions without task parameters', async () => {
-    const {dom,window}=createBrowser();await boot(window);
-    window.eval(`
-      showSourceHighlight=(block)=>{window.highlight=block};scrollSourceToLayoutBlock=()=>{};
-      renderOvisResultStatus({modelId:'ovisocr2',ovisOptions:{task:'document_auto'},ocrResults:[
-        {sourcePage:2,parsing_res_list:[{block_bbox:[1,2,300,400],block_label:'table',block_content:''}]}
-      ]});
-    `);
-    window.document.querySelector('#ovis-result-status .ovis-spatial-result').click();
-    assert.equal(window.highlight.page,2);
-    assert.deepEqual(Array.from(window.highlight.bbox),[1,2,300,400]);
-    assert.equal(window.eval("reconcileTaskStatus({status:'processing',ovisOptions:{crossPageTables:true},ovisEnhancementStatus:'processing'}).status"),'pending');
     dom.window.close();
 });
 
@@ -3119,5 +3103,138 @@ test('legacy Ovis partial retries preserve completed pages and their document fo
         assert.equal(window.legacyEnhanced,false);
         assert.match(window.legacyPartial.markdown,/OLD PAGE[\s\S]*NEW PAGE/);
     }
+    dom.window.close();
+});
+
+
+test('Ovis document preview omits the diagnostic status panel', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    assert.equal(window.document.getElementById('ovis-result-status'),null);
+    dom.window.close();
+});
+
+test('Ovis PDF links use native text coordinates and distinct repeated occurrences', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf={numPages:1};
+      const index=buildPdfTextIndex({styles:{font:{ascent:0.8}},items:[
+        {str:'Paper title',fontName:'font',width:200,transform:[10,0,0,10,100,940]},
+        {str:'College of Informatics',fontName:'font',width:150,transform:[10,0,0,10,100,800]},
+        {str:'College of Informatics',fontName:'font',width:150,transform:[10,0,0,10,500,800]}
+      ]},{width:1000,height:1000,transform:[1,0,0,-1,0,1000],scale:1});
+      pdfSourceTextIndexes.set(currentPdf,new Map([[1,index]]));
+      window.nativeTask={id:'native',modelId:'ovisocr2',ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'text',block_content:'College of Informatics',block_bbox:[176,70,800,104]}
+      ]}]};
+      els.markdownView.innerHTML='<p>College of Informatics</p><p>College of Informatics</p>';
+      linkMarkdownToSourceBlocks(window.nativeTask);
+    `);
+    const boxes=window.eval('linkedLayoutEntries.map(entry=>entry.block.bbox)');
+    assert.equal(boxes.length,2);
+    assert.ok(boxes[0][1]>=180 && boxes[0][1]<=200);
+    assert.equal(boxes[0][0],100);
+    assert.equal(boxes[1][0],500);
+    dom.window.close();
+});
+
+test('native PDF text links avoid fabricated matches and scanned pages retain OCR boxes', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf={numPages:1};
+      const viewport={width:1000,height:1000,transform:[1,0,0,-1,0,1000],scale:1};
+      pdfSourceTextIndexes.set(currentPdf,new Map([[1,buildPdfTextIndex({items:[
+        {str:'Real source text',width:100,transform:[10,0,0,10,100,800]}
+      ]},viewport)]]));
+      window.scannedTask={id:'scan',modelId:'ovisocr2',ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'text',block_content:'Generated repeated sentence',block_bbox:[10,20,100,80]}
+      ]}]};
+      els.markdownView.innerHTML='<p>Generated repeated sentence</p>';
+      linkMarkdownToSourceBlocks(window.scannedTask);
+    `);
+    assert.equal(window.eval('linkedLayoutEntries.length'),0);
+    window.eval(`pdfSourceTextIndexes.set(currentPdf,new Map([[1,buildPdfTextIndex({items:[]},{width:1000,height:1000,transform:[1,0,0,-1,0,1000],scale:1})]]));linkMarkdownToSourceBlocks(window.scannedTask)`);
+    assert.equal(window.eval('linkedLayoutEntries.length'),1);
+    assert.deepEqual(Array.from(window.eval('linkedLayoutEntries[0].block.bbox')),[10,20,100,80]);
+    dom.window.close();
+});
+
+
+test('nested Markdown wrappers cannot override the clicked text source location', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      window.nested={id:'nested',modelId:'ovisocr2',ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'text',block_content:'College of Informatics',block_bbox:[150,180,300,200]},
+        {block_label:'image',block_content:'',block_bbox:[10,1,999,100]}
+      ]}]};
+      els.markdownView.innerHTML='<div><div><p>College of Informatics</p><p><img src="data:image/png;base64,AA=="></p></div></div>';
+      showSourceHighlight=block=>{window.clickedBox=block.bbox};scrollSourceToLayoutBlock=()=>{};
+      linkMarkdownToSourceBlocks(window.nested);
+    `);
+    window.document.querySelector('#markdown-view p').dispatchEvent(new window.MouseEvent('click',{bubbles:true}));
+    assert.deepEqual(Array.from(window.clickedBox),[150,180,300,200]);
+    dom.window.close();
+});
+
+
+test('PDF text indexing ignores a render that finishes after switching documents', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      sourceRenderToken=77;currentPage=1;currentZoom=1;
+      window.oldPdf={numPages:1,getPage:()=>new Promise(resolve=>{window.releaseOldPage=resolve})};
+      currentPdf=window.oldPdf;window.oldRender=renderPdfDocument(77);
+      sourceRenderToken++;currentPdf=null;
+      window.releaseOldPage({getViewport:()=>({width:100,height:100,scale:1,transform:[1,0,0,-1,0,100]}),getTextContent:async()=>({items:[]})});
+    `);
+    await window.oldRender;
+    assert.equal(window.eval('pdfSourceTextIndexes.has(window.oldPdf)'),false);
+    dom.window.close();
+});
+
+test('PDF anchors stay on their hinted page after repeated text is exhausted', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf={numPages:2};
+      const index=buildPdfTextIndex({items:[{str:'Repeated phrase',width:100,transform:[10,0,0,10,100,800]}]},
+          {width:1000,height:1000,transform:[1,0,0,-1,0,1000],scale:1});
+      pdfSourceTextIndexes.set(currentPdf,new Map([[1,index],[2,index]]));window.pageCursor=new Map();
+      window.firstAnchor=findPdfSourceTextBlock('Repeated phrase',{page:2},window.pageCursor);
+      window.secondAnchor=findPdfSourceTextBlock('Repeated phrase',{page:2},window.pageCursor);
+    `);
+    assert.equal(window.firstAnchor.page,2);
+    assert.equal(window.secondAnchor,null);
+    dom.window.close();
+});
+
+test('mixed scanned pages keep OCR positioning when only a small watermark is searchable', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf={numPages:1};
+      pdfSourceTextIndexes.set(currentPdf,new Map([[1,buildPdfTextIndex({items:[{str:'WATERMARK',width:50,transform:[10,0,0,10,0,950]}]},
+          {width:1000,height:1000,transform:[1,0,0,-1,0,1000],scale:1})]]));
+      const body='Scanned body content '.repeat(40);
+      els.markdownView.innerHTML='<p>'+body+'</p>';
+      linkMarkdownToSourceBlocks({modelId:'ovisocr2',ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'text',block_bbox:[100,200,800,500],block_content:body}
+      ]}]});
+    `);
+    assert.equal(window.eval('linkedLayoutEntries.length'),1);
+    assert.deepEqual(Array.from(window.eval('linkedLayoutEntries[0].block.bbox')),[100,200,800,500]);
+    dom.window.close();
+});
+
+
+test('recovered PDF figures link by figure identity even after later body text', async () => {
+    const {dom,window}=createBrowser();await boot(window);
+    window.eval(`
+      currentPdf=null;
+      els.markdownView.innerHTML='<p>Trailing body</p><p><img alt="Figure 1" src="data:image/png;base64,AA=="></p>';
+      linkMarkdownToSourceBlocks({modelId:'ovisocr2',ocrResults:[{width:1000,height:1000,parsing_res_list:[
+        {block_label:'image',block_content:'![Figure 1](ocr_images/figure.png)',block_bbox:[300,200,900,500]},
+        {block_label:'text',block_content:'Trailing body',block_bbox:[100,600,800,800]}
+      ]}]});
+      showSourceHighlight=block=>{window.figureBox=block.bbox};scrollSourceToLayoutBlock=()=>{};
+    `);
+    window.document.querySelector('#markdown-view img').dispatchEvent(new window.MouseEvent('click',{bubbles:true}));
+    assert.deepEqual(Array.from(window.figureBox),[300,200,900,500]);
     dom.window.close();
 });

@@ -617,6 +617,17 @@ def build_task_response(task, options, raws, pages, file_type):
     return response
 
 
+async def recover_document_figures(response, file_bytes):
+    from ovisocr3_pdf import enrich_ovis_pdf_result
+    try:
+        await asyncio.to_thread(enrich_ovis_pdf_result, response, file_bytes)
+    except Exception as exc:
+        logger.warning('Source figure recovery failed; keeping parsed document', exc_info=True)
+        for page in response.get('layoutParsingResults', []):
+            page.setdefault('documentExtras', {}).setdefault('warnings', []).append(
+                {'task': 'source_figures', 'message': str(exc)})
+
+
 async def run_task_request(request, file_bytes, file_type):
     content_type = request.headers.get('content-type', '')
     payload = dict(await request.form()) if 'multipart/form-data' in content_type else await request.json()
@@ -652,8 +663,13 @@ async def run_task_request(request, file_bytes, file_type):
         if task == 'document_auto':
             from ovisocr3_document import append_document_supplements
             markdown = append_document_supplements(markdown, cached)
-        return {'task': task, 'model': MODEL_NAME, 'fileType': 0, 'layoutParsingResults': [],
-                'markdown': markdown, 'images': enhanced.pop('images'), 'enhancement': enhanced}
+        response = {'task': task, 'model': MODEL_NAME, 'fileType': 0, 'layoutParsingResults': [],
+                    'markdown': markdown, 'images': enhanced.pop('images'), 'enhancement': enhanced}
+        if task == 'document_auto':
+            response['layoutParsingResults'] = [{'pageIndex': i} for i in range(len(cached))]
+            await recover_document_figures(response, file_bytes)
+            response['layoutParsingResults'] = []
+        return response
     pages, resolved_type = prepare_images(file_bytes, file_type)
     if not pages:
         raise HTTPException(400, 'No source pages')
@@ -698,6 +714,8 @@ async def run_task_request(request, file_bytes, file_type):
             if 'originalMarkdown' in response:
                 response['originalMarkdown'] = append_document_supplements(response['originalMarkdown'], response['layoutParsingResults'])
         response['task'] = task
+        if task == 'document_auto' and resolved_type == 0:
+            await recover_document_figures(response, file_bytes)
         return response
     finally:
         for page in pages:

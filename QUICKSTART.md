@@ -63,6 +63,10 @@ Apple M1/M2/M3/M4 一键部署：
 ./macos-one-click.command --model ovisocr2
 ```
 
+模型控制器与 WebUI 使用所选模型的虚拟环境，支持现有虚拟环境路径覆盖。
+一键脚本仅在控制器通过带令牌的健康检查后启动模型服务和 WebUI。
+控制器退出或健康检查超时时，脚本停止并显示 `logs/macos-controller.log` 尾部。
+
 只检查选择和参数，不安装或启动：
 
 ```bash

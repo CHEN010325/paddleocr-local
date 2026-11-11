@@ -354,9 +354,16 @@ run_hpd_parsing_setup_if_needed() {
 
 start_services() {
   step "Starting PaddleOCR Local services"
-  mkdir -p run
+  mkdir -p logs run
   printf '%s' "$PANDOCR_MODEL_CONTROLLER_TOKEN" > "$CONTROLLER_TOKEN_FILE"
   if ! kill -0 "$(cat run/macos-controller.pid 2>/dev/null)" >/dev/null 2>&1; then
+    local controller_python
+    case "$ACTIVE_MODEL" in
+      paddleocr-vl-1.6|pp-ocrv6) controller_python="$VENV_DIR/bin/python" ;;
+      unlimited-ocr) controller_python="$UNLIMITED_OCR_MACOS_VENV/bin/python" ;;
+      ovisocr2) controller_python="$OVISOCR2_MACOS_VENV/bin/python" ;;
+      hpd-parsing) controller_python="$HPD_PARSING_MACOS_VENV/bin/python" ;;
+    esac
     echo "Starting macOS model controller on 127.0.0.1:${PANDOCR_MACOS_CONTROLLER_PORT}"
     : > logs/macos-controller.log
     CONTROLLER_PID="$(PANDOCR_MODEL_CONTROL=none \
@@ -431,7 +438,7 @@ start_services() {
     OVISOCR2_MAX_TOKENS="$OVISOCR2_MAX_TOKENS" \
     OVISOCR2_MAX_PIXELS="$OVISOCR2_MAX_PIXELS" \
     OVISOCR2_RESTART_CHECK_INTERVAL="$OVISOCR2_RESTART_CHECK_INTERVAL" \
-      "$PYTHON_BIN" - "$ROOT_DIR" "$ROOT_DIR/logs/macos-controller.log" "$PANDOCR_MACOS_CONTROLLER_PORT" <<'PY'
+      "$controller_python" - "$ROOT_DIR" "$ROOT_DIR/logs/macos-controller.log" "$PANDOCR_MACOS_CONTROLLER_PORT" <<'PY'
 import os
 import subprocess
 import sys
@@ -453,10 +460,20 @@ PY
     )"
     printf '%s\n' "$CONTROLLER_PID" > run/macos-controller.pid
   fi
-  for _ in {1..30}; do
-    curl -fsS -H "X-Pandocr-Controller-Token:$PANDOCR_MODEL_CONTROLLER_TOKEN" \
-      "http://127.0.0.1:${PANDOCR_MACOS_CONTROLLER_PORT}/health" >/dev/null 2>&1 && break
-    sleep 1
+  local controller_deadline=$((SECONDS + 30))
+  until curl --connect-timeout 2 --max-time 5 -fsS \
+    -H "X-Pandocr-Controller-Token:$PANDOCR_MODEL_CONTROLLER_TOKEN" \
+    "http://127.0.0.1:${PANDOCR_MACOS_CONTROLLER_PORT}/health" >/dev/null 2>&1; do
+    if ! kill -0 "$(cat run/macos-controller.pid 2>/dev/null)" >/dev/null 2>&1; then
+      echo "macOS model controller exited before becoming ready. See logs/macos-controller.log."
+    elif (( SECONDS >= controller_deadline )); then
+      echo "macOS model controller did not become ready within 30s. See logs/macos-controller.log."
+    else
+      sleep 1
+      continue
+    fi
+    tail -n 80 logs/macos-controller.log || true
+    return 1
   done
   PANDOCR_MACOS_BACKEND="$PANDOCR_MACOS_BACKEND" \
   PANDOCR_ENABLE_PADDLEOCR_VL="$PANDOCR_ENABLE_PADDLEOCR_VL" \
